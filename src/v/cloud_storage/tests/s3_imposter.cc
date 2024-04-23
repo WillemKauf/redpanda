@@ -316,9 +316,10 @@ struct s3_imposter_fixture::content_handler {
 
             return R"xml(<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></DeleteResult>)xml";
         }
-        RPTEST_FAIL("Unexpected request");
+        RPTEST_ADD_FAIL("Unexpected request");
         return "";
     }
+
     std::map<ss::sstring, s3_imposter_fixture::expectation> expectations;
     s3_imposter_fixture& fixture;
     std::optional<absl::flat_hash_set<ss::sstring>> headers = std::nullopt;
