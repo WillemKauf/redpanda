@@ -430,7 +430,7 @@ std::vector<cloud_storage_fixture::expectation> make_imposter_expectations(
     for (const auto& s : segments) {
         auto url = m.generate_segment_path(*m.get(s.base_offset));
         results.push_back(cloud_storage_fixture::expectation{
-          .url = "/" + url().string(), .body = s.bytes});
+          .url = url().string(), .body = s.bytes});
     }
     auto serialized = [&] {
         auto s_data = m.serialize().get();
@@ -438,7 +438,7 @@ std::vector<cloud_storage_fixture::expectation> make_imposter_expectations(
         return ss::sstring(buf.begin(), buf.end());
     };
     results.push_back(cloud_storage_fixture::expectation{
-      .url = "/" + m.get_manifest_path()().string(), .body = serialized()});
+      .url = m.get_manifest_path()().string(), .body = serialized()});
     std::stringstream ostr;
     m.serialize_json(ostr);
     vlog(
@@ -490,7 +490,7 @@ std::vector<cloud_storage_fixture::expectation> make_imposter_expectations(
                 + model::offset(s.num_config_records - s.delta_offset_overlap);
         auto url = m.generate_segment_path(*m.get(meta.base_offset));
         results.push_back(cloud_storage_fixture::expectation{
-          .url = "/" + url().string(), .body = body});
+          .url = url().string(), .body = body});
     }
     m.advance_insync_offset(m.get_last_offset());
     auto serialized = [&] {
@@ -499,7 +499,7 @@ std::vector<cloud_storage_fixture::expectation> make_imposter_expectations(
         return ss::sstring(buf.begin(), buf.end());
     };
     results.push_back(cloud_storage_fixture::expectation{
-      .url = "/" + m.get_manifest_path()().string(), .body = serialized()});
+      .url = m.get_manifest_path()().string(), .body = serialized()});
     std::ostringstream ostr;
     m.serialize_json(ostr);
 
@@ -566,13 +566,12 @@ std::vector<in_memory_segment> replace_segments(
         auto it = manifest.find(bo);
         BOOST_REQUIRE(it != manifest.end());
         auto path = manifest.generate_segment_path(*it);
-        segments_to_remove.push_back(ss::sstring("/") + path().native());
+        segments_to_remove.push_back(path().native());
     }
     fixture.remove_expectations(segments_to_remove);
 
     // remove manifest from the list
-    auto manifest_url = ss::sstring("/")
-                        + manifest.get_manifest_path()().string();
+    auto manifest_url = manifest.get_manifest_path()().string();
 
     auto expectations = make_imposter_expectations(
       manifest, segments, false, base_delta);
@@ -644,7 +643,8 @@ std::vector<model::record_batch_header> scan_remote_partition_incrementally(
     // incorrectly.
     ss::lowres_clock::update();
     auto conf = imposter.get_configuration();
-    static auto bucket = cloud_storage_clients::bucket_name("bucket");
+    static auto bucket = cloud_storage_clients::bucket_name(
+      imposter.bucket_name);
     if (maybe_max_segments) {
         config::shard_local_cfg()
           .cloud_storage_max_materialized_segments_per_shard.set_value(
@@ -725,7 +725,8 @@ std::vector<model::record_batch_header> scan_remote_partition(
     // incorrectly.
     ss::lowres_clock::update();
     auto conf = imposter.get_configuration();
-    static auto bucket = cloud_storage_clients::bucket_name("bucket");
+    static auto bucket = cloud_storage_clients::bucket_name(
+      imposter.bucket_name);
     if (maybe_max_segments) {
         config::shard_local_cfg()
           .cloud_storage_max_materialized_segments_per_shard.set_value(
@@ -776,7 +777,8 @@ scan_result scan_remote_partition(
     // incorrectly.
     ss::lowres_clock::update();
     auto conf = imposter.get_configuration();
-    static auto bucket = cloud_storage_clients::bucket_name("bucket");
+    static auto bucket = cloud_storage_clients::bucket_name(
+      imposter.bucket_name);
     if (maybe_max_segments) {
         config::shard_local_cfg()
           .cloud_storage_max_materialized_segments_per_shard.set_value(
@@ -834,7 +836,8 @@ scan_remote_partition_incrementally_with_closest_lso(
   size_t maybe_max_readers) {
     ss::lowres_clock::update();
     auto conf = imposter.get_configuration();
-    static auto bucket = cloud_storage_clients::bucket_name("bucket");
+    static auto bucket = cloud_storage_clients::bucket_name(
+      imposter.bucket_name);
     if (maybe_max_segments) {
         config::shard_local_cfg()
           .cloud_storage_max_materialized_segments_per_shard.set_value(
@@ -958,7 +961,8 @@ void reupload_compacted_segments(
             };
             auto result = fixture.api.local()
                             .upload_segment(
-                              cloud_storage_clients::bucket_name("bucket"),
+                              cloud_storage_clients::bucket_name(
+                                fixture.bucket_name),
                               url,
                               meta.size_bytes,
                               std::move(reset_stream),

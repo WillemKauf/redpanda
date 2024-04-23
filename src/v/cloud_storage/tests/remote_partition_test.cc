@@ -137,7 +137,8 @@ static model::record_batch_header read_single_batch_from_remote_partition(
   model::offset target,
   bool expect_exists = true) {
     auto conf = fixture.get_configuration();
-    static auto bucket = cloud_storage_clients::bucket_name("bucket");
+    static auto bucket = cloud_storage_clients::bucket_name(
+      fixture.bucket_name);
     storage::log_reader_config reader_config(
       target, target, ss::default_priority_class());
 
@@ -205,7 +206,7 @@ FIXTURE_TEST(
   test_remote_partition_cache_size_estimate_no_partitions,
   cloud_storage_fixture) {
     auto segments = setup_s3_imposter(*this, 0, 0);
-    auto bucket = cloud_storage_clients::bucket_name("bucket");
+    auto bucket = cloud_storage_clients::bucket_name(bucket_name);
     auto manifest = hydrate_manifest(api.local(), bucket);
     partition_probe probe(manifest.get_ntp());
     auto manifest_view = ss::make_shared<async_manifest_view>(
@@ -260,7 +261,7 @@ test_remote_partition_cache_size_estimate_materialized_segments_args(
   cloud_storage::segment_name_format sname_format) {
     auto segments = setup_s3_imposter(
       context, 3, 10, manifest_inconsistency::none, sname_format);
-    auto bucket = cloud_storage_clients::bucket_name("bucket");
+    auto bucket = cloud_storage_clients::bucket_name(context.bucket_name);
     auto manifest = hydrate_manifest(api.local(), bucket);
     partition_probe probe(manifest.get_ntp());
     auto manifest_view = ss::make_shared<async_manifest_view>(
@@ -413,8 +414,7 @@ FIXTURE_TEST(test_overlapping_segments, cloud_storage_fixture) {
       body.find(to_replace), to_replace.size(), "\"committed_offset\":6");
     // overwrite uploaded manifest with a json version
     expectations.back() = {
-      .url = "/"
-             + manifest.get_legacy_manifest_format_and_path().second().string(),
+      .url = manifest.get_legacy_manifest_format_and_path().second().string(),
       .body = body};
     set_expectations_and_listen(expectations);
     BOOST_REQUIRE(check_scan(*this, kafka::offset(0), 9));
@@ -996,7 +996,7 @@ FIXTURE_TEST(test_remote_partition_read_cached_index, cloud_storage_fixture) {
     vlog(test_log.debug, "offset range: {}-{}", base, max);
 
     auto conf = get_configuration();
-    auto bucket = cloud_storage_clients::bucket_name("bucket");
+    auto bucket = cloud_storage_clients::bucket_name(bucket_name);
     auto m = ss::make_lw_shared<cloud_storage::partition_manifest>(
       manifest_ntp, manifest_revision);
 
@@ -1098,7 +1098,7 @@ FIXTURE_TEST(test_remote_partition_concurrent_truncate, cloud_storage_fixture) {
     vlog(test_log.debug, "offset range: {}-{}", base, max);
 
     // create a reader that consumes segments one by one
-    static auto bucket = cloud_storage_clients::bucket_name("bucket");
+    static auto bucket = cloud_storage_clients::bucket_name(bucket_name);
 
     auto manifest = hydrate_manifest(api.local(), bucket);
 
@@ -1202,7 +1202,7 @@ FIXTURE_TEST(
     vlog(test_log.debug, "offset range: {}-{}", base, max);
 
     // create a reader that consumes segments one by one
-    static auto bucket = cloud_storage_clients::bucket_name("bucket");
+    static auto bucket = cloud_storage_clients::bucket_name(bucket_name);
 
     auto manifest = hydrate_manifest(api.local(), bucket);
 
@@ -1290,7 +1290,7 @@ FIXTURE_TEST(
     auto compacted_segments = make_segments(compacted_layout);
 
     // create a reader that consumes segments one by one
-    static auto bucket = cloud_storage_clients::bucket_name("bucket");
+    static auto bucket = cloud_storage_clients::bucket_name(bucket_name);
 
     auto manifest = hydrate_manifest(api.local(), bucket);
 
@@ -1882,7 +1882,8 @@ std::vector<model::record_batch_header> scan_remote_partition_with_replacements(
     vlog(test_log.debug, "offset range: {}-{}", base, max);
     ss::lowres_clock::update();
     auto conf = imposter.get_configuration();
-    static auto bucket = cloud_storage_clients::bucket_name("bucket");
+    static auto bucket = cloud_storage_clients::bucket_name(
+      imposter.bucket_name);
     if (maybe_max_segments) {
         config::shard_local_cfg()
           .cloud_storage_max_materialized_segments_per_shard.set_value(
