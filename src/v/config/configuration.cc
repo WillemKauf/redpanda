@@ -1673,15 +1673,16 @@ configuration::configuration()
   , cloud_storage_url_style(
       *this,
       "cloud_storage_url_style",
-      "The addressing style to use for S3 requests.",
+      "The addressing style to use for S3 requests. If not set, virtual_host "
+      "addressing will be the default style, falling back to path "
+      "style if required.",
       {.needs_restart = needs_restart::yes,
        .example = "virtual_host",
        .visibility = visibility::user},
-      cloud_storage_clients::s3_url_style::virtual_host,
-      {
-        cloud_storage_clients::s3_url_style::virtual_host,
-        cloud_storage_clients::s3_url_style::path,
-      })
+      std::nullopt,
+      {cloud_storage_clients::s3_url_style::virtual_host,
+       cloud_storage_clients::s3_url_style::path,
+       std::nullopt})
   , cloud_storage_credentials_source(
       *this,
       "cloud_storage_credentials_source",

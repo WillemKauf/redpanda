@@ -16,6 +16,7 @@
 #include "cloud_storage_clients/s3_error.h"
 #include "cloud_storage_clients/util.h"
 #include "cloud_storage_clients/xml_sax_parser.h"
+#include "config/configuration.h"
 #include "hashing/secure.h"
 #include "http/client.h"
 #include "net/types.h"
@@ -561,11 +562,66 @@ s3_client::s3_client(
 
 ss::future<result<client_self_configuration_output, error_outcome>>
 s3_client::self_configure() {
+    // Test virtual host style addressing, fall back to path if necessary.
+    // If any configuration options prevent testing, addressing style will
+    // default to virtual_host.
+    // If both addressing methods fail, return an error.
+    auto result = s3_self_configuration_result{
+      .url_style = s3_url_style::virtual_host};
+    if (!config::shard_local_cfg().cloud_storage_enable_remote_read()) {
+        vlog(
+          s3_log.error,
+          "Can't self-configure S3 Client, {} is not enabled.",
+          config::shard_local_cfg().cloud_storage_enable_remote_read.name());
+        co_return result;
+    }
+
+    const auto& bucket_config = config::shard_local_cfg().cloud_storage_bucket;
+
+    if (!bucket_config.value().has_value()) {
+        vlog(
+          s3_log.error,
+          "Can't self-configure S3 Client, {} is not set.",
+          bucket_config.name());
+        co_return result;
+    }
+
+    auto bucket = cloud_storage_clients::bucket_name{
+      bucket_config.value().value()};
+
+    // Test virtual_host style.
+    vassert(
+      _requestor._ap_style == s3_url_style::virtual_host,
+      "_ap_style should be virtual host by default before self configuration "
+      "begins");
+    {
+        auto list_objects_result = co_await list_objects(
+          bucket, std::nullopt, std::nullopt, 1);
+        if (list_objects_result) {
+            // Virtual-host style request succeeded.
+            co_return result;
+        }
+    }
+
+    // Test path style.
+    _requestor._ap_style = s3_url_style::path;
+    result.url_style = _requestor._ap_style;
+    {
+        auto list_objects_result = co_await list_objects(
+          bucket, std::nullopt, std::nullopt, 1);
+        if (list_objects_result) {
+            // Path style request succeeded.
+            co_return result;
+        }
+    }
+
+    // Both addressing styles failed.
     vlog(
       s3_log.error,
-      "Call to self_configure was made, but the S3 client doesn't require self "
-      "configuration");
-    co_return s3_self_configuration_result{};
+      "Couldn't reach S3 storage with either path style or virtual_host style "
+      "requests.",
+      bucket_config.name());
+    co_return error_outcome::fail;
 }
 
 ss::future<> s3_client::stop() { return _client.stop(); }

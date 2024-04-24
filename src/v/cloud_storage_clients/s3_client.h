@@ -107,6 +107,7 @@ public:
       std::optional<char> delimiter = std::nullopt);
 
 private:
+    friend class s3_client;
     std::string make_host(const bucket_name& name) const;
 
     std::string
