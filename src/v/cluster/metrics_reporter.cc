@@ -305,9 +305,10 @@ ss::future<> metrics_reporter::try_initialize_cluster_info() {
     sha256.update(data_bytes);
     _cluster_info.creation_timestamp = first_cfg.header().first_timestamp;
     // use timestamps of first two batches in raft-0 log.
+    auto batch_it = batches.begin();
     for (int i = 0; i < 2; ++i) {
         sha256.update(iobuf_to_bytes(
-          reflection::to_iobuf(batches[i].header().first_timestamp())));
+          reflection::to_iobuf((*batch_it++).header().first_timestamp())));
     }
     auto hash = sha256.reset();
     // seed prng with data and timestamps hash

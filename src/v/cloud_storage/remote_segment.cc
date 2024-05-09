@@ -1465,12 +1465,12 @@ remote_segment_batch_reader::remote_segment_batch_reader(
     _ts_probe.segment_reader_created();
 }
 
-ss::future<result<ss::circular_buffer<model::record_batch>>>
+ss::future<result<model::record_batch_reader::data_t>>
 remote_segment_batch_reader::read_some(
   model::timeout_clock::time_point,
   storage::offset_translator_state& ot_state) {
     ss::gate::holder h(_gate);
-    if (_ringbuf.empty()) {
+    if (_buf.empty()) {
         if (!_parser) {
             // remote_segment_batch_reader shouldn't be used concurrently
             _parser = co_await init_parser();
@@ -1510,12 +1510,12 @@ remote_segment_batch_reader::read_some(
                 vlog(_ctxlog.error, "{}", msg);
             }
             _is_unexpected_eof = true;
-            co_return ss::circular_buffer<model::record_batch>{};
+            co_return data_t{};
         }
         _bytes_consumed = new_bytes_consumed.value();
     }
     _total_size = 0;
-    co_return std::move(_ringbuf);
+    co_return std::move(_buf);
 }
 
 ss::future<std::unique_ptr<storage::continuous_batch_parser>>
@@ -1555,7 +1555,7 @@ size_t remote_segment_batch_reader::produce(model::record_batch batch) {
     ss::gate::holder h(_gate);
     vlog(_ctxlog.debug, "remote_segment_batch_reader::produce");
     _total_size += batch.size_bytes();
-    _ringbuf.push_back(std::move(batch));
+    _buf.push_back(std::move(batch));
     return _total_size;
 }
 

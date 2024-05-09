@@ -11,6 +11,7 @@
 
 #include "cluster/logger.h"
 #include "cluster/rm_stm.h"
+#include "model/record_batch_reader.h"
 #include "storage/tests/storage_test_fixture.h"
 #include "storage/tests/utils/disk_log_builder.h"
 #include "test_utils/async.h"
@@ -318,7 +319,7 @@ public:
               .record_count = spec.count,
               .is_transactional = true};
             auto reader = model::make_memory_record_batch_reader(
-              std::move(batches[0]));
+              std::move(batches.front()));
             auto result = co_await _ctx._stm->replicate(
               bid,
               std::move(reader),
@@ -351,9 +352,9 @@ public:
     };
 
 private:
-    ss::future<ss::circular_buffer<model::record_batch>>
+    ss::future<model::record_batch_reader::data_t>
     copy_to_mem(model::record_batch_reader& reader) {
-        using data_t = ss::circular_buffer<model::record_batch>;
+        using data_t = model::record_batch_reader::data_t;
         class memory_batch_consumer {
         public:
             ss::future<ss::stop_iteration> operator()(model::record_batch b) {

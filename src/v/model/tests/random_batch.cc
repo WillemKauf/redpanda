@@ -201,13 +201,13 @@ model::record_batch make_random_batch(
       ts);
 }
 
-ss::circular_buffer<model::record_batch> make_random_batches(
+data_t make_random_batches(
   model::offset o,
   int count,
   bool allow_compression,
   std::optional<model::timestamp> base_ts) {
     // start offset + count
-    ss::circular_buffer<model::record_batch> ret;
+    data_t ret;
     ret.reserve(count);
     model::timestamp ts = base_ts.value_or(model::timestamp::now());
     for (int i = 0; i < count; i++) {
@@ -222,14 +222,13 @@ ss::circular_buffer<model::record_batch> make_random_batches(
     return ret;
 }
 
-ss::circular_buffer<model::record_batch> make_random_batches(model::offset o) {
+data_t make_random_batches(model::offset o) {
     return make_random_batches(o, get_int(2, 30), true);
 }
 
-ss::circular_buffer<model::record_batch>
-make_random_batches(record_batch_spec spec) {
+data_t make_random_batches(record_batch_spec spec) {
     // start offset + count
-    ss::circular_buffer<model::record_batch> ret;
+    data_t ret;
     ret.reserve(spec.count);
     model::offset o = spec.offset;
     int32_t base_sequence = spec.base_sequence;

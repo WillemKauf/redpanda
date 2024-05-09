@@ -65,9 +65,8 @@ record_batch_reader make_foreign_record_batch_reader(record_batch_reader&& r) {
                     if (likely(std::holds_alternative<data_t>(recs))) {
                         auto& d = std::get<data_t>(recs);
                         auto p = std::make_unique<data_t>(std::move(d));
-                        return storage_t(foreign_data_t{
-                          .buffer = ss::make_foreign(std::move(p)),
-                          .index = 0});
+                        return storage_t(
+                          foreign_data_t(ss::make_foreign(std::move(p))));
                     }
                     return recs;
                 });
@@ -91,9 +90,7 @@ record_batch_reader make_memory_record_batch_reader(storage_t batches) {
             return ss::visit(
               _batches,
               [](const data_t& d) { return d.empty(); },
-              [](const foreign_data_t& d) {
-                  return d.index >= d.buffer->size();
-              });
+              [](const foreign_data_t& d) { return d.it == d.buffer->end(); });
         }
 
         void print(std::ostream& os) final {
@@ -122,10 +119,8 @@ record_batch_reader
 make_foreign_memory_record_batch_reader(record_batch_reader::data_t data) {
     auto batches = std::make_unique<record_batch_reader::data_t>(
       std::move(data));
-    return make_memory_record_batch_reader(record_batch_reader::foreign_data_t{
-      .buffer = ss::make_foreign(std::move(batches)),
-      .index = 0,
-    });
+    return make_memory_record_batch_reader(record_batch_reader::foreign_data_t(
+      ss::make_foreign(std::move(batches))));
 }
 
 record_batch_reader make_foreign_memory_record_batch_reader(record_batch b) {
@@ -216,11 +211,10 @@ make_fragmented_memory_storage_batches(Container batches) {
     for (auto it = batches.begin(); it != batches.end(); ++i, ++it) {
         if (!data_chunk.empty() && i % elements_per_fragment == 0) {
             if (is_foreign) {
-                data.emplace_back(record_batch_reader::foreign_data_t{
-                  .buffer = ss::make_foreign(
+                data.emplace_back(
+                  record_batch_reader::foreign_data_t(ss::make_foreign(
                     std::make_unique<record_batch_reader::data_t>(
-                      std::exchange(data_chunk, {}))),
-                  .index = 0});
+                      std::exchange(data_chunk, {})))));
             } else {
                 data.emplace_back(std::exchange(data_chunk, {}));
             }
@@ -232,11 +226,9 @@ make_fragmented_memory_storage_batches(Container batches) {
     }
     if (!data_chunk.empty()) {
         if (is_foreign) {
-            data.emplace_back(record_batch_reader::foreign_data_t{
-              .buffer = ss::make_foreign(
-                std::make_unique<record_batch_reader::data_t>(
-                  std::exchange(data_chunk, {}))),
-              .index = 0});
+            data.emplace_back(record_batch_reader::foreign_data_t(
+              ss::make_foreign(std::make_unique<record_batch_reader::data_t>(
+                std::exchange(data_chunk, {})))));
         } else {
             data.emplace_back(std::move(data_chunk));
         }

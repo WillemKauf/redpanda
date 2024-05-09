@@ -10,6 +10,7 @@
 #include "bytes/iobuf_parser.h"
 #include "model/adl_serde.h"
 #include "model/metadata.h"
+#include "model/record_batch_reader.h"
 #include "model/tests/random_batch.h"
 #include "model/tests/randoms.h"
 #include "raft/consensus_utils.h"
@@ -132,8 +133,8 @@ struct test_consumer {
 SEASTAR_THREAD_TEST_CASE(test_config_extracting_reader) {
     auto cfg_1 = random_configuration();
     auto cfg_2 = random_configuration();
-    using batches_t = ss::circular_buffer<model::record_batch>;
-    ss::circular_buffer<model::record_batch> all_batches;
+    using batches_t = model::record_batch_reader::data_t;
+    model::record_batch_reader::data_t all_batches;
 
     // serialize to batches
     // use adl

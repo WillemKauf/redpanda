@@ -14,9 +14,13 @@
 #include <seastar/core/thread.hh>
 #include <seastar/testing/thread_test_case.hh>
 
+#include <boost/test/tools/old/interface.hpp>
+
 #include <vector>
 
 using namespace model; // NOLINT
+
+using data_t = record_batch_reader::data_t;
 
 class consumer {
 public:
@@ -33,12 +37,10 @@ public:
           ss::stop_iteration::no);
     }
 
-    ss::circular_buffer<record_batch> end_of_stream() {
-        return std::move(_result);
-    }
+    data_t end_of_stream() { return std::move(_result); }
 
 private:
-    ss::circular_buffer<record_batch> _result;
+    data_t _result;
     size_t _depth;
 };
 
@@ -65,7 +67,7 @@ public:
 
     struct consumer_ret {
         int init_count;
-        ss::circular_buffer<record_batch> batches;
+        data_t batches;
     };
 
     consumer_ret end_of_stream() {
@@ -78,18 +80,17 @@ public:
 private:
     size_t _depth;
     int _init_count;
-    ss::circular_buffer<record_batch> _result;
+    data_t _result;
 };
 
 template<typename... Offsets>
-ss::circular_buffer<model::record_batch> make_batches(Offsets... o) {
-    ss::circular_buffer<model::record_batch> batches;
+data_t make_batches(Offsets... o) {
+    data_t batches;
     (batches.emplace_back(model::test::make_random_batch(o, 1, true)), ...);
     return batches;
 }
 
-record_batch_reader
-make_generating_reader(ss::circular_buffer<record_batch> batches) {
+record_batch_reader make_generating_reader(data_t batches) {
     return make_generating_record_batch_reader(
       [batches = std::move(batches)]() mutable {
           return ss::make_ready_future<record_batch_reader::data_t>(
@@ -165,8 +166,5 @@ SEASTAR_THREAD_TEST_CASE(record_batch_sharing) {
           return batch.share();
       });
 
-    BOOST_CHECK_EQUAL(v1.size(), v2.size());
-    for (auto i = 0; i < v1.size(); ++i) {
-        BOOST_CHECK(v1[i] == v2[i]);
-    }
+    BOOST_CHECK_EQUAL_COLLECTIONS(v1.begin(), v1.end(), v2.begin(), v2.end());
 }

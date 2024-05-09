@@ -98,7 +98,7 @@ archiver_fixture::~archiver_fixture() {
 
 static void write_batches(
   ss::lw_shared_ptr<storage::segment> seg,
-  ss::circular_buffer<model::record_batch> batches) { // NOLINT
+  model::record_batch_reader::data_t batches) { // NOLINT
     vlog(fixt_log.trace, "num batches {}", batches.size());
     for (auto& b : batches) {
         b.header().header_crc = model::internal_header_only_crc(b.header());

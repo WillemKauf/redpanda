@@ -12,6 +12,7 @@
 #pragma once
 #include "cluster/topic_table.h"
 #include "cluster/types.h"
+#include "model/record_batch_reader.h"
 #include "test_utils/async.h"
 
 #include <seastar/core/sharded.hh>
@@ -20,7 +21,7 @@
 
 static const model::ns test_ns = model::ns("test-namespace");
 
-using batches_t = ss::circular_buffer<model::record_batch>;
+using batches_t = model::record_batch_reader::data_t;
 using batches_ptr_t = ss::lw_shared_ptr<batches_t>;
 using foreign_batches_t = ss::foreign_ptr<batches_ptr_t>;
 

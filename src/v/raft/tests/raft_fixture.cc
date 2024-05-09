@@ -148,7 +148,7 @@ ss::future<> channel::dispatch_loop() {
                         hb.node_id,
                         hb.meta,
                         model::make_memory_record_batch_reader(
-                          ss::circular_buffer<model::record_batch>{}),
+                          model::record_batch_reader::data_t{}),
                         flush_after_append::no));
                     reply.meta.push_back(resp);
                 }
@@ -510,12 +510,12 @@ void raft_node_instance::leadership_notification_callback(
     _leader_clb(status);
 }
 
-ss::future<ss::circular_buffer<model::record_batch>>
+ss::future<model::record_batch_reader::data_t>
 raft_node_instance::read_all_data_batches() {
     return read_batches_in_range(_raft->start_offset(), model::offset::max());
 }
 
-ss::future<ss::circular_buffer<model::record_batch>>
+ss::future<model::record_batch_reader::data_t>
 raft_node_instance::read_batches_in_range(
   model::offset min, model::offset max) {
     storage::log_reader_config cfg(min, max, ss::default_priority_class());
@@ -525,7 +525,7 @@ raft_node_instance::read_batches_in_range(
     auto batches = co_await model::consume_reader_to_memory(
       std::move(rdr), default_timeout());
 
-    ss::circular_buffer<model::record_batch> data_batches;
+    model::record_batch_reader::data_t data_batches;
     data_batches.reserve(batches.size());
     /**
      * Filter out raft configurations as when reconfiguring nodes the one
@@ -548,7 +548,7 @@ raft_node_instance::random_batch_base_offset(model::offset max) {
 
     model::offset last = model::next_offset(read_start);
 
-    ss::circular_buffer<model::record_batch> batches;
+    model::record_batch_reader::data_t batches;
     while (batches.empty() && last <= _raft->dirty_offset()) {
         vlog(
           test_log.info, "Reading batches in range: [{},{}]", read_start, last);

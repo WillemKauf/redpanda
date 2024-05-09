@@ -20,6 +20,7 @@
 #include "model/fundamental.h"
 #include "model/metadata.h"
 #include "model/namespace.h"
+#include "model/record_batch_reader.h"
 #include "model/timeout_clock.h"
 #include "raft/consensus.h"
 #include "raft/consensus_client_protocol.h"
@@ -214,9 +215,8 @@ public:
 
     vnode get_vnode() const { return {_id, _revision}; }
 
-    ss::future<ss::circular_buffer<model::record_batch>>
-    read_all_data_batches();
-    ss::future<ss::circular_buffer<model::record_batch>>
+    ss::future<model::record_batch_reader::data_t> read_all_data_batches();
+    ss::future<model::record_batch_reader::data_t>
     read_batches_in_range(model::offset min, model::offset max);
 
     ss::future<model::offset> random_batch_base_offset(model::offset max);
@@ -327,7 +327,7 @@ public:
     template<typename Generator>
     model::record_batch_reader
     make_batches(size_t batch_count, Generator&& generator) {
-        ss::circular_buffer<model::record_batch> batches;
+        model::record_batch_reader::data_t batches;
         batches.reserve(batch_count);
         for (auto b_idx : boost::irange(batch_count)) {
             batches.push_back(generator(b_idx));
@@ -339,7 +339,7 @@ public:
       size_t batch_count,
       size_t batch_record_count,
       size_t record_payload_size) {
-        ss::circular_buffer<model::record_batch> batches;
+        model::record_batch_reader::data_t batches;
         batches.reserve(batch_count);
         for (auto b_idx : boost::irange(batch_count)) {
             storage::record_batch_builder builder(
@@ -358,7 +358,7 @@ public:
 
     ss::future<>
     assert_logs_equal(model::offset start_offset = model::offset{}) {
-        std::vector<ss::circular_buffer<model::record_batch>> node_batches;
+        std::vector<model::record_batch_reader::data_t> node_batches;
         for (auto& [id, n] : _nodes) {
             auto read_from = start_offset == model::offset{}
                                ? n->raft()->start_offset()

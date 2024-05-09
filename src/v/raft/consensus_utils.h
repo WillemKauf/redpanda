@@ -13,13 +13,13 @@
 
 #include "base/likely.h"
 #include "model/record.h"
+#include "model/record_batch_reader.h"
 #include "raft/configuration_bootstrap_state.h"
 #include "raft/types.h"
 #include "storage/log.h"
 #include "storage/snapshot.h"
 
 #include <seastar/core/abort_source.hh>
-#include <seastar/core/circular_buffer.hh>
 #include <seastar/core/smp.hh>
 #include <seastar/core/sstring.hh>
 
@@ -36,7 +36,7 @@ ss::future<std::vector<model::record_batch_reader>>
 foreign_share_n(model::record_batch_reader&&, std::size_t);
 
 /// serialize group configuration as config-type batch
-ss::circular_buffer<model::record_batch>
+model::record_batch_reader::data_t
 serialize_configuration_as_batches(group_configuration cfg);
 
 iobuf serialize_configuration(group_configuration cfg);
@@ -47,8 +47,8 @@ void write_configuration(group_configuration cfg, iobuf& out);
 ss::future<raft::configuration_bootstrap_state> read_bootstrap_state(
   ss::shared_ptr<storage::log>, model::offset, ss::abort_source&);
 
-ss::circular_buffer<model::record_batch> make_ghost_batches_in_gaps(
-  model::offset, ss::circular_buffer<model::record_batch>&&);
+model::record_batch_reader::data_t
+make_ghost_batches_in_gaps(model::offset, model::record_batch_reader::data_t&&);
 fragmented_vector<model::record_batch> make_ghost_batches_in_gaps(
   model::offset, fragmented_vector<model::record_batch>&&);
 

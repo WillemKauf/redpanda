@@ -9,6 +9,7 @@
 
 #include "model/fundamental.h"
 #include "model/record.h"
+#include "model/record_batch_reader.h"
 #include "model/timestamp.h"
 #include "storage/disk_log_impl.h"
 #include "storage/log.h"
@@ -79,7 +80,7 @@ FIXTURE_TEST(test_truncate_in_the_middle_of_segment, storage_test_fixture) {
     log->flush().get0();
 
     auto all_batches = read_and_validate_all_batches(log);
-    auto truncate_offset = all_batches[4].base_offset();
+    auto truncate_offset = std::next(all_batches.begin(), 4)->base_offset();
 
     // truncate in the middle
     info("Truncating at offset:{}", truncate_offset);
@@ -91,7 +92,7 @@ FIXTURE_TEST(test_truncate_in_the_middle_of_segment, storage_test_fixture) {
     auto read_batches = read_and_validate_all_batches(log);
 
     // one less
-    auto expected = all_batches[3].last_offset();
+    auto expected = std::next(all_batches.begin(), 3)->last_offset();
 
     auto lstats = log->offsets();
     BOOST_REQUIRE_EQUAL(lstats.committed_offset, expected);
@@ -128,7 +129,8 @@ FIXTURE_TEST(test_truncate_in_the_middle_of_batch, storage_test_fixture) {
     BOOST_CHECK_EQUAL(log->offsets().dirty_offset, model::offset{14});
     auto read_batches = read_and_validate_all_batches(log);
     BOOST_REQUIRE_EQUAL(read_batches.size(), 2);
-    BOOST_CHECK_EQUAL(read_batches[1].last_offset(), model::offset{14});
+    BOOST_CHECK_EQUAL(
+      std::next(read_batches.begin(), 1)->last_offset(), model::offset{14});
 }
 
 FIXTURE_TEST(test_truncate_empty_log, storage_test_fixture) {
@@ -164,14 +166,14 @@ FIXTURE_TEST(test_truncate_middle_of_old_segment, storage_test_fixture) {
     auto all_batches = read_and_validate_all_batches(log);
 
     for (size_t i = 0, max = (all_batches.size() / 2); i < max; ++i) {
-        all_batches.pop_back();
+        all_batches.pop_front();
     }
     // truncate @ offset that belongs to an old segment
     log
       ->truncate(storage::truncate_config(
         all_batches.back().base_offset(), ss::default_priority_class()))
       .get0();
-    all_batches.pop_back(); // we just removed the last one!
+    all_batches.pop_front(); // we just removed the last one!
     auto final_batches = read_and_validate_all_batches(log);
     BOOST_REQUIRE_EQUAL(all_batches.size(), final_batches.size());
     auto lstats = log->offsets();
@@ -261,7 +263,7 @@ FIXTURE_TEST(
     log->flush().get0();
 
     auto all_batches = read_and_validate_all_batches(log);
-    auto truncate_offset = all_batches[4].base_offset();
+    auto truncate_offset = std::next(all_batches.begin(), 4)->base_offset();
 
     // truncate in the middle
     info("Truncating at offset:{}", truncate_offset);
@@ -273,7 +275,7 @@ FIXTURE_TEST(
     auto read_batches = read_and_validate_all_batches(log);
 
     // one less
-    auto expected = all_batches[3].last_offset();
+    auto expected = std::next(all_batches.begin(), 3)->last_offset();
     auto lstats = log->offsets();
     BOOST_REQUIRE_EQUAL(lstats.committed_offset, expected);
     BOOST_REQUIRE_EQUAL(lstats.dirty_offset, expected);
@@ -302,7 +304,7 @@ FIXTURE_TEST(test_truncate_last_single_record_batch, storage_test_fixture) {
       15,
       model::term_id(0),
       [](std::optional<model::timestamp> ts = std::nullopt) {
-          ss::circular_buffer<model::record_batch> ret;
+          model::record_batch_reader::data_t ret;
           ret.push_back(model::test::make_random_batch(
             model::offset(0),
             1,
@@ -444,7 +446,8 @@ FIXTURE_TEST(truncated_segment_recovery, storage_test_fixture) {
 
         // truncate in the middle
         auto all_batches = read_and_validate_all_batches(log);
-        truncate_offsets.push_back(all_batches[4].base_offset());
+        truncate_offsets.push_back(
+          std::next(all_batches.begin(), 4)->base_offset());
 
         info("Truncating at offset:{}", truncate_offsets.back());
         log
@@ -583,7 +586,8 @@ FIXTURE_TEST(test_concurrent_truncate_and_compaction, storage_test_fixture) {
     auto all_batches = read_and_validate_all_batches(log);
     auto truncate_idx = random_generators::get_int(
       0, int(all_batches.size() - 1));
-    auto truncate_offset = all_batches[truncate_idx].base_offset();
+    auto truncate_offset
+      = std::next(all_batches.begin(), truncate_idx)->base_offset();
 
     // Truncation deletes the compacted index of already compacted segments.
     // so start out by compacting our segments. We'll use adjacent merge
@@ -676,13 +680,13 @@ FIXTURE_TEST(
     BOOST_CHECK_EQUAL(log->offsets().start_offset, model::offset{7});
     auto batches1 = read_and_validate_all_batches(log);
     BOOST_REQUIRE_EQUAL(batches1.size(), 2);
-    BOOST_CHECK_EQUAL(batches1[0].base_offset(), model::offset{0});
+    BOOST_CHECK_EQUAL(batches1.front().base_offset(), model::offset{0});
 
     truncate_at(model::offset{12});
     BOOST_CHECK_EQUAL(log->offsets().start_offset, model::offset{12});
     auto batches2 = read_and_validate_all_batches(log);
     BOOST_REQUIRE_EQUAL(batches2.size(), 1);
-    BOOST_CHECK_EQUAL(batches2[0].base_offset(), model::offset{10});
+    BOOST_CHECK_EQUAL(batches2.front().base_offset(), model::offset{10});
 
     truncate_at(model::offset{20});
     BOOST_CHECK_EQUAL(log->offsets().start_offset, model::offset{20});
@@ -727,8 +731,8 @@ FIXTURE_TEST(test_prefix_truncate_then_truncate_all, storage_test_fixture) {
     BOOST_CHECK_EQUAL(log->offsets().start_offset, model::offset{10});
     auto read_batches = read_and_validate_all_batches(log);
     BOOST_REQUIRE_EQUAL(read_batches.size(), 1);
-    BOOST_CHECK_EQUAL(read_batches[0].base_offset(), model::offset{10});
-    BOOST_CHECK_EQUAL(read_batches[0].last_offset(), model::offset{12});
+    BOOST_CHECK_EQUAL(read_batches.front().base_offset(), model::offset{10});
+    BOOST_CHECK_EQUAL(read_batches.front().last_offset(), model::offset{12});
 }
 
 FIXTURE_TEST(test_index_max_timestamp_update, storage_test_fixture) {

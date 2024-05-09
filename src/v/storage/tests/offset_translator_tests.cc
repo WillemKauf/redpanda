@@ -329,7 +329,7 @@ struct fuzz_checker {
 
     ss::future<> append() {
         size_t number_of_batches = random_generators::get_int(1, 5);
-        ss::circular_buffer<model::record_batch> batches;
+        model::record_batch_reader::data_t batches;
         batches.reserve(number_of_batches);
 
         for (size_t i_batch = 0; i_batch < number_of_batches; ++i_batch) {

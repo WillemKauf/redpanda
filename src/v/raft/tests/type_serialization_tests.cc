@@ -38,9 +38,9 @@
 #include <vector>
 
 struct checking_consumer {
-    using batches_t = ss::circular_buffer<model::record_batch>;
+    using batches_t = model::record_batch_reader::data_t;
 
-    checking_consumer(ss::circular_buffer<model::record_batch> exp)
+    checking_consumer(model::record_batch_reader::data_t exp)
       : expected(std::move(exp)) {}
 
     ss::future<ss::stop_iteration> operator()(model::record_batch batch) {

@@ -13,6 +13,7 @@
 #include "compat/check.h"
 #include "compat/raft_generator.h"
 #include "compat/raft_json.h"
+#include "model/record_batch_reader.h"
 #include "raft/types.h"
 
 #include <type_traits>
@@ -522,7 +523,7 @@ compat_copy(raft::append_entries_request r) {
                        std::move(r).release_batches(), model::no_timeout)
                        .get0();
 
-    ss::circular_buffer<model::record_batch> b_batches;
+    model::record_batch_reader::data_t b_batches;
     for (const auto& batch : a_batches) {
         b_batches.emplace_back(batch.copy());
     }
@@ -648,13 +649,17 @@ struct compat_check<raft::append_entries_request> {
           "Invalid batches size for test {}",
           decoded_batches.size());
 
+        auto decoded_it = decoded_batches.begin();
+        auto expected_it = expected_batches.begin();
         for (size_t i = 0; i < decoded_batches.size(); i++) {
-            if (decoded_batches[i] != expected_batches[i]) {
+            if (*decoded_it != *expected_it) {
                 throw compat_error(fmt::format(
                   "Expected batch {}\n decoded batch {}",
-                  expected_batches[i],
-                  decoded_batches[i]));
+                  *expected_it,
+                  *decoded_it));
             }
+            ++decoded_it;
+            ++expected_it;
         }
     }
 };

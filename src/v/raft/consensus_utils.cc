@@ -71,9 +71,9 @@ static inline void check_copy_out_of_range(size_t expected, size_t got) {
     }
 }
 
-static inline ss::circular_buffer<model::record_batch>
+static inline model::record_batch_reader::data_t
 share_n_record_batch(model::record_batch batch, const size_t copies) {
-    using ret_t = ss::circular_buffer<model::record_batch>;
+    using ret_t = model::record_batch_reader::data_t;
     ret_t ret;
     ret.reserve(copies);
     // the fast path
@@ -84,14 +84,14 @@ share_n_record_batch(model::record_batch batch, const size_t copies) {
     return ret;
 }
 
-static inline ss::future<std::vector<ss::circular_buffer<model::record_batch>>>
+static inline ss::future<std::vector<model::record_batch_reader::data_t>>
 share_n_batches(
-  ss::circular_buffer<model::record_batch> batches, const size_t copies) {
-    using ret_t = std::vector<ss::circular_buffer<model::record_batch>>;
+  model::record_batch_reader::data_t batches, const size_t copies) {
+    using ret_t = std::vector<model::record_batch_reader::data_t>;
     return do_with(
       std::move(batches),
       ret_t(copies),
-      [copies](ss::circular_buffer<model::record_batch>& batches, ret_t& data) {
+      [copies](model::record_batch_reader::data_t& batches, ret_t& data) {
           return ss::do_for_each(
                    batches,
                    [copies, &data](model::record_batch& b) mutable {
@@ -99,8 +99,8 @@ share_n_batches(
                          std::move(b), copies);
 
                        for (auto& buf : data) {
-                           buf.push_back(std::move(shared_batches.back()));
-                           shared_batches.pop_back();
+                           buf.push_back(std::move(shared_batches.front()));
+                           shared_batches.pop_front();
                        }
                    })
             .then([&data]() mutable { return std::move(data); });
@@ -112,11 +112,11 @@ ss::future<std::vector<model::record_batch_reader>> share_reader(
   const size_t ncopies,
   const bool use_foreign_share) {
     return model::consume_reader_to_memory(std::move(rdr), model::no_timeout)
-      .then([ncopies](ss::circular_buffer<model::record_batch> batches) {
+      .then([ncopies](model::record_batch_reader::data_t batches) {
           return share_n_batches(std::move(batches), ncopies);
       })
       .then([ncopies, use_foreign_share](
-              std::vector<ss::circular_buffer<model::record_batch>> batches) {
+              std::vector<model::record_batch_reader::data_t> batches) {
           check_copy_out_of_range(ncopies, batches.size());
           std::vector<model::record_batch_reader> retval;
           retval.reserve(ncopies);
@@ -175,7 +175,7 @@ iobuf serialize_configuration(group_configuration cfg) {
     return reflection::to_iobuf(std::move(cfg));
 }
 
-ss::circular_buffer<model::record_batch>
+model::record_batch_reader::data_t
 serialize_configuration_as_batches(group_configuration cfg) {
     auto batch
       = std::move(
@@ -183,7 +183,7 @@ serialize_configuration_as_batches(group_configuration cfg) {
             model::record_batch_type::raft_configuration, model::offset(0))
             .add_raw_kv(iobuf(), serialize_configuration(std::move(cfg))))
           .build();
-    ss::circular_buffer<model::record_batch> batches;
+    model::record_batch_reader::data_t batches;
     batches.reserve(1);
     batches.push_back(std::move(batch));
     return batches;

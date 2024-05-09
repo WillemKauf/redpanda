@@ -22,7 +22,6 @@
 #include "storage/segment_set.h"
 #include "storage/types.h"
 
-#include <seastar/core/circular_buffer.hh>
 #include <seastar/core/io_queue.hh>
 #include <seastar/util/optimized_optional.hh>
 
@@ -101,7 +100,7 @@ public:
       = delete;
     ~log_segment_batch_reader() noexcept = default;
 
-    ss::future<result<ss::circular_buffer<model::record_batch>>>
+    ss::future<result<model::record_batch_reader::data_t>>
       read_some(model::timeout_clock::time_point);
 
     ss::future<> close();
@@ -115,7 +114,7 @@ private:
 
 private:
     struct tmp_state {
-        ss::circular_buffer<model::record_batch> buffer;
+        model::record_batch_reader::data_t buffer;
         size_t buffer_size = 0;
         bool is_full() const { return buffer_size >= max_buffer_size; }
     };

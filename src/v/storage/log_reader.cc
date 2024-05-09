@@ -15,6 +15,7 @@
 #include "model/fundamental.h"
 #include "model/offset_interval.h"
 #include "model/record.h"
+#include "model/record_batch_reader.h"
 #include "storage/logger.h"
 #include "storage/offset_translator_state.h"
 #include "storage/parser_errc.h"
@@ -80,7 +81,7 @@ std::vector<model::record_batch> make_ghost_batches(
 } // anonymous namespace
 
 namespace storage {
-using records_t = ss::circular_buffer<model::record_batch>;
+using records_t = model::record_batch_reader::data_t;
 
 batch_consumer::consume_result skipping_consumer::accept_batch_start(
   const model::record_batch_header& header) const {

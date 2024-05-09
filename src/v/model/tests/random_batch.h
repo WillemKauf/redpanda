@@ -19,6 +19,8 @@
 namespace model::test {
 using namespace random_generators; // NOLINT
 
+using data_t = record_batch_reader::data_t;
+
 struct record_batch_spec {
     model::offset offset{0};
     bool allow_compression{true};
@@ -62,17 +64,15 @@ model::record_batch make_random_batch(
   bool allow_compression = true,
   std::optional<model::timestamp> ts = std::nullopt);
 
-ss::circular_buffer<model::record_batch> make_random_batches(
+data_t make_random_batches(
   model::offset o,
   int count,
   bool allow_compression = true,
   std::optional<model::timestamp> ts = std::nullopt);
 
-ss::circular_buffer<model::record_batch>
-make_random_batches(model::offset o = model::offset(0));
+data_t make_random_batches(model::offset o = model::offset(0));
 
-ss::circular_buffer<model::record_batch>
-make_random_batches(record_batch_spec spec);
+data_t make_random_batches(record_batch_spec spec);
 
 model::record_batch_reader make_random_memory_record_batch_reader(
   model::offset, int, int, bool allow_compression = true);

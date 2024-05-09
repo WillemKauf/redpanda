@@ -704,7 +704,7 @@ ss::future<result<model::offset>> consensus::linearizable_barrier() {
           target,
           meta(),
           model::make_memory_record_batch_reader(
-            ss::circular_buffer<model::record_batch>{}),
+            model::record_batch_reader::data_t{}),
           flush_after_append::yes);
         auto seq = next_follower_sequence(target);
         sequences.emplace(target, seq);
@@ -3951,7 +3951,7 @@ ss::future<full_heartbeat_reply> consensus::full_heartbeat(
         .dirty_offset = hb_data.prev_log_index,
       },
       model::make_memory_record_batch_reader(
-        ss::circular_buffer<model::record_batch>{}),
+        model::record_batch_reader::data_t{}),
       flush_after_append::no));
 
     reply.result = r.result;

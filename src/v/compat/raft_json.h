@@ -237,8 +237,8 @@ inline void read_value(json::Value const& rd, model::record_batch_header& out) {
  * since the components of the record batch aren't default constructable we also
  * circumvent the normal api to which requires default ctor is available.
  */
-inline void read_value(
-  json::Value const& v, ss::circular_buffer<model::record_batch>& target) {
+inline void
+read_value(json::Value const& v, model::record_batch_reader::data_t& target) {
     for (auto const& e : v.GetArray()) {
         model::record_batch_header header;
         std::vector<model::record> records;

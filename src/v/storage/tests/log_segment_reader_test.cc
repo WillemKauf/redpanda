@@ -33,9 +33,9 @@ using namespace storage; // NOLINT
       actual.begin(), actual.end(), expected.begin(), expected.end());
 
 namespace {
-ss::circular_buffer<model::record_batch>
-copy(ss::circular_buffer<model::record_batch>& input) {
-    ss::circular_buffer<model::record_batch> ret;
+model::record_batch_reader::data_t
+copy(model::record_batch_reader::data_t& input) {
+    model::record_batch_reader::data_t ret;
     ret.reserve(input.size());
     for (auto& b : input) {
         ret.push_back(b.share());
@@ -44,7 +44,7 @@ copy(ss::circular_buffer<model::record_batch>& input) {
 }
 
 void write(
-  ss::circular_buffer<model::record_batch> batches, disk_log_builder& builder) {
+  model::record_batch_reader::data_t batches, disk_log_builder& builder) {
     auto seg = builder.get_log_segments().front().get();
     for (auto& b : batches) {
         b.header().header_crc = model::internal_header_only_crc(b.header());
@@ -139,7 +139,7 @@ SEASTAR_THREAD_TEST_CASE(
     write(copy(batches), b);
     auto res = b.consume(reader_config).get0();
     b | stop();
-    ss::circular_buffer<model::record_batch> first;
+    model::record_batch_reader::data_t first;
     first.push_back(std::move(batches.back()));
     check_batches(res, first);
 }
@@ -160,7 +160,7 @@ SEASTAR_THREAD_TEST_CASE(test_does_not_read_past_max_bytes) {
     write(copy(batches), b);
     auto res = b.consume(reader_config).get0();
     b | stop();
-    ss::circular_buffer<model::record_batch> first;
+    model::record_batch_reader::data_t first;
     first.push_back(std::move(*batches.begin()));
     check_batches(res, first);
 }
@@ -181,7 +181,7 @@ SEASTAR_THREAD_TEST_CASE(test_reads_at_least_one_batch) {
     write(copy(batches), b);
     auto res = b.consume(reader_config).get0();
     b | stop();
-    ss::circular_buffer<model::record_batch> first;
+    model::record_batch_reader::data_t first;
     first.push_back(std::move(batches.front()));
     check_batches(res, first);
 }
@@ -212,8 +212,8 @@ SEASTAR_THREAD_TEST_CASE(test_read_batch_range) {
 
 SEASTAR_THREAD_TEST_CASE(test_batch_type_filter) {
     auto batches = model::test::make_random_batches(model::offset(0), 5);
-    for (auto i = 0u; i < batches.size(); i++) {
-        batches[i].header().type = model::record_batch_type(i);
+    for (auto i = 0u; auto& batch : batches) {
+        batch.header().type = model::record_batch_type(i++);
     }
 
     storage::log_reader_config reader_config(

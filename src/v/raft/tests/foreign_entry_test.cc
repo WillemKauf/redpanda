@@ -92,7 +92,7 @@ struct foreign_entry_fixture {
     }
     template<typename Func>
     model::record_batch_reader reader_gen(std::size_t n, Func&& f) {
-        ss::circular_buffer<model::record_batch> batches;
+        model::record_batch_reader::data_t batches;
         batches.reserve(n);
         while (n-- > 0) {
             batches.push_back(f());
@@ -212,9 +212,11 @@ FIXTURE_TEST(sharing_correcteness_test, foreign_entry_fixture) {
         auto shared = model::consume_reader_to_memory(
                         std::move(copy), model::no_timeout)
                         .get0();
-        for (int i = 0; i < reference_batches.size(); ++i) {
-            BOOST_REQUIRE_EQUAL(shared[i], reference_batches[i]);
-        }
+        BOOST_REQUIRE_EQUAL_COLLECTIONS(
+          shared.begin(),
+          shared.end(),
+          reference_batches.begin(),
+          reference_batches.end());
     }
 }
 

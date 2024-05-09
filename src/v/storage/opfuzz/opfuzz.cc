@@ -32,8 +32,7 @@ namespace storage {
 // NOLINTNEXTLINE
 ss::logger fuzzlogger("opfuzz");
 
-static size_t
-record_count(const ss::circular_buffer<model::record_batch>& batches) {
+static size_t record_count(const model::record_batch_reader::data_t& batches) {
     return std::accumulate(
       batches.begin(),
       batches.end(),
@@ -197,12 +196,13 @@ struct append_multi_term_op final : opfuzz::op {
           mid,
           batches.front().base_offset(),
           batches.back().last_offset());
+        auto batch_it = batches.begin();
         for (size_t i = 0; i < mid; ++i) {
-            batches[i].set_term(*ctx.term);
+            (*batch_it++).set_term(*ctx.term);
         }
         (*ctx.term)++;
         for (size_t i = mid; i < batches.size(); ++i) {
-            batches[i].set_term(*ctx.term);
+            (*batch_it++).set_term(*ctx.term);
         }
         auto validator = append_offsets_validator(
           ctx.log, record_count(batches), false);

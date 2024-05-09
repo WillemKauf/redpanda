@@ -61,7 +61,7 @@ static ss::logger e2e_test_log("storage_e2e_test");
 void validate_offsets(
   model::offset base,
   const std::vector<model::record_batch_header>& write_headers,
-  const ss::circular_buffer<model::record_batch>& read_batches) {
+  const model::record_batch_reader::data_t& read_batches) {
     BOOST_REQUIRE_EQUAL(write_headers.size(), read_batches.size());
     auto it = read_batches.begin();
     model::offset next_base = base;
@@ -173,7 +173,7 @@ FIXTURE_TEST(test_single_record_per_segment, storage_test_fixture) {
       10,
       model::term_id(1),
       [](std::optional<model::timestamp> ts = std::nullopt) {
-          ss::circular_buffer<model::record_batch> batches;
+          model::record_batch_reader::data_t batches;
           batches.push_back(model::test::make_random_batch(
             model::offset(0),
             1,
@@ -209,8 +209,8 @@ FIXTURE_TEST(test_segment_rolling, storage_test_fixture) {
       10,
       model::term_id(1),
       [](std::optional<model::timestamp> ts = std::nullopt)
-        -> ss::circular_buffer<model::record_batch> {
-          ss::circular_buffer<model::record_batch> batches;
+        -> model::record_batch_reader::data_t {
+          model::record_batch_reader::data_t batches;
           batches.push_back(model::test::make_random_batch(
             model::offset(0),
             1,
@@ -238,7 +238,7 @@ FIXTURE_TEST(test_segment_rolling, storage_test_fixture) {
       10,
       model::term_id(1),
       [](std::optional<model::timestamp> ts = std::nullopt) {
-          ss::circular_buffer<model::record_batch> batches;
+          model::record_batch_reader::data_t batches;
           batches.push_back(model::test::make_random_batch(
             model::offset(0),
             1,
@@ -272,41 +272,60 @@ FIXTURE_TEST(test_reading_range_from_a_log, storage_test_fixture) {
 
     // range from base of beging to last of end
     auto range = read_range_to_vector(
-      log, batches[3].base_offset(), batches[7].last_offset());
+      log,
+      std::next(batches.begin(), 3)->base_offset(),
+      std::next(batches.begin(), 7)->last_offset());
     BOOST_REQUIRE_EQUAL(range.size(), 5);
-    BOOST_REQUIRE_EQUAL(range.front().header().crc, batches[3].header().crc);
-    BOOST_REQUIRE_EQUAL(range.back().header().crc, batches[7].header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.front().header().crc, std::next(batches.begin(), 3)->header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.back().header().crc, std::next(batches.begin(), 7)->header().crc);
     // Range is inclusive base offset points to batch[7] so it have to be
     // included
     range = read_range_to_vector(
-      log, batches[3].base_offset(), batches[7].base_offset());
+      log,
+      std::next(batches.begin(), 3)->base_offset(),
+      std::next(batches.begin(), 7)->base_offset());
     BOOST_REQUIRE_EQUAL(range.size(), 5);
-    BOOST_REQUIRE_EQUAL(range.front().header().crc, batches[3].header().crc);
-    BOOST_REQUIRE_EQUAL(range.back().header().crc, batches[7].header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.front().header().crc, std::next(batches.begin(), 3)->header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.back().header().crc, std::next(batches.begin(), 7)->header().crc);
 
     range = read_range_to_vector(
-      log, batches[3].last_offset(), batches[7].base_offset());
+      log,
+      std::next(batches.begin(), 3)->last_offset(),
+      std::next(batches.begin(), 7)->base_offset());
     BOOST_REQUIRE_EQUAL(range.size(), 5);
-    BOOST_REQUIRE_EQUAL(range.front().header().crc, batches[3].header().crc);
-    BOOST_REQUIRE_EQUAL(range.back().header().crc, batches[7].header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.front().header().crc, std::next(batches.begin(), 3)->header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.back().header().crc, std::next(batches.begin(), 7)->header().crc);
 
     // Range that starts and ends in the middle of the same batch.
     range = read_range_to_vector(
       log,
-      batches[3].base_offset() + model::offset(batches[3].record_count() / 3),
-      batches[3].base_offset()
-        + model::offset(batches[3].record_count() / 3 * 2LL));
+      std::next(batches.begin(), 3)->base_offset()
+        + model::offset(std::next(batches.begin(), 3)->record_count() / 3),
+      std::next(batches.begin(), 3)->base_offset()
+        + model::offset(
+          std::next(batches.begin(), 3)->record_count() / 3 * 2LL));
     BOOST_REQUIRE_EQUAL(range.size(), 1);
-    BOOST_REQUIRE_EQUAL(range.front().header().crc, batches[3].header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.front().header().crc, std::next(batches.begin(), 3)->header().crc);
 
     // Range that starts and ends in the middle of batches.
     range = read_range_to_vector(
       log,
-      batches[3].base_offset() + model::offset(batches[3].record_count() / 2),
-      batches[7].base_offset() + model::offset(batches[7].record_count() / 2));
+      std::next(batches.begin(), 3)->base_offset()
+        + model::offset(std::next(batches.begin(), 3)->record_count() / 2),
+      std::next(batches.begin(), 7)->base_offset()
+        + model::offset(std::next(batches.begin(), 7)->record_count() / 2));
     BOOST_REQUIRE_EQUAL(range.size(), 5);
-    BOOST_REQUIRE_EQUAL(range.front().header().crc, batches[3].header().crc);
-    BOOST_REQUIRE_EQUAL(range.back().header().crc, batches[7].header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.front().header().crc, std::next(batches.begin(), 3)->header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.back().header().crc, std::next(batches.begin(), 7)->header().crc);
 };
 
 FIXTURE_TEST(
@@ -333,31 +352,46 @@ FIXTURE_TEST(
 
     // range from base of beging to last of end
     auto range = read_range_to_vector(
-      log, batches[3].base_offset(), batches[7].last_offset());
+      log,
+      std::next(batches.begin(), 3)->base_offset(),
+      std::next(batches.begin(), 7)->last_offset());
     BOOST_REQUIRE_EQUAL(range.size(), 5);
-    BOOST_REQUIRE_EQUAL(range.front().header().crc, batches[3].header().crc);
-    BOOST_REQUIRE_EQUAL(range.back().header().crc, batches[7].header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.front().header().crc, std::next(batches.begin(), 3)->header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.back().header().crc, std::next(batches.begin(), 7)->header().crc);
     // Range is inclusive base offset points to batch[7] so it have to be
     // included
     range = read_range_to_vector(
-      log, batches[3].base_offset(), batches[7].base_offset());
+      log,
+      std::next(batches.begin(), 3)->base_offset(),
+      std::next(batches.begin(), 7)->base_offset());
     BOOST_REQUIRE_EQUAL(range.size(), 5);
-    BOOST_REQUIRE_EQUAL(range.front().header().crc, batches[3].header().crc);
-    BOOST_REQUIRE_EQUAL(range.back().header().crc, batches[7].header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.front().header().crc, std::next(batches.begin(), 3)->header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.back().header().crc, std::next(batches.begin(), 7)->header().crc);
 
     range = read_range_to_vector(
-      log, batches[3].last_offset(), batches[7].base_offset());
+      log,
+      std::next(batches.begin(), 3)->last_offset(),
+      std::next(batches.begin(), 7)->base_offset());
     BOOST_REQUIRE_EQUAL(range.size(), 5);
-    BOOST_REQUIRE_EQUAL(range.front().header().crc, batches[3].header().crc);
-    BOOST_REQUIRE_EQUAL(range.back().header().crc, batches[7].header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.front().header().crc, std::next(batches.begin(), 3)->header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.back().header().crc, std::next(batches.begin(), 7)->header().crc);
     // range from base of beging to the middle of end
     range = read_range_to_vector(
       log,
-      batches[3].base_offset(),
-      batches[7].base_offset() + model::offset(batches[7].record_count() / 2));
+      std::next(batches.begin(), 3)->base_offset(),
+      std::next(batches.begin(), 7)->base_offset()
+        + model::offset(std::next(batches.begin(), 7)->record_count() / 2));
     BOOST_REQUIRE_EQUAL(range.size(), 5);
-    BOOST_REQUIRE_EQUAL(range.front().header().crc, batches[3].header().crc);
-    BOOST_REQUIRE_EQUAL(range.back().header().crc, batches[7].header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.front().header().crc, std::next(batches.begin(), 3)->header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.back().header().crc, std::next(batches.begin(), 7)->header().crc);
 };
 
 FIXTURE_TEST(test_truncation_with_write_caching, storage_test_fixture) {
@@ -397,31 +431,46 @@ FIXTURE_TEST(test_truncation_with_write_caching, storage_test_fixture) {
 
     // range from base of beging to last of end
     auto range = read_range_to_vector(
-      log, batches[3].base_offset(), batches[7].last_offset());
+      log,
+      std::next(batches.begin(), 3)->base_offset(),
+      std::next(batches.begin(), 7)->last_offset());
     BOOST_REQUIRE_EQUAL(range.size(), 5);
-    BOOST_REQUIRE_EQUAL(range.front().header().crc, batches[3].header().crc);
-    BOOST_REQUIRE_EQUAL(range.back().header().crc, batches[7].header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.front().header().crc, std::next(batches.begin(), 3)->header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.back().header().crc, std::next(batches.begin(), 7)->header().crc);
     // Range is inclusive base offset points to batch[7] so it have to be
     // included
     range = read_range_to_vector(
-      log, batches[3].base_offset(), batches[7].base_offset());
+      log,
+      std::next(batches.begin(), 3)->base_offset(),
+      std::next(batches.begin(), 7)->base_offset());
     BOOST_REQUIRE_EQUAL(range.size(), 5);
-    BOOST_REQUIRE_EQUAL(range.front().header().crc, batches[3].header().crc);
-    BOOST_REQUIRE_EQUAL(range.back().header().crc, batches[7].header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.front().header().crc, std::next(batches.begin(), 3)->header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.back().header().crc, std::next(batches.begin(), 7)->header().crc);
 
     range = read_range_to_vector(
-      log, batches[3].last_offset(), batches[7].base_offset());
+      log,
+      std::next(batches.begin(), 3)->last_offset(),
+      std::next(batches.begin(), 7)->base_offset());
     BOOST_REQUIRE_EQUAL(range.size(), 5);
-    BOOST_REQUIRE_EQUAL(range.front().header().crc, batches[3].header().crc);
-    BOOST_REQUIRE_EQUAL(range.back().header().crc, batches[7].header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.front().header().crc, std::next(batches.begin(), 3)->header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.back().header().crc, std::next(batches.begin(), 7)->header().crc);
     // range from base of beging to the middle of end
     range = read_range_to_vector(
       log,
-      batches[3].base_offset(),
-      batches[7].base_offset() + model::offset(batches[7].record_count() / 2));
+      std::next(batches.begin(), 3)->base_offset(),
+      std::next(batches.begin(), 7)->base_offset()
+        + model::offset(std::next(batches.begin(), 7)->record_count() / 2));
     BOOST_REQUIRE_EQUAL(range.size(), 5);
-    BOOST_REQUIRE_EQUAL(range.front().header().crc, batches[3].header().crc);
-    BOOST_REQUIRE_EQUAL(range.back().header().crc, batches[7].header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.front().header().crc, std::next(batches.begin(), 3)->header().crc);
+    BOOST_REQUIRE_EQUAL(
+      range.back().header().crc, std::next(batches.begin(), 7)->header().crc);
 };
 
 FIXTURE_TEST(test_rolling_term, storage_test_fixture) {
@@ -463,7 +512,7 @@ FIXTURE_TEST(test_append_batches_from_multiple_terms, storage_test_fixture) {
     auto log
       = mgr.manage(storage::ntp_config(ntp, mgr.config().base_dir)).get0();
     std::vector<model::record_batch_header> headers;
-    ss::circular_buffer<model::record_batch> batches;
+    model::record_batch_reader::data_t batches;
     std::vector<size_t> term_batches_counts;
     for (auto i = 0; i < 5; i++) {
         auto term_batches = model::test::make_random_batches(
@@ -495,9 +544,10 @@ FIXTURE_TEST(test_append_batches_from_multiple_terms, storage_test_fixture) {
     size_t next = 0;
     int expected_term = 0;
     for (auto c : term_batches_counts) {
+        auto batch_it = std::next(read_batches.begin(), next);
         for (size_t i = next; i < next + c; ++i) {
             BOOST_REQUIRE_EQUAL(
-              read_batches[i].term(), model::term_id(expected_term));
+              batch_it->term(), model::term_id(expected_term));
         }
         expected_term++;
         next = next + c;
@@ -507,7 +557,7 @@ struct custom_ts_batch_generator {
     explicit custom_ts_batch_generator(model::timestamp start_ts)
       : _start_ts(start_ts) {}
 
-    ss::circular_buffer<model::record_batch> operator()(
+    model::record_batch_reader::data_t operator()(
       [[maybe_unused]] std::optional<model::timestamp> ts = std::nullopt) {
         // The input timestamp is unused, this class does its own timestamping
         auto batches = model::test::make_random_batches(
@@ -897,7 +947,7 @@ ss::future<storage::append_result> append_exactly(
       ss::default_priority_class(),
       model::no_timeout};
 
-    ss::circular_buffer<model::record_batch> batches;
+    model::record_batch_reader::data_t batches;
     auto val_sz = batch_sz - model::packed_record_batch_header_size;
     iobuf key_buf{};
 
@@ -1089,7 +1139,7 @@ FIXTURE_TEST(empty_segment_recovery, storage_test_fixture) {
         .should_fsync = storage::log_append_config::fsync::no,
         .io_priority = ss::default_priority_class(),
         .timeout = model::no_timeout});
-    ss::circular_buffer<model::record_batch> batches;
+    model::record_batch_reader::data_t batches;
     batches.push_back(
       model::test::make_random_batch(model::offset(0), 1, false));
 
@@ -1167,7 +1217,7 @@ FIXTURE_TEST(test_compation_preserve_state, storage_test_fixture) {
         .io_priority = ss::default_priority_class(),
         .timeout = model::no_timeout});
 
-    ss::circular_buffer<model::record_batch> batches;
+    model::record_batch_reader::data_t batches;
     batches.push_back(
       model::test::make_random_batch(model::offset(0), 1, false));
 
@@ -1395,8 +1445,8 @@ FIXTURE_TEST(
     auto read = read_and_validate_all_batches(log);
     BOOST_REQUIRE_EQUAL(read.begin()->base_offset(), model::offset(6));
     BOOST_REQUIRE_EQUAL(read.begin()->last_offset(), model::offset(6));
-    BOOST_REQUIRE_EQUAL(read[read.size() - 1].base_offset(), model::offset(16));
-    BOOST_REQUIRE_EQUAL(read[read.size() - 1].last_offset(), model::offset(16));
+    BOOST_REQUIRE_EQUAL(read.back().base_offset(), model::offset(16));
+    BOOST_REQUIRE_EQUAL(read.back().last_offset(), model::offset(16));
 }
 
 FIXTURE_TEST(check_max_segment_size, storage_test_fixture) {
@@ -2208,7 +2258,7 @@ FIXTURE_TEST(committed_offset_updates, storage_test_fixture) {
             .io_priority = ss::default_priority_class(),
             .timeout = model::no_timeout});
 
-        ss::circular_buffer<model::record_batch> batches;
+        model::record_batch_reader::data_t batches;
         batches.push_back(
           model::test::make_random_batch(model::offset(0), 1, false));
 
@@ -2374,9 +2424,9 @@ FIXTURE_TEST(changing_cleanup_policy_back_and_forth, storage_test_fixture) {
     BOOST_REQUIRE_EQUAL(first_read.size(), second_read.size());
 }
 
-ss::future<ss::circular_buffer<model::record_batch>>
+ss::future<model::record_batch_reader::data_t>
 copy_to_mem(model::record_batch_reader& reader) {
-    using data_t = ss::circular_buffer<model::record_batch>;
+    using data_t = model::record_batch_reader::data_t;
     class memory_batch_consumer {
     public:
         ss::future<ss::stop_iteration> operator()(model::record_batch b) {
@@ -2628,7 +2678,7 @@ FIXTURE_TEST(read_write_truncate, storage_test_fixture) {
     auto produce = ss::do_until(
       [&] { return cnt > max; },
       [&log, &cnt, &log_mutex] {
-          ss::circular_buffer<model::record_batch> batches;
+          model::record_batch_reader::data_t batches;
           for (int i = 0; i < 20; ++i) {
               storage::record_batch_builder builder(
                 model::record_batch_type::raft_data, model::offset(0));
@@ -2680,7 +2730,7 @@ FIXTURE_TEST(read_write_truncate, storage_test_fixture) {
                 return model::consume_reader_to_memory(
                   std::move(rdr), model::no_timeout);
             })
-            .then([](ss::circular_buffer<model::record_batch> batches) {
+            .then([](model::record_batch_reader::data_t batches) {
                 if (batches.empty()) {
                     info("read empty range");
                     return;
@@ -2754,7 +2804,7 @@ FIXTURE_TEST(write_truncate_compact, storage_test_fixture) {
       = ss::do_until(
           [&] { return cnt > max || done; },
           [&log, &cnt, &log_mutex] {
-              ss::circular_buffer<model::record_batch> batches;
+              model::record_batch_reader::data_t batches;
               for (int i = 0; i < 20; ++i) {
                   storage::record_batch_builder builder(
                     model::record_batch_type::raft_data, model::offset(0));
@@ -2903,32 +2953,31 @@ FIXTURE_TEST(compaction_truncation_corner_cases, storage_test_fixture) {
         return std::move(builder).build();
     };
 
-    auto write_and_compact =
-      [&](ss::circular_buffer<model::record_batch> batches) {
-          auto reader = model::make_memory_record_batch_reader(
-            std::move(batches));
+    auto write_and_compact = [&](model::record_batch_reader::data_t batches) {
+        auto reader = model::make_memory_record_batch_reader(
+          std::move(batches));
 
-          storage::log_append_config appender_cfg{
-            .should_fsync = storage::log_append_config::fsync::no,
-            .io_priority = ss::default_priority_class(),
-            .timeout = model::no_timeout,
-          };
+        storage::log_append_config appender_cfg{
+          .should_fsync = storage::log_append_config::fsync::no,
+          .io_priority = ss::default_priority_class(),
+          .timeout = model::no_timeout,
+        };
 
-          std::move(reader)
-            .for_each_ref(log->make_appender(appender_cfg), model::no_timeout)
-            .discard_result()
-            .then([&log] { return log->flush(); })
-            .get();
+        std::move(reader)
+          .for_each_ref(log->make_appender(appender_cfg), model::no_timeout)
+          .discard_result()
+          .then([&log] { return log->flush(); })
+          .get();
 
-          log
-            ->housekeeping(storage::housekeeping_config(
-              model::timestamp::min(),
-              std::nullopt,
-              model::offset::max(),
-              ss::default_priority_class(),
-              as))
-            .get();
-      };
+        log
+          ->housekeeping(storage::housekeeping_config(
+            model::timestamp::min(),
+            std::nullopt,
+            model::offset::max(),
+            ss::default_priority_class(),
+            as))
+          .get();
+    };
     {
         /**
          * Truncate with dirty offset being preceeded by a gap
@@ -2936,7 +2985,7 @@ FIXTURE_TEST(compaction_truncation_corner_cases, storage_test_fixture) {
          * segment: [[batch (base_offset: 0)][gap][batch (base_offset: 10)]]
          *
          */
-        ss::circular_buffer<model::record_batch> batches;
+        model::record_batch_reader::data_t batches;
 
         // first batch
         batches.push_back(large_batch(1));
@@ -2967,7 +3016,7 @@ FIXTURE_TEST(compaction_truncation_corner_cases, storage_test_fixture) {
          * segment: [batch: (base_offset: 11)]
          *
          */
-        ss::circular_buffer<model::record_batch> batches;
+        model::record_batch_reader::data_t batches;
 
         // first batch
         batches.push_back(large_batch(1));
@@ -3551,7 +3600,7 @@ FIXTURE_TEST(issue_8091, storage_test_fixture) {
     auto produce = ss::do_until(
       [&] { return cnt > max; },
       [&log, &cnt, &log_mutex] {
-          ss::circular_buffer<model::record_batch> batches;
+          model::record_batch_reader::data_t batches;
           auto bt = random_generators::random_choice(
             std::vector<model::record_batch_type>{
               model::record_batch_type::raft_data,
@@ -3614,7 +3663,7 @@ FIXTURE_TEST(issue_8091, storage_test_fixture) {
                 return model::consume_reader_to_memory(
                   std::move(rdr), model::no_timeout);
             })
-            .then([](ss::circular_buffer<model::record_batch> batches) {
+            .then([](model::record_batch_reader::data_t batches) {
                 if (batches.empty()) {
                     info("read empty range");
                     return;

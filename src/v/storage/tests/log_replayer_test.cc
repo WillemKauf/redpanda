@@ -9,6 +9,7 @@
 
 #include "base/seastarx.h"
 #include "features/feature_table.h"
+#include "model/record_batch_reader.h"
 #include "model/record_utils.h"
 #include "model/tests/random_batch.h"
 #include "random/generators.h"
@@ -110,7 +111,7 @@ public:
         out.flush().get();
         out.close().get();
     }
-    void write(ss::circular_buffer<model::record_batch>& batches) {
+    void write(model::record_batch_reader::data_t& batches) {
         do_write(
           [&batches](segment_appender& appender) {
               for (auto& b : batches) {
@@ -190,9 +191,12 @@ SEASTAR_THREAD_TEST_CASE(test_unrecovered_multiple_batches) {
     {
         // bad crc test
         log_replayer_fixture ctx;
-        auto batches = model::test::make_random_batches(model::offset(1), 10);
-        batches.back().header().crc = 10;
-        auto last_offset = (batches.end() - 2)->last_offset();
+        const auto num_batches = 10;
+        auto batches = model::test::make_random_batches(
+          model::offset(1), num_batches);
+        batches.back().header().crc = num_batches;
+        auto last_offset
+          = std::next(batches.begin(), num_batches - 2)->last_offset();
         ctx.write(batches);
         auto recovered = ctx.replayer().recover_in_thread(
           ss::default_priority_class());
@@ -202,9 +206,12 @@ SEASTAR_THREAD_TEST_CASE(test_unrecovered_multiple_batches) {
     {
         // timestamp test
         log_replayer_fixture ctx;
-        auto batches = model::test::make_random_batches(model::offset(1), 10);
-        batches.back().header().first_timestamp = model::timestamp(10);
-        auto last_offset = (batches.end() - 2)->last_offset();
+        const auto num_batches = 10;
+        auto batches = model::test::make_random_batches(
+          model::offset(1), num_batches);
+        batches.back().header().first_timestamp = model::timestamp(num_batches);
+        auto last_offset
+          = std::next(batches.begin(), num_batches - 2)->last_offset();
         ctx.write(batches);
         auto recovered = ctx.replayer().recover_in_thread(
           ss::default_priority_class());

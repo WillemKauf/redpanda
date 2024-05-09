@@ -21,6 +21,7 @@
 #include "cloud_storage_clients/types.h"
 #include "model/fundamental.h"
 #include "model/record.h"
+#include "model/record_batch_reader.h"
 #include "storage/parser.h"
 #include "storage/segment_reader.h"
 #include "storage/translating_reader.h"
@@ -367,6 +368,7 @@ class remote_segment_batch_reader final {
     friend class remote_segment_batch_consumer;
 
 public:
+    using data_t = model::record_batch_reader::data_t;
     remote_segment_batch_reader(
       ss::lw_shared_ptr<remote_segment>,
       const storage::log_reader_config& config,
@@ -388,7 +390,7 @@ public:
       = delete;
     ~remote_segment_batch_reader() noexcept;
 
-    ss::future<result<ss::circular_buffer<model::record_batch>>> read_some(
+    ss::future<result<data_t>> read_some(
       model::timeout_clock::time_point, storage::offset_translator_state&);
 
     ss::future<> stop();
@@ -437,7 +439,7 @@ private:
     storage::log_reader_config _config;
     partition_probe& _probe;
     ts_read_path_probe& _ts_probe;
-    ss::circular_buffer<model::record_batch> _ringbuf;
+    data_t _buf;
     std::optional<std::reference_wrapper<storage::offset_translator_state>>
       _cur_ot_state;
     size_t _total_size{0};

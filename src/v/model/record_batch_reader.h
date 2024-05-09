@@ -46,10 +46,15 @@ concept ReferenceBatchReaderConsumer = requires(
 
 class record_batch_reader final {
 public:
-    using data_t = ss::circular_buffer<model::record_batch>;
+    using data_t = ss::chunked_fifo<model::record_batch>;
     struct foreign_data_t {
-        ss::foreign_ptr<std::unique_ptr<data_t>> buffer;
-        size_t index{0};
+        using buf_t = ss::foreign_ptr<std::unique_ptr<data_t>>;
+        foreign_data_t(buf_t buf)
+          : buffer(std::move(buf))
+          , it(buffer->begin()) {}
+
+        buf_t buffer;
+        data_t::iterator it;
     };
     using storage_t = std::variant<data_t, foreign_data_t>;
 
@@ -76,9 +81,7 @@ public:
                   // circular buffer is the default
                   return d.empty();
               },
-              [](const foreign_data_t& d) {
-                  return d.index >= d.buffer->size();
-              });
+              [](const foreign_data_t& d) { return d.it == d.buffer->end(); });
         }
 
         virtual ss::future<> finally() noexcept { return ss::now(); }
@@ -117,7 +120,7 @@ public:
               [](foreign_data_t& d) {
                   // cannot have a move-only type from a remote core
                   // we must make a copy. for iteration use for_each_ref
-                  return (*d.buffer)[d.index++].copy();
+                  return (d.it++)->copy();
               });
         }
         ss::future<> load_slice(timeout_clock::time_point timeout) {
@@ -138,7 +141,7 @@ public:
                   [&c](foreign_data_t& d) {
                       // for remote core, next simply means advancing the
                       // pointer, we need to release the batches wholesale
-                      return c((*d.buffer)[d.index++]);
+                      return c(*d.it++);
                   });
             });
         }
@@ -163,13 +166,12 @@ public:
                       });
                   },
                   [&c](foreign_data_t& d) {
-                      return c((*d.buffer)[d.index])
-                        .then([&](ss::stop_iteration stop) {
-                            if (!stop) {
-                                ++d.index;
-                            }
-                            return stop;
-                        });
+                      return c(*d.it).then([&](ss::stop_iteration stop) {
+                          if (!stop) {
+                              ++d.it;
+                          }
+                          return stop;
+                      });
                   });
             });
         }

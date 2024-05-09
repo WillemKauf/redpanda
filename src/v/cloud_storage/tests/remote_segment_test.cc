@@ -970,8 +970,7 @@ FIXTURE_TEST(test_chunk_multiple_readers, cloud_storage_fixture) {
     };
 
     while (!all_readers_done()) {
-        std::vector<
-          ss::future<result<ss::circular_buffer<model::record_batch>>>>
+        std::vector<ss::future<result<model::record_batch_reader::data_t>>>
           reads;
         reads.reserve(readers.size());
         for (auto& reader : readers) {

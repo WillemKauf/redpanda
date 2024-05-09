@@ -101,7 +101,7 @@ make_aborted_txns(const std::vector<aborted_txn_range>& aborts) {
 model::record_batch_reader
 make_reader(const std::initializer_list<
             std::reference_wrapper<const model::record_batch>>& batches) {
-    ss::circular_buffer<model::record_batch> buffer;
+    model::record_batch_reader::data_t buffer;
     for (const auto& b : batches) {
         buffer.push_back(b.get().copy());
     }
@@ -165,7 +165,7 @@ public:
             constexpr static int max_batches = 10;
             auto batch_size = random_generators::get_int<size_t>(
               1, max_batches);
-            ss::circular_buffer<model::record_batch> batches;
+            model::record_batch_reader::data_t batches;
             while (batches.size() < batch_size && !producers.empty()) {
                 auto& selected = random_generators::random_choice(producers);
                 auto batch = make_batch(selected.pid, selected.data.back());

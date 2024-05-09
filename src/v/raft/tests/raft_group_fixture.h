@@ -580,7 +580,7 @@ inline model::record_batch_reader random_batches_reader(int max_batches) {
 inline model::record_batch_reader
 random_batch_reader(model::test::record_batch_spec spec) {
     auto batch = model::test::make_random_batch(spec);
-    ss::circular_buffer<model::record_batch> batches;
+    model::record_batch_reader::data_t batches;
     batches.reserve(1);
     batch.set_term(model::term_id(0));
     batches.push_back(std::move(batch));
@@ -832,7 +832,7 @@ inline ss::future<bool> replicate_random_batches(
  */
 inline model::record_batch_reader
 make_compactible_batches(int keys, size_t batches, model::timestamp ts) {
-    ss::circular_buffer<model::record_batch> ret;
+    model::record_batch_reader::data_t ret;
     for (size_t b = 0; b < batches; b++) {
         int k = random_generators::get_int(0, keys);
         storage::record_batch_builder builder(

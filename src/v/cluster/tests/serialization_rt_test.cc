@@ -1949,7 +1949,7 @@ SEASTAR_THREAD_TEST_CASE(serde_reflection_roundtrip) {
 
         // make a copy of the source batches for later comparison because the
         // copy moved into the request will get eaten.
-        ss::circular_buffer<model::record_batch> batches_in;
+        model::record_batch_reader::data_t batches_in;
         for (const auto& batch : gold) {
             batches_in.push_back(batch.copy());
         }
@@ -2000,9 +2000,11 @@ SEASTAR_THREAD_TEST_CASE(serde_reflection_roundtrip) {
                                     .get0();
         BOOST_REQUIRE(gold.size() > 0);
         BOOST_REQUIRE(batches_from_serde.size() == gold.size());
-        for (size_t i = 0; i < gold.size(); i++) {
-            BOOST_REQUIRE(batches_from_serde[i] == gold[i]);
-        }
+        BOOST_REQUIRE_EQUAL_COLLECTIONS(
+          batches_from_serde.begin(),
+          batches_from_serde.end(),
+          gold.begin(),
+          gold.end());
     }
     {
         raft::append_entries_reply data{

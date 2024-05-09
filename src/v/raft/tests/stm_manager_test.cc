@@ -231,7 +231,7 @@ TEST_F_CORO(state_machine_fixture, test_recovery_from_snapshot) {
                 return model::consume_reader_to_memory(
                   std::move(rdr), model::no_timeout);
             })
-            .then([](ss::circular_buffer<model::record_batch> batches) {
+            .then([](model::record_batch_reader::data_t batches) {
                 return batches.back().last_offset();
             });
       });
@@ -304,7 +304,7 @@ TEST_F_CORO(
                 return model::consume_reader_to_memory(
                   std::move(rdr), model::no_timeout);
             })
-            .then([](ss::circular_buffer<model::record_batch> batches) {
+            .then([](model::record_batch_reader::data_t batches) {
                 return batches.back().last_offset();
             });
       });

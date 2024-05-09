@@ -11,7 +11,6 @@
 
 #include "model/adl_serde.h"
 #include "model/record_batch_reader.h"
-#include "reflection/seastar/circular_buffer.h"
 
 #include <seastar/coroutine/maybe_yield.hh>
 
@@ -20,16 +19,16 @@ namespace reflection {
 ss::future<> async_adl<model::record_batch_reader>::to(
   iobuf& out, model::record_batch_reader&& reader) {
     return model::consume_reader_to_memory(std::move(reader), model::no_timeout)
-      .then([&out](ss::circular_buffer<model::record_batch> data) {
-          return async_adl<ss::circular_buffer<model::record_batch>>{}.to(
+      .then([&out](model::record_batch_reader::data_t data) {
+          return async_adl<model::record_batch_reader::data_t>{}.to(
             out, std::move(data));
       });
 }
 
 ss::future<model::record_batch_reader>
 async_adl<model::record_batch_reader>::from(iobuf_parser& in) {
-    return async_adl<ss::circular_buffer<model::record_batch>>{}.from(in).then(
-      [](ss::circular_buffer<model::record_batch> batches) {
+    return async_adl<model::record_batch_reader::data_t>{}.from(in).then(
+      [](model::record_batch_reader::data_t batches) {
           return model::make_memory_record_batch_reader(std::move(batches));
       });
 }

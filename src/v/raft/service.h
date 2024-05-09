@@ -14,6 +14,7 @@
 #include "base/likely.h"
 #include "base/seastarx.h"
 #include "model/metadata.h"
+#include "model/record_batch_reader.h"
 #include "raft/consensus.h"
 #include "raft/raftgen_service.h"
 #include "raft/types.h"
@@ -367,7 +368,7 @@ private:
           hb.target_node_id,
           hb.meta,
           model::make_memory_record_batch_reader(
-            ss::circular_buffer<model::record_batch>{}),
+            model::record_batch_reader::data_t{}),
           flush_after_append::no};
     }
     static append_entries_request make_append_entries_request(
@@ -388,7 +389,7 @@ private:
             .dirty_offset = hb.data->prev_log_index,
           },
           model::make_memory_record_batch_reader(
-            ss::circular_buffer<model::record_batch>{}),
+            model::record_batch_reader::data_t{}),
           flush_after_append::no};
     }
 

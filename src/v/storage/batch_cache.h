@@ -15,10 +15,10 @@
 #include "container/intrusive_list_helpers.h"
 #include "model/fundamental.h"
 #include "model/record.h"
+#include "model/record_batch_reader.h"
 #include "resource_mgmt/available_memory.h"
 #include "ssx/semaphore.h"
 
-#include <seastar/core/circular_buffer.hh>
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/gate.hh>
 #include <seastar/core/lowres_clock.hh>
@@ -506,7 +506,7 @@ class batch_cache_index {
 
 public:
     struct read_result {
-        ss::circular_buffer<model::record_batch> batches;
+        model::record_batch_reader::data_t batches;
         size_t memory_usage{0};
         model::offset next_batch;
         std::optional<model::offset> next_cached_batch;

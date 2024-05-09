@@ -26,7 +26,7 @@ namespace tests {
 static inline ss::future<> persist_log_file(
   ss::sstring base_dir,
   model::ntp file_ntp,
-  ss::circular_buffer<model::record_batch> batches) {
+  model::record_batch_reader::data_t batches) {
     return ss::async([base_dir = std::move(base_dir),
                       file_ntp = std::move(file_ntp),
                       batches = std::move(batches)]() mutable {
@@ -96,15 +96,15 @@ struct to_vector_consumer {
           ss::stop_iteration::no);
     }
 
-    ss::circular_buffer<model::record_batch> end_of_stream() {
+    model::record_batch_reader::data_t end_of_stream() {
         return std::move(_batches);
     }
 
 private:
-    ss::circular_buffer<model::record_batch> _batches;
+    model::record_batch_reader::data_t _batches;
 };
 
-static inline ss::future<ss::circular_buffer<model::record_batch>>
+static inline ss::future<model::record_batch_reader::data_t>
 read_log_file(ss::sstring base_dir, model::ntp file_ntp) {
     return ss::async([base_dir = std::move(base_dir),
                       file_ntp = std::move(file_ntp)]() mutable {

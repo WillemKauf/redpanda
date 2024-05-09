@@ -78,13 +78,13 @@ SEASTAR_THREAD_TEST_CASE(round_trip_test) {
                            + random_generators::gen_alphanum_string(4);
     model::ntp test_ntp(
       model::ns("test_ns"), model::topic("test_topic"), model::partition_id(0));
-    ss::circular_buffer<model::record_batch> batches;
+    model::record_batch_reader::data_t batches;
     batches.push_back(std::move(batch));
 
     tests::persist_log_file(base_dir, test_ntp, std::move(batches)).get0();
     auto read = tests::read_log_file(base_dir, test_ntp).get0();
 
     BOOST_REQUIRE_EQUAL(read.size(), 1);
-    BOOST_REQUIRE_EQUAL(read[0].header().last_offset_delta, 3);
-    BOOST_REQUIRE_EQUAL(read[0].header().crc, current_crc);
+    BOOST_REQUIRE_EQUAL(read.front().header().last_offset_delta, 3);
+    BOOST_REQUIRE_EQUAL(read.front().header().crc, current_crc);
 }

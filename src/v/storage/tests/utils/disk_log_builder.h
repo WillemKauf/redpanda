@@ -406,7 +406,7 @@ private:
     }
 
     ss::future<> write(
-      ss::circular_buffer<model::record_batch> buff,
+      model::record_batch_reader::data_t buff,
       const log_append_config& config,
       should_flush_after flush);
 
