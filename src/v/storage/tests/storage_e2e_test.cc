@@ -4557,22 +4557,29 @@ FIXTURE_TEST(test_offset_range_size2_compacted, storage_test_fixture) {
 };
 
 namespace storage {
-class segment_index_observer {
+class segment_observer {
 public:
-    explicit segment_index_observer(segment_index& index)
-      : _index{index} {}
+    explicit segment_observer(segment* const s)
+      : _segment{s} {}
 
     size_t max_step_size() const {
         fragmented_vector<size_t> diffs;
-        auto& pos = _index._state.position_index;
+        auto& pos = _segment->index()._state.position_index;
+        if (pos.empty()) {
+            return 1;
+        }
         diffs.reserve(pos.size());
         std::adjacent_difference(
           pos.begin(), pos.end(), std::back_inserter(diffs));
+        auto last_diff = _segment->file_size() - pos.back();
+        pos.push_back(last_diff);
+        std::cout << "LAST DIFF IS " << last_diff << ", max is "
+                  << std::ranges::max(diffs) << '\n';
         return std::ranges::max(diffs);
     }
 
 private:
-    segment_index& _index;
+    segment* const _segment;
 };
 } // namespace storage
 
@@ -4640,8 +4647,7 @@ FIXTURE_TEST(test_offset_range_size_incremental, storage_test_fixture) {
           s->index().size());
         BOOST_REQUIRE(s->index().size() > 0);
         max_step_size = std::max(
-          max_step_size,
-          storage::segment_index_observer{s->index()}.max_step_size());
+          max_step_size, storage::segment_observer{s.get()}.max_step_size());
     }
 
     BOOST_REQUIRE(max_step_size > 0);
