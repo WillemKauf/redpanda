@@ -4,6 +4,7 @@ import os
 import re
 from os.path import join
 
+import json
 import struct
 import crc32c
 import glob
@@ -62,7 +63,27 @@ class Record:
     def kv_dict(self):
         key = None if self.key == None else self.key.hex()
         val = None if self.value == None else self.value.hex()
-        return {"k": key, "v": val}
+        if key:
+            try:
+                key_str = bytes.fromhex(key)
+                json_str = key_str.decode('utf-8')
+                #json_dict = json.loads(json_str)
+                #key = str(json_dict)
+                #key = key_str
+                key = json_str
+            except:
+                pass
+        if val:
+            try:
+                val_str = bytes.fromhex(val)
+                json_str = val_str.decode('utf-8')
+                #json_dict = json.loads(json_str)
+                #val = str(json_dict)
+                #val = val_str
+                val = json_str
+            except:
+                pass
+        return {"key": key, "value": val}
 
 
 class RecordHeader:
@@ -105,8 +126,8 @@ class RecordIter:
             value = None
         hdr_size = self.rdr.read_varint()
         headers = []
-        for i in range(0, hdr_size):
-            headers.append(self._parse_header())
+        #for i in range(0, hdr_size):
+        #    headers.append(self._parse_header())
 
         return Record(len, attrs, timestamp_delta, offset_delta, key, value,
                       headers)

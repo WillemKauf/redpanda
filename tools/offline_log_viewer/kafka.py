@@ -3,6 +3,7 @@ from enum import Enum, IntEnum
 from io import BytesIO
 from reader import Reader
 import struct
+import json
 
 
 class KafkaControlRecordType(Enum):
@@ -83,14 +84,14 @@ def decode_archival_metadata_command(kr, vr):
 
 
 def decode_record(batch, header, record):
-    attrs = header["expanded_attrs"]
+    #attrs = header["expanded_attrs"]
     record_dict = record.kv_dict()
 
-    is_txn = attrs["transactional"]
-    is_ctrl = attrs["control_batch"]
-    is_tx_ctrl = is_txn and is_ctrl
-    if is_tx_ctrl:
-        record_dict["type"] = get_control_record_type(record.key)
+    #is_txn = attrs["transactional"]
+    #is_ctrl = attrs["control_batch"]
+    #is_tx_ctrl = is_txn and is_ctrl
+    #if is_tx_ctrl:
+    #    record_dict["type"] = get_control_record_type(record.key)
 
     kr = Reader(BytesIO(record.key))
     vr = Reader(BytesIO(record.value))
@@ -98,6 +99,9 @@ def decode_record(batch, header, record):
     decoded = None
     if batch.type == BatchType.archival_metadata:
         decoded = decode_archival_metadata_command(kr, vr)
+
+    if batch.type != BatchType.raft_data:
+        return None
 
     if decoded is not None:
         return decoded
@@ -112,12 +116,29 @@ class KafkaLog:
 
     def __iter__(self):
         self.results = []
+        self.counter = 0
+        self.seen_seqs = set()
         for batch in self.batches():
             header = batch.header_dict()
-            yield header
+            wanted = ('key', 'value')
+            wanted_offsets = ('base_offset', 'delta_offset_end')
+            header = {k: v for k, v in header.items() if k in wanted_offsets}
             if not self.headers_only:
                 for record in batch:
-                    yield decode_record(batch, header, record)
+                    decode = decode_record(batch, header, record)
+                    if decode is not None:
+                        new_decode = {
+                            k: v
+                            for k, v in decode.items() if k in wanted
+                        }
+                        json_dict = json.loads(decode['key'])
+                        seq = json_dict['seq']
+                        if seq in self.seen_seqs:
+                            raise Exception("Duplicate sequence")
+                        self.seen_seqs.add(seq)
+                        new_decode['offset'] = seq
+                        yield new_decode
+                    self.counter += 1
 
     def batches(self):
         for path in self.ntp.segments:

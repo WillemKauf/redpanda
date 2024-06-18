@@ -83,6 +83,7 @@ def print_kafka(store, topic, headers_only):
             json_iter = json.JSONEncoder(indent=2).iterencode(
                 SerializableGenerator(log))
             for record in json_iter:
+                #            for record in log:
                 print(record, end='')
 
 
