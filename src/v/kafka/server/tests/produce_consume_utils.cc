@@ -76,11 +76,15 @@ kafka_produce_transport::produce_partition_requests(
         storage::record_batch_builder builder(
           model::record_batch_type::raft_data, model::offset(0));
         kafka::produce_request::partition partition;
-        for (auto& [k, v] : records) {
+        for (auto& kv : records) {
+            const auto& k = kv.key;
+            const auto& v = kv.val;
             iobuf key_buf;
             key_buf.append(k.data(), k.size());
-            iobuf val_buf;
-            val_buf.append(v.data(), v.size());
+            std::optional<iobuf> val_buf;
+            if (!kv.is_tombstone) {
+                val_buf = iobuf::from({v.data(), v.size()});
+            }
             builder.add_raw_kv(std::move(key_buf), std::move(val_buf));
         }
         if (ts.has_value()) {
