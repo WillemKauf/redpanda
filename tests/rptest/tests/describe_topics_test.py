@@ -292,10 +292,9 @@ class DescribeTopicsTest(RedpandaTest):
             ConfigProperty(
                 config_type="LONG",
                 value="-1",
-                #TODO(willem): doc_string="The retention time for tombstone records in a compacted topic"
-                doc_string="",
-                #TODO(willem): remove DYNAMIC_TOPIC_CONFIG once cluster default is added
-                source_type="DYNAMIC_TOPIC_CONFIG")
+                doc_string=
+                "The retention time for tombstone records in a compacted topic."
+            )
         }
 
         tp_spec = TopicSpec()
