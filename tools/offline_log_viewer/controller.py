@@ -4,7 +4,7 @@ from pathlib import Path
 from model import *
 from reader import Reader
 from storage import Segment
-from storage import BatchType
+from record import RecordBatchType
 import datetime
 import json
 
@@ -906,30 +906,30 @@ def decode_record(batch, record, bin_dump: bool):
     rdr = Reader(BytesIO(record.value))
     k_rdr = Reader(BytesIO(record.key))
 
-    if batch.type == BatchType.raft_configuration:
+    if batch.type == RecordBatchType.raft_configuration:
         ret['data'] = decode_config(k_rdr, rdr)
-    if batch.type == BatchType.topic_management_cmd:
+    if batch.type == RecordBatchType.topic_management_cmd:
         ret['data'] = decode_adl_or_serde(k_rdr, rdr, decode_topic_command_adl,
                                           decode_topic_command_serde)
-    if batch.type == BatchType.user_management_cmd:
+    if batch.type == RecordBatchType.user_management_cmd:
         ret['data'] = decode_adl_or_serde(k_rdr, rdr, decode_user_command_adl,
                                           decode_user_command_serde)
-    if batch.type == BatchType.acl_management_cmd:
+    if batch.type == RecordBatchType.acl_management_cmd:
         ret['data'] = decode_adl_or_serde(k_rdr, rdr, decode_acl_command_adl,
                                           decode_acl_command_serde)
-    if batch.type == BatchType.cluster_config_cmd:
+    if batch.type == RecordBatchType.cluster_config_cmd:
         ret['data'] = decode_adl_or_serde(k_rdr, rdr,
                                           decode_config_command_adl,
                                           decode_config_command_serde)
-    if batch.type == BatchType.feature_update:
+    if batch.type == RecordBatchType.feature_update:
         ret['data'] = decode_adl_or_serde(k_rdr, rdr,
                                           decode_feature_command_adl,
                                           decode_feature_command_serde)
-    if batch.type == BatchType.node_management_cmd:
+    if batch.type == RecordBatchType.node_management_cmd:
         ret['data'] = decode_adl_or_serde(k_rdr, rdr,
                                           decode_node_management_command,
                                           decode_node_management_command)
-    if batch.type == BatchType.cluster_bootstrap_cmd:
+    if batch.type == RecordBatchType.cluster_bootstrap_cmd:
         ret['data'] = decode_cluster_bootstrap_command(k_rdr, rdr)
 
     k_unread = k_rdr.remaining()

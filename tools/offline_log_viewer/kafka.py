@@ -1,4 +1,5 @@
-from storage import Segment, BatchType
+from record import RecordBatchType
+from storage import Segment
 from enum import Enum, IntEnum
 from io import BytesIO
 from reader import Reader
@@ -96,7 +97,7 @@ def decode_record(batch, header, record):
     vr = Reader(BytesIO(record.value))
 
     decoded = None
-    if batch.type == BatchType.archival_metadata:
+    if batch.type == RecordBatchType.archival_metadata:
         decoded = decode_archival_metadata_command(kr, vr)
 
     if decoded is not None:

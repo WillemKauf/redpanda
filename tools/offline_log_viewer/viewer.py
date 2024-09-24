@@ -106,7 +106,7 @@ def print_groups(store):
     logger.info("")
 
 
-def print_consumer_offsets(store):
+def print_consumer_offsets(store, replay_state=False):
     logs = dict()
     for ntp in store.ntps:
         if ntp.nspace == "kafka" and ntp.topic == "__consumer_offsets":

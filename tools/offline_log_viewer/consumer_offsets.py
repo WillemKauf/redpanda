@@ -2,6 +2,7 @@ import base64
 from io import BytesIO
 from model import *
 from reader import Endianness, Reader
+from record import RecordBatchAttrs
 from storage import Segment
 import datetime
 
@@ -159,17 +160,13 @@ class NonTxRecordParser:
         return ret
 
 
-def is_transactional_type(hdr):
-    return hdr.type != 1
-
-
 def decode_record(hdr, r):
     v = {}
     v['epoch'] = hdr.first_ts
     v['offset'] = hdr.base_offset + r.offset_delta
     v['ts'] = datetime.datetime.utcfromtimestamp(
         hdr.first_ts / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
-    if is_transactional_type(hdr):
+    if RecordBatchAttrs.is_transactional(hdr):
         v['key'], v['val'] = TxRecordParser(hdr, r).parse()
     else:
         v['key'], v['val'] = NonTxRecordParser(r).parse()
@@ -193,7 +190,20 @@ class OffsetsLog:
         for path in paths:
             s = Segment(path)
             for b in s:
-                if b.header.type not in accepted_batch_types:
+                if b.header.batch_type not in accepted_batch_types:
                     continue
                 for r in b:
                     yield decode_record(b.header, r)
+
+
+class OffsetTranslatorState:
+    def __init__(self):
+        pass
+
+
+class OffsetTranslator:
+    def __init__(self):
+        self.state = OffsetTranslatorState()
+
+    def parse_record(self, record):
+        pass

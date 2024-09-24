@@ -113,7 +113,7 @@ class GroupsLog:
         for path in paths:
             s = Segment(path)
             for b in s:
-                if b.header.type != 1:
+                if b.header.batch_type != 1:
                     continue
                 for r in b:
                     self.records.append(decode_record(b.header, r))

@@ -8,7 +8,8 @@ from io import BytesIO
 
 from model import *
 from reader import Reader
-from storage import BatchType, Header, Record, Segment
+from record import RecordBatchType, RecordBatchHeader, Record
+from storage import Segment
 
 logger = logging.getLogger('kvstore')
 
@@ -20,7 +21,7 @@ class SnapshotBatch:
     def __init__(self, header, records):
         self.header = header
         self.records = records
-        self.type = BatchType(header[3])
+        self.type = RecordBatchType(header[3])
 
     def __iter__(self):
         for r in self.records:
@@ -97,7 +98,7 @@ class KvStoreRecordDecoder:
 
     def decode(self):
 
-        assert self.batch_type == BatchType.kvstore
+        assert self.batch_type == RecordBatchType.kvstore
         ret = {}
         ret['epoch'] = self.header.first_ts
         ret['offset'] = self.header.base_offset + self.offset_delta

@@ -3,6 +3,7 @@ from enum import Enum
 import struct
 import collections
 from io import BufferedReader, BytesIO
+from record import RecordBatchType
 
 SERDE_ENVELOPE_FORMAT = "<BBI"
 SERDE_CHECKSUM_ENVELOPE_FORMAT = "<BBIi"
