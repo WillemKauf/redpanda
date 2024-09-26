@@ -164,6 +164,7 @@ topic_properties::get_ntp_cfg_overrides() const {
     ret.flush_bytes = flush_bytes;
     ret.iceberg_enabled = iceberg_enabled;
     ret.cloud_topic_enabled = cloud_topic_enabled;
+    ret.tombstone_retention_ms = delete_retention_ms;
     return ret;
 }
 
