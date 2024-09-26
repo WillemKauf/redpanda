@@ -39,8 +39,8 @@ std::ostream& operator<<(std::ostream& o, const topic_properties& properties) {
       "write_caching: {}, "
       "flush_ms: {}, "
       "flush_bytes: {}, "
-      "remote_label: {}, iceberg_enabled: {}, "
-      "leaders_preference: {}",
+      "remote_label: {}, iceberg_enabled: {}, leaders_preference: {}, "
+      "delete_retention_ms: {}",
       properties.compression,
       properties.cleanup_policy_bitflags,
       properties.compaction_strategy,
@@ -75,7 +75,8 @@ std::ostream& operator<<(std::ostream& o, const topic_properties& properties) {
       properties.flush_bytes,
       properties.remote_label,
       properties.iceberg_enabled,
-      properties.leaders_preference);
+      properties.leaders_preference,
+      properties.delete_retention_ms);
 
     if (config::shard_local_cfg().development_enable_cloud_topics()) {
         fmt::print(
@@ -121,7 +122,7 @@ bool topic_properties::has_overrides() const {
         || write_caching.has_value() || flush_ms.has_value()
         || flush_bytes.has_value() || remote_label.has_value()
         || (iceberg_enabled != storage::ntp_config::default_iceberg_enabled)
-        || leaders_preference.has_value();
+        || leaders_preference.has_value() || delete_retention_ms.is_engaged();
 
     if (config::shard_local_cfg().development_enable_cloud_topics()) {
         return overrides
@@ -253,7 +254,9 @@ adl<cluster::topic_properties>::from(iobuf_parser& parser) {
       std::nullopt,
       false,
       std::nullopt,
-      false};
+      false,
+      tristate<std::chrono::milliseconds>{disable_tristate},
+    };
 }
 
 } // namespace reflection
