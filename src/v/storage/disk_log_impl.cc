@@ -25,6 +25,7 @@
 #include "storage/compacted_offset_list.h"
 #include "storage/compaction_reducers.h"
 #include "storage/disk_log_appender.h"
+#include "storage/exceptions.h"
 #include "storage/fwd.h"
 #include "storage/key_offset_map.h"
 #include "storage/kvstore.h"
@@ -650,6 +651,9 @@ ss::future<bool> disk_log_impl::sliding_window_compact(
     try {
         idx_start_offset = co_await build_offset_map(
           cfg, segs, _stm_manager, _manager.resources(), *_probe, map);
+    } catch (const zero_segments_indexed_exception&) {
+        // Swap over to partially indexed compaction.
+        // Use the current map as far as it will take us.
     } catch (...) {
         auto eptr = std::current_exception();
         if (ssx::is_shutdown_exception(eptr)) {
