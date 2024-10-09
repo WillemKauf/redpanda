@@ -14,6 +14,7 @@
 #include "model/record_batch_types.h"
 #include "random/generators.h"
 #include "redpanda/tests/fixture.h"
+#include "storage/key_offset_map.h"
 #include "storage/tests/manual_mixin.h"
 #include "storage/types.h"
 #include "test_utils/async.h"
@@ -228,6 +229,7 @@ public:
       std::optional<size_t> max_keys = std::nullopt) {
         // Compact, allowing the map to grow as large as we need.
         ss::abort_source never_abort;
+        storage::simple_key_offset_map map;
         storage::compaction_config cfg(
           max_collect_offset,
           tombstone_ret_ms,
@@ -235,8 +237,7 @@ public:
           never_abort,
           std::nullopt,
           max_keys,
-          nullptr,
-          nullptr);
+          &map);
         auto& disk_log = dynamic_cast<storage::disk_log_impl&>(*log);
         // sliding_window_compact takes cfg by const&, so return will be a
         // use-after-free
@@ -273,13 +274,15 @@ TEST_P(CompactionFixtureParamTest, TestDedupeOnePass) {
     // Compact, allowing the map to grow as large as we need.
     ss::abort_source never_abort;
     auto& disk_log = dynamic_cast<storage::disk_log_impl&>(*log);
+    storage::simple_key_offset_map map;
     storage::compaction_config cfg(
       disk_log.segments().back()->offsets().get_base_offset(),
       std::nullopt,
       ss::default_priority_class(),
       never_abort,
       std::nullopt,
-      cardinality);
+      cardinality,
+      &map);
     disk_log.sliding_window_compact(cfg).get();
 
     // Another sanity check after compaction.
@@ -339,13 +342,15 @@ TEST_F(CompactionFixtureTest, TestDedupeMultiPass) {
     // to compact everything.
     ss::abort_source never_abort;
     auto& disk_log = dynamic_cast<storage::disk_log_impl&>(*log);
+    storage::simple_key_offset_map map;
     storage::compaction_config cfg(
       disk_log.segments().back()->offsets().get_base_offset(),
       std::nullopt,
       ss::default_priority_class(),
       never_abort,
       std::nullopt,
-      cardinality - 1);
+      cardinality - 1,
+      &map);
     disk_log.sliding_window_compact(cfg).get();
     auto segments_compacted = disk_log.get_probe().get_segments_compacted();
 
@@ -375,13 +380,15 @@ TEST_F(CompactionFixtureTest, TestDedupeMultiPassAddedSegment) {
     // to compact everything.
     ss::abort_source never_abort;
     auto& disk_log = dynamic_cast<storage::disk_log_impl&>(*log);
+    storage::simple_key_offset_map map;
     storage::compaction_config cfg(
       disk_log.segments().back()->offsets().get_base_offset(),
       std::nullopt,
       ss::default_priority_class(),
       never_abort,
       std::nullopt,
-      cardinality - 1);
+      cardinality - 1,
+      &map);
     disk_log.sliding_window_compact(cfg).get();
     const auto& segs = disk_log.segments();
 
@@ -468,13 +475,15 @@ TEST_P(CompactionFixtureBatchSizeParamTest, TestRecompactWithNewData) {
     // Compact everything in one go.
     ss::abort_source never_abort;
     auto& disk_log = dynamic_cast<storage::disk_log_impl&>(*log);
+    storage::simple_key_offset_map map;
     storage::compaction_config cfg(
       disk_log.segments().back()->offsets().get_base_offset(),
       std::nullopt,
       ss::default_priority_class(),
       never_abort,
       std::nullopt,
-      cardinality);
+      cardinality,
+      &map);
     disk_log.sliding_window_compact(cfg).get();
     auto segments_compacted = disk_log.get_probe().get_segments_compacted();
     auto compaction_ratio = disk_log.compaction_ratio().get();
@@ -537,12 +546,15 @@ TEST_F(CompactionFixtureTest, TestCompactWithNonDataBatches) {
 
     auto before_compaction_count
       = disk_log.get_probe().get_segments_compacted();
+    storage::simple_key_offset_map map;
     storage::compaction_config new_cfg(
       disk_log.segments().back()->offsets().get_base_offset(),
       std::nullopt,
       ss::default_priority_class(),
       never_abort,
-      std::nullopt);
+      std::nullopt,
+      std::nullopt,
+      &map);
     disk_log.sliding_window_compact(new_cfg).get();
 
     // The first time around, we should actually compact.
@@ -625,13 +637,15 @@ TEST_P(CompactionFilledReaderTest, ReadFilledGaps) {
 
     // Compaction should leave behind gaps, but those gaps should be filled
     // when reading.
+    storage::simple_key_offset_map map;
     storage::compaction_config cfg(
       disk_log.segments().back()->offsets().get_base_offset(),
       std::nullopt,
       ss::default_priority_class(),
       never_abort,
       std::nullopt,
-      10);
+      10,
+      &map);
     disk_log.sliding_window_compact(cfg).get();
     for (auto i :
          random_generators::randomized_range(long(0), log_end_offset())) {
@@ -684,13 +698,15 @@ TEST_F(CompactionFixtureTest, TestReadFilledGapsWithTerms) {
         }
     }
 
+    storage::simple_key_offset_map map;
     storage::compaction_config cfg(
       disk_log.segments().back()->offsets().get_base_offset(),
       std::nullopt,
       ss::default_priority_class(),
       never_abort,
       std::nullopt,
-      10);
+      10,
+      &map);
     disk_log.sliding_window_compact(cfg).get();
 
     // After compaction, the terms should not have changed, even for gaps that

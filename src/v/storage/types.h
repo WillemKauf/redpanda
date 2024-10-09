@@ -505,8 +505,8 @@ struct compaction_config {
     // Limit the number of keys stored by a compaction's key-offset map.
     std::optional<size_t> key_offset_map_max_keys;
 
-    // Hash key-offset map to reuse across compactions.
-    hash_key_offset_map* hash_key_map;
+    // Generic key-offset map to reuse across compactions.
+    key_offset_map* key_offset_map;
 
     // Set of intermediary files added by compactions that need to be removed,
     // e.g. because they were leftover from an aborted compaction.

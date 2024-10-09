@@ -635,17 +635,13 @@ ss::future<bool> disk_log_impl::sliding_window_compact(
       segs.front()->filename(),
       segs.back()->filename());
 
-    // TODO: add configuration to use simple_key_offset_map.
-    std::unique_ptr<simple_key_offset_map> simple_map;
-    if (cfg.hash_key_map) {
-        co_await cfg.hash_key_map->reset();
-    } else {
-        simple_map = std::make_unique<simple_key_offset_map>(
-          cfg.key_offset_map_max_keys);
+    if (!map) {
+        throw std::runtime_error(
+          "Must provide a map for use with sliding window compaction");
     }
-    key_offset_map& map = cfg.hash_key_map
-                            ? dynamic_cast<key_offset_map&>(*cfg.hash_key_map)
-                            : dynamic_cast<key_offset_map&>(*simple_map);
+
+    key_offset_map& map = *cfg.key_offset_map;
+    map.reset();
     model::offset idx_start_offset;
     try {
         idx_start_offset = co_await build_offset_map(
