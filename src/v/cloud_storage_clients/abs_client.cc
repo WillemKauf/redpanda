@@ -210,7 +210,10 @@ result<http::client::request_header> abs_request_creator::make_get_blob_request(
 }
 
 result<http::client::request_header> abs_request_creator::make_put_blob_request(
-  const bucket_name& name, const object_key& key, size_t payload_size_bytes) {
+  const bucket_name& name,
+  const object_key& key,
+  size_t payload_size_bytes,
+  header_map_t headers) {
     // PUT /{container-id}/{blob-id} HTTP/1.1
     // Host: {storage-account-id}.blob.core.windows.net
     // x-ms-date:{req-datetime in RFC9110} # added by 'add_auth'
@@ -230,6 +233,10 @@ result<http::client::request_header> abs_request_creator::make_put_blob_request(
       boost::beast::http::field::content_length,
       std::to_string(payload_size_bytes));
     header.insert(blob_type_name, blob_type_value);
+
+    for (const auto& [field, value] : headers) {
+        header.insert(field, value.c_str());
+    }
 
     auto error_code = _apply_credentials->add_auth(header);
     if (error_code) {
@@ -643,10 +650,17 @@ abs_client::put_object(
   size_t payload_size,
   ss::input_stream<char> body,
   ss::lowres_clock::duration timeout,
-  bool accept_no_content) {
+  bool accept_no_content,
+  header_map_t headers) {
     return send_request(
       do_put_object(
-        name, key, payload_size, std::move(body), timeout, accept_no_content)
+        name,
+        key,
+        payload_size,
+        std::move(body),
+        timeout,
+        accept_no_content,
+        std::move(headers))
         .then(
           []() { return ss::make_ready_future<no_response>(no_response{}); }),
       key,
@@ -659,8 +673,10 @@ ss::future<> abs_client::do_put_object(
   size_t payload_size,
   ss::input_stream<char> body,
   ss::lowres_clock::duration timeout,
-  bool accept_no_content) {
-    auto header = _requestor.make_put_blob_request(name, key, payload_size);
+  bool accept_no_content,
+  header_map_t headers) {
+    auto header = _requestor.make_put_blob_request(
+      name, key, payload_size, std::move(headers));
     if (!header) {
         co_await body.close();
 

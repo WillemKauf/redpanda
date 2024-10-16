@@ -27,6 +27,7 @@
 #include <seastar/core/sstring.hh>
 #include <seastar/util/bool_class.hh>
 
+#include <absl/container/flat_hash_map.h>
 #include <absl/container/node_hash_set.h>
 
 #include <chrono>
@@ -423,11 +424,13 @@ enum class existence_check_type { object, segment, manifest };
 std::ostream& operator<<(std::ostream&, existence_check_type);
 
 class remote_probe;
+
 struct upload_request {
     cloud_io::transfer_details transfer_details;
     upload_type type;
     iobuf payload;
     bool accept_no_content_response{false};
+    cloud_storage_clients::header_map_t headers;
 };
 
 struct download_request {
@@ -435,6 +438,7 @@ struct download_request {
     download_type type;
     iobuf& payload;
     bool expect_missing{false};
+    cloud_storage_clients::header_map_t headers;
 };
 
 } // namespace cloud_storage

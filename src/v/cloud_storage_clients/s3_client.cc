@@ -148,7 +148,10 @@ result<http::client::request_header> request_creator::make_head_object_request(
 
 result<http::client::request_header>
 request_creator::make_unsigned_put_object_request(
-  const bucket_name& name, const object_key& key, size_t payload_size_bytes) {
+  const bucket_name& name,
+  const object_key& key,
+  size_t payload_size_bytes,
+  header_map_t headers) {
     // Virtual Style:
     // PUT /my-image.jpg HTTP/1.1
     // Host: {bucket-name}.s3.{region}.amazonaws.com
@@ -176,6 +179,10 @@ request_creator::make_unsigned_put_object_request(
     header.insert(
       boost::beast::http::field::content_length,
       std::to_string(payload_size_bytes));
+
+    for (const auto& [field, value] : headers) {
+        header.insert(field, value.c_str());
+    }
 
     auto ec = _apply_credentials->add_auth(header);
     if (ec) {
@@ -783,10 +790,17 @@ ss::future<result<s3_client::no_response, error_outcome>> s3_client::put_object(
   size_t payload_size,
   ss::input_stream<char> body,
   ss::lowres_clock::duration timeout,
-  bool accept_no_content) {
+  bool accept_no_content,
+  header_map_t headers) {
     return send_request(
       do_put_object(
-        name, key, payload_size, std::move(body), timeout, accept_no_content)
+        name,
+        key,
+        payload_size,
+        std::move(body),
+        timeout,
+        accept_no_content,
+        std::move(headers))
         .then(
           []() { return ss::make_ready_future<no_response>(no_response{}); }),
       name,
@@ -799,9 +813,10 @@ ss::future<> s3_client::do_put_object(
   size_t payload_size,
   ss::input_stream<char> body,
   ss::lowres_clock::duration timeout,
-  bool accept_no_content) {
+  bool accept_no_content,
+  header_map_t headers) {
     auto header = _requestor.make_unsigned_put_object_request(
-      name, id, payload_size);
+      name, id, payload_size, std::move(headers));
     if (!header) {
         return body.close().then([header] {
             return ss::make_exception_future<>(

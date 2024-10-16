@@ -1033,7 +1033,8 @@ ss::future<upload_result> remote::upload_object(upload_request upload_request) {
           content_length,
           make_iobuf_input_stream(std::move(to_upload)),
           fib.get_timeout(),
-          upload_request.accept_no_content_response);
+          upload_request.accept_no_content_response,
+          upload_request.headers);
 
         if (res) {
             transfer_details.on_success();
