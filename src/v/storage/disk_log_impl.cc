@@ -3974,4 +3974,32 @@ ss::future<> disk_log_impl::remove_kvstore_state(
       .discard_result();
 }
 
+double disk_log_impl::dirty_ratio() const {
+    // Avoid division by 0.
+    return (_closed_segment_bytes == 0)
+             ? 0.0
+             : static_cast<double>(_dirty_segment_bytes)
+                 / static_cast<double>(_closed_segment_bytes);
+}
+
+void disk_log_impl::add_dirty_segment_bytes(uint64_t bytes) {
+    _dirty_segment_bytes += bytes;
+    _probe->set_dirty_segment_bytes(_dirty_segment_bytes);
+}
+
+void disk_log_impl::add_closed_segment_bytes(uint64_t bytes) {
+    _closed_segment_bytes += bytes;
+    _probe->set_closed_segment_bytes(_closed_segment_bytes);
+}
+
+void disk_log_impl::subtract_dirty_segment_bytes(uint64_t bytes) {
+    _dirty_segment_bytes -= std::min(bytes, _dirty_segment_bytes);
+    _probe->set_dirty_segment_bytes(_dirty_segment_bytes);
+}
+
+void disk_log_impl::subtract_closed_segment_bytes(uint64_t bytes) {
+    _closed_segment_bytes -= std::min(bytes, _closed_segment_bytes);
+    _probe->set_closed_segment_bytes(_closed_segment_bytes);
+}
+
 } // namespace storage
