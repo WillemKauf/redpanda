@@ -20,6 +20,7 @@ from pyiceberg.catalog import load_catalog
 class CatalogType(str, Enum):
     REST = 'rest'
     POLARIS = 'polaris'
+    NESSIE = 'nessie'
 
 
 
