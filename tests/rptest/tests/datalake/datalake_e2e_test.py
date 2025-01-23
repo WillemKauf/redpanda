@@ -22,6 +22,8 @@ from rptest.tests.datalake.utils import supported_storage_types
 from ducktape.mark import matrix
 from ducktape.utils.util import wait_until
 from rptest.services.metrics_check import MetricCheck
+from rptest.services.catalog_service import CatalogType
+from rptest.tests.datalake.catalog_service_factory import supported_catalog_types_and_impls
 
 avro_schema_str = """
 {
@@ -60,32 +62,36 @@ class DatalakeE2ETests(RedpandaTest):
     @cluster(num_nodes=4)
     @matrix(cloud_storage_type=supported_storage_types(),
             query_engine=[QueryEngineType.SPARK, QueryEngineType.TRINO],
-            filesystem_catalog_mode=[False, True])
+            catalog_type_and_impl=supported_catalog_types_and_impls())
     def test_e2e_basic(self, cloud_storage_type, query_engine,
-                       filesystem_catalog_mode):
+                       catalog_type_and_impl):
         # Create a topic
         # Produce some events
         # Ensure they end up in datalake
         count = 100
-        with DatalakeServices(self.test_ctx,
-                              redpanda=self.redpanda,
-                              filesystem_catalog_mode=filesystem_catalog_mode,
-                              include_query_engines=[query_engine]) as dl:
+        with DatalakeServices(
+                self.test_ctx,
+                redpanda=self.redpanda,
+                include_query_engines=[query_engine],
+                catalog_type_and_impl=catalog_type_and_impl) as dl:
             dl.create_iceberg_enabled_topic(self.topic_name, partitions=10)
             dl.produce_to_topic(self.topic_name, 1024, count)
             dl.wait_for_translation(self.topic_name, msg_count=count)
 
     @cluster(num_nodes=3)
     @matrix(cloud_storage_type=supported_storage_types(),
-            query_engine=[QueryEngineType.SPARK, QueryEngineType.TRINO])
-    def test_avro_schema(self, cloud_storage_type, query_engine):
+            query_engine=[QueryEngineType.SPARK, QueryEngineType.TRINO],
+            catalog_type_and_impl=supported_catalog_types_and_impls())
+    def test_avro_schema(self, cloud_storage_type, query_engine,
+                         catalog_type_and_impl):
         count = 100
         table_name = f"redpanda.{self.topic_name}"
 
-        with DatalakeServices(self.test_ctx,
-                              redpanda=self.redpanda,
-                              filesystem_catalog_mode=True,
-                              include_query_engines=[query_engine]) as dl:
+        with DatalakeServices(
+                self.test_ctx,
+                redpanda=self.redpanda,
+                include_query_engines=[query_engine],
+                catalog_type_and_impl=catalog_type_and_impl) as dl:
             dl.create_iceberg_enabled_topic(
                 self.topic_name, iceberg_mode="value_schema_id_prefix")
 
@@ -131,14 +137,16 @@ class DatalakeE2ETests(RedpandaTest):
                     spark_describe_out)
 
     @cluster(num_nodes=4)
-    @matrix(cloud_storage_type=supported_storage_types())
-    def test_upload_after_external_update(self, cloud_storage_type):
+    @matrix(cloud_storage_type=supported_storage_types(),
+            catalog_type_and_impl=supported_catalog_types_and_impls())
+    def test_upload_after_external_update(self, cloud_storage_type,
+                                          catalog_type_and_impl):
         table_name = f"redpanda.{self.topic_name}"
-        with DatalakeServices(self.test_ctx,
-                              redpanda=self.redpanda,
-                              filesystem_catalog_mode=True,
-                              include_query_engines=[QueryEngineType.SPARK
-                                                     ]) as dl:
+        with DatalakeServices(
+                self.test_ctx,
+                redpanda=self.redpanda,
+                include_query_engines=[QueryEngineType.SPARK],
+                catalog_type_and_impl=catalog_type_and_impl) as dl:
             count = 100
             dl.create_iceberg_enabled_topic(self.topic_name, partitions=1)
             dl.produce_to_topic(self.topic_name, 1024, count)
@@ -157,15 +165,14 @@ class DatalakeE2ETests(RedpandaTest):
 
     @cluster(num_nodes=4)
     @matrix(cloud_storage_type=supported_storage_types(),
-            filesystem_catalog_mode=[True, False])
-    def test_topic_lifecycle(self, cloud_storage_type,
-                             filesystem_catalog_mode):
+            catalog_type_and_impl=supported_catalog_types_and_impls())
+    def test_topic_lifecycle(self, cloud_storage_type, catalog_type_and_impl):
         count = 100
-        with DatalakeServices(self.test_ctx,
-                              redpanda=self.redpanda,
-                              filesystem_catalog_mode=filesystem_catalog_mode,
-                              include_query_engines=[QueryEngineType.SPARK
-                                                     ]) as dl:
+        with DatalakeServices(
+                self.test_ctx,
+                redpanda=self.redpanda,
+                include_query_engines=[QueryEngineType.SPARK],
+                catalog_type_and_impl=catalog_type_and_impl) as dl:
             rpk = RpkTool(self.redpanda)
 
             # produce some data then delete the topic
@@ -244,11 +251,12 @@ class DatalakeMetricsTest(RedpandaTest):
     @cluster(num_nodes=5)
     @matrix(cloud_storage_type=supported_storage_types())
     def test_lag_metrics(self, cloud_storage_type):
-
-        with DatalakeServices(self.test_ctx,
-                              redpanda=self.redpanda,
-                              filesystem_catalog_mode=False,
-                              include_query_engines=[]) as dl:
+        with DatalakeServices(
+                self.test_ctx,
+                redpanda=self.redpanda,
+                include_query_engines=[],
+                catalog_type_and_impl=supported_catalog_types_and_impls()
+            [0]) as dl:
 
             # Stop the catalog to halt the translation flow
             dl.catalog_service.stop()

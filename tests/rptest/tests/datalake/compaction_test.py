@@ -22,6 +22,7 @@ from ducktape.utils.util import wait_until
 from rptest.services.cluster import cluster
 from rptest.utils.mode_checks import skip_debug_mode
 from rptest.tests.datalake.datalake_verifier import DatalakeVerifier
+from rptest.tests.datalake.catalog_service_factory import supported_catalog_types_and_impls
 
 
 class CompactionGapsTest(RedpandaTest):
@@ -113,12 +114,15 @@ class CompactionGapsTest(RedpandaTest):
 
     @cluster(num_nodes=4)
     @skip_debug_mode
-    @matrix(cloud_storage_type=supported_storage_types())
-    def test_translation_no_gaps(self, cloud_storage_type):
-        with DatalakeServices(self.test_ctx,
-                              redpanda=self.redpanda,
-                              include_query_engines=[QueryEngineType.TRINO
-                                                     ]) as dl:
+    @matrix(cloud_storage_type=supported_storage_types(),
+            catalog_type_and_impl=supported_catalog_types_and_impls())
+    def test_translation_no_gaps(self, cloud_storage_type,
+                                 catalog_type_and_impl):
+        with DatalakeServices(
+                self.test_ctx,
+                redpanda=self.redpanda,
+                include_query_engines=[QueryEngineType.TRINO],
+                catalog_type_and_impl=catalog_type_and_impl) as dl:
             self.do_test_no_gaps(dl)
 
 
@@ -234,12 +238,13 @@ class CompactionTest(RedpandaTest):
             self.verify_log_and_table(dl)
 
     @cluster(num_nodes=4)
-    #@skip_debug_mode
-    @matrix(cloud_storage_type=supported_storage_types())
-    def test_compaction(self, cloud_storage_type):
-        with DatalakeServices(self.test_ctx,
-                              redpanda=self.redpanda,
-                              filesystem_catalog_mode=False,
-                              include_query_engines=[QueryEngineType.TRINO
-                                                     ]) as dl:
+    @skip_debug_mode
+    @matrix(cloud_storage_type=supported_storage_types(),
+            catalog_type_and_impl=supported_catalog_types_and_impls())
+    def test_compaction(self, cloud_storage_type, catalog_type_and_impl):
+        with DatalakeServices(
+                self.test_ctx,
+                redpanda=self.redpanda,
+                include_query_engines=[QueryEngineType.TRINO],
+                catalog_type_and_impl=catalog_type_and_impl) as dl:
             self.do_test_compaction(dl)
