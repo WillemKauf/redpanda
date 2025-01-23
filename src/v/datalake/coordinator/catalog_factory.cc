@@ -181,10 +181,12 @@ rest_catalog_factory::create_catalog() {
       iceberg::rest_client::credentials{
         .client_id = config_->iceberg_rest_catalog_client_id().value(),
         .client_secret = config_->iceberg_rest_catalog_client_secret().value()},
-      std::move(endpoint_information.base_path), // base_path
-      std::move(prefix_path),                    // prefix
-      std::nullopt,                              // api_version
-      std::move(token)                           // token
+      std::move(endpoint_information.base_path),        // base_path
+      std::move(prefix_path),                           // prefix
+      std::nullopt,                                     // api_version
+      std::move(token),                                 // token
+      nullptr,                                          // retry_policy
+      config_->iceberg_rest_catalog_oauth2_server_uri() // oauth2_server_uri
     );
 
     co_return std::make_unique<iceberg::rest_catalog>(

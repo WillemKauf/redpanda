@@ -92,22 +92,28 @@ catalog_client::catalog_client(
   std::optional<prefix_path> prefix,
   std::optional<api_version> api_version,
   std::optional<oauth_token> token,
-  std::unique_ptr<retry_policy> retry_policy)
+  std::unique_ptr<retry_policy> retry_policy,
+  std::optional<ss::sstring> oauth2_server_uri)
   : _http_client(std::move(http_client))
   , _endpoint{std::move(endpoint)}
   , _credentials{std::move(credentials)}
   , _path_components{std::move(base_path), std::move(prefix), std::move(api_version)}
   , _oauth_token{std::move(token)}
-  , _retry_policy{
-      retry_policy ? std::move(retry_policy)
-                   : std::make_unique<default_retry_policy>()} {}
+  , _retry_policy{retry_policy ? std::move(retry_policy) : std::make_unique<default_retry_policy>()}
+  , _oauth2_server_uri{oauth2_server_uri}
+  , _requires_token{_oauth2_server_uri.has_value()} {}
 
 ss::future<expected<oauth_token>>
 catalog_client::acquire_token(retry_chain_node& rtc) {
+    vassert(
+      _requires_token,
+      "Should only acquire token if required (and _oauth2_server_uri is set)");
+    ss::sstring token_path = fmt::format(
+      "{}/oauth/tokens", _oauth2_server_uri.value());
     const auto token_request
       = http::request_builder{}
           .method(boost::beast::http::verb::post)
-          .path(_path_components.token_api_path())
+          .path(token_path)
           .header("content-type", "application/x-www-form-urlencoded");
     auto payload = http::form_encode_data({
       {"grant_type", "client_credentials"},

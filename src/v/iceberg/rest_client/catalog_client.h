@@ -87,7 +87,8 @@ public:
       std::optional<prefix_path> prefix = std::nullopt,
       std::optional<api_version> api_version = std::nullopt,
       std::optional<oauth_token> token = std::nullopt,
-      std::unique_ptr<retry_policy> retry_policy = nullptr);
+      std::unique_ptr<retry_policy> retry_policy = nullptr,
+      std::optional<ss::sstring> oauth2_server_uri = std::nullopt);
     /**
      * The REST client allows interaction with Iceberg REST catalog implementing
      * the Iceberg Catalog OpenApi Specification as stated here:
@@ -179,6 +180,8 @@ private:
     path_components _path_components;
     std::optional<oauth_token> _oauth_token{std::nullopt};
     std::unique_ptr<retry_policy> _retry_policy;
+    std::optional<ss::sstring> _oauth2_server_uri;
+    bool _requires_token;
 
     friend class catalog_client_tester;
 };
