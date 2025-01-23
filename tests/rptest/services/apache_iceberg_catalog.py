@@ -15,20 +15,17 @@ import jinja2
 from ducktape.cluster.cluster import ClusterNode
 from ducktape.services.service import Service
 from ducktape.utils.util import wait_until
-from pyiceberg.catalog import load_catalog
 
 from rptest.context import cloud_storage
+from rptest.services.catalog_service import CatalogType, CatalogService
 
 
-class IcebergRESTCatalog(Service):
+class IcebergRESTCatalog(CatalogService):
     """A Iceberg REST service compatible with minio. This service is a thin REST wrapper over 
     a catalog IO implementation controlled via CATALOG_IO__IMPL. Out of the box, it defaults
     to org.apache.iceberg.jdbc.JdbcCatalog over a temporary sqlite db. It can also wrap over a
     S3 based (minio) implementaion by setting org.apache.iceberg.aws.s3.S3FileIO.
     """
-
-    # Available after start. Use catalog_url property to access.
-    _catalog_url: Optional[str] = None
 
     PERSISTENT_ROOT = "/var/lib/iceberg_rest/"
     LOG_FILE = os.path.join(PERSISTENT_ROOT, "iceberg_rest_server.log")
@@ -77,13 +74,10 @@ class IcebergRESTCatalog(Service):
             cloud_storage_catalog_prefix: str = 'redpanda-iceberg-catalog',
             filesystem_wrapper_mode: bool = False,
             node: ClusterNode | None = None):
-        super(IcebergRESTCatalog, self).__init__(ctx,
-                                                 num_nodes=0 if node else 1)
-        self.credentials = cloud_storage.Credentials.from_context(ctx)
+        super(IcebergRESTCatalog,
+              self).__init__(ctx, cloud_storage_bucket,
+                             cloud_storage_catalog_prefix, node)
 
-        self.cloud_storage_bucket = cloud_storage_bucket
-        self.cloud_storage_catalog_prefix = cloud_storage_catalog_prefix
-        self.dedicated_nodes = ctx.globals.get("dedicated_nodes", False)
         self.set_filesystem_wrapper_mode(filesystem_wrapper_mode)
         # This REST server can operate in two modes.
         # 1. filesystem wrapper mode
@@ -99,8 +93,19 @@ class IcebergRESTCatalog(Service):
         #
         # Trino <-> REST server (HadoopCatalog) <-> S3
         # Trino <-> REST server (JDBC Catalog) <-> local sqllite DB.
-        self._catalog_url = None
         self.db_file = None
+
+    @staticmethod
+    def catalog_name() -> str:
+        return IcebergRESTCatalog.catalog_type().value
+
+    @staticmethod
+    def catalog_type() -> CatalogType:
+        return CatalogType.REST
+
+    def set_filesystem_wrapper_mode(self, mode: bool):
+        self.filesystem_wrapper_mode = mode
+        self.compute_warehouse_path()
 
     def compute_warehouse_path(self):
         if isinstance(self.credentials,
@@ -111,20 +116,16 @@ class IcebergRESTCatalog(Service):
             if self.filesystem_wrapper_mode:
                 # For hadoop catalog compatibility
                 s3_prefix = "s3a"
-            self.cloud_storage_warehouse = f"{s3_prefix}://{self.cloud_storage_bucket}/{self.cloud_storage_catalog_prefix}"
+            self.cloud_storage_warehouse = f"{s3_prefix}://{self.cloud_storage_bucket}/{self.catalog_name}"
         elif isinstance(self.credentials,
                         cloud_storage.GCPInstanceMetadataCredentials):
-            self.cloud_storage_warehouse = f"gs://{self.cloud_storage_bucket}/{self.cloud_storage_catalog_prefix}"
+            self.cloud_storage_warehouse = f"gs://{self.cloud_storage_bucket}/{self.catalog_name}"
         elif isinstance(self.credentials,
                         cloud_storage.ABSSharedKeyCredentials):
-            self.cloud_storage_warehouse = f"abfss://{self.cloud_storage_bucket}@{self.credentials.endpoint}/{self.cloud_storage_catalog_prefix}"
+            self.cloud_storage_warehouse = f"abfss://{self.cloud_storage_bucket}@{self.credentials.endpoint}/{self.catalog_name}"
         else:
             raise ValueError(
                 f"Unsupported credential type: {type(self.credentials)}")
-
-    def set_filesystem_wrapper_mode(self, mode: bool):
-        self.filesystem_wrapper_mode = mode
-        self.compute_warehouse_path()
 
     def _make_env(self):
         env = dict()
@@ -169,35 +170,6 @@ class IcebergRESTCatalog(Service):
         env = " ".join(f"{k}={v}" for k, v in envs.items())
         return f"{env} {java} -jar  {IcebergRESTCatalog.JAR_PATH} \
             1>> {IcebergRESTCatalog.LOG_FILE} 2>> {IcebergRESTCatalog.LOG_FILE} &"
-
-    def client(self, catalog_name="default"):
-        conf = dict()
-        conf["uri"] = self.catalog_url
-
-        if isinstance(self.credentials, cloud_storage.S3Credentials):
-            conf["s3.endpoint"] = self.credentials.endpoint
-            conf["s3.access-key-id"] = self.credentials.access_key
-            conf["s3.secret-access-key"] = self.credentials.secret_key
-            conf["s3.region"] = self.credentials.region
-        elif isinstance(self.credentials,
-                        cloud_storage.AWSInstanceMetadataCredentials):
-            pass
-        elif isinstance(self.credentials,
-                        cloud_storage.GCPInstanceMetadataCredentials):
-            pass
-        elif isinstance(self.credentials,
-                        cloud_storage.ABSSharedKeyCredentials):
-            # Legancy pyiceberg https://github.com/apache/iceberg-python/issues/866
-            conf["adlfs.account-name"] = self.credentials.account_name
-            conf["adlfs.account-key"] = self.credentials.account_key
-            # Modern pyiceberg https://github.com/apache/iceberg-python/issues/866
-            conf["adls.account-name"] = self.credentials.account_name
-            conf["alds.account-key"] = self.credentials.account_key
-        else:
-            raise ValueError(
-                f"Unsupported credential type: {type(self.credentials)}")
-
-        return load_catalog(catalog_name, **conf)
 
     def start_node(self, node, timeout_sec=60, **kwargs):
         node.account.ssh("mkdir -p %s" % IcebergRESTCatalog.PERSISTENT_ROOT,
@@ -287,11 +259,6 @@ class IcebergRESTCatalog(Service):
         self.stop_node(node, allow_fail=True)
         node.account.remove(IcebergRESTCatalog.PERSISTENT_ROOT,
                             allow_fail=True)
-
-    @property
-    def catalog_url(self) -> str:
-        assert self._catalog_url, "URL not available because service is not started"
-        return self._catalog_url
 
     @staticmethod
     def dict_to_xml_properties(d: dict[str, Optional[str | bool]]):
