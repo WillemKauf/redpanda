@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0
 
-from typing import Any
+from typing import Any, Tuple, Optional
 from ducktape.services.service import Service
 from ducktape.utils.util import wait_until
 from rptest.clients.rpk import RpkTool, TopicSpec
@@ -19,6 +19,8 @@ from rptest.services.trino_service import TrinoService
 from rptest.tests.datalake.query_engine_base import QueryEngineType
 from rptest.services.redpanda_connect import RedpandaConnectService
 from rptest.tests.datalake.query_engine_factory import get_query_engine_by_type
+from rptest.services.catalog_service import CatalogType, CatalogImpl
+from rptest.tests.datalake.catalog_service_factory import get_catalog_service_by_type
 
 
 class DatalakeServices():
@@ -27,18 +29,29 @@ class DatalakeServices():
     def __init__(self,
                  test_ctx,
                  redpanda: RedpandaService,
-                 filesystem_catalog_mode=True,
                  include_query_engines: list[QueryEngineType] = [
                      QueryEngineType.SPARK, QueryEngineType.TRINO
-                 ]):
+                 ],
+                 catalog_type_and_impl: Tuple[CatalogType,
+                                              Optional[CatalogImpl]] = (
+                                                  CatalogType.REST,
+                                                  CatalogImpl.JDBC),
+                 catalog_name: str = 'redpanda-iceberg-catalog'):
         self.test_ctx = test_ctx
         self.redpanda = redpanda
+
         si_settings = self.redpanda.si_settings
         assert si_settings
-        self.catalog_service = IcebergRESTCatalog(
+
+        self.catalog_name = catalog_name
+        catalog_cls = get_catalog_service_by_type(catalog_type_and_impl[0])
+        self.catalog_service = catalog_cls(
             test_ctx,
             cloud_storage_bucket=si_settings.cloud_storage_bucket,
-            filesystem_wrapper_mode=filesystem_catalog_mode)
+            cloud_storage_catalog_prefix=self.catalog_name)
+        if self.catalog_service.catalog_type() == CatalogType.REST:
+            self.catalog_service.set_filesystem_wrapper_mode(
+                catalog_type_and_impl[1] == CatalogImpl.HADOOP)
         self.included_query_engines = include_query_engines
         # To be populated later once we have the URI of the catalog
         # available
@@ -53,7 +66,8 @@ class DatalakeServices():
 
         self.catalog_service.start()
 
-        if not self.catalog_service.filesystem_wrapper_mode:
+        if not (self.catalog_service.catalog_type() == CatalogType.REST
+                and self.catalog_service.filesystem_wrapper_mode):
             # REST catalog mode
             self.redpanda.add_extra_rp_conf({
                 "iceberg_catalog_type":
@@ -65,11 +79,24 @@ class DatalakeServices():
                 "iceberg_rest_catalog_client_secret":
                 "panda-secret",
             })
+        if self.catalog_service.catalog_type() == CatalogType.NESSIE:
+            self.redpanda.add_extra_rp_conf({
+                "iceberg_rest_catalog_prefix":
+                "main",
+            })
         self.redpanda.start(start_si=False)
 
         for engine in self.included_query_engines:
             svc_cls = get_query_engine_by_type(engine)
-            svc = svc_cls(self.test_ctx, self.catalog_service.catalog_url)
+            iceberg_catalog_uri = self.catalog_service.catalog_url
+            if self.catalog_service.catalog_type() == CatalogType.NESSIE:
+                iceberg_catalog_uri = self.catalog_service.nessie_url
+            svc = svc_cls(self.test_ctx,
+                          iceberg_catalog_uri=iceberg_catalog_uri,
+                          default_warehouse_dir=self.catalog_service.
+                          cloud_storage_warehouse,
+                          catalog_type=self.catalog_service.catalog_type(),
+                          catalog_name=self.catalog_name)
             svc.start()
             self.query_engines.append(svc)
 
@@ -149,7 +176,7 @@ class DatalakeServices():
         rpk.alter_topic_config(topic, "redpanda.iceberg.mode", mode)
 
     def catalog_client(self):
-        return self.catalog_service.client("redpanda-iceberg-catalog")
+        return self.catalog_service.client(self.catalog_name)
 
     def table_exists(self, table, namespace="redpanda", client=None):
         if client is None:
