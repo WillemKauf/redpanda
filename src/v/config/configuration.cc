@@ -3785,6 +3785,15 @@ configuration::configuration()
       {.visibility = visibility::user},
       std::nullopt,
       &validate_non_empty_string_opt)
+  , iceberg_rest_catalog_oauth2_server_uri(
+      *this,
+      "iceberg_rest_catalog_oauth2_server_uri",
+      "The OAuth URI used for retrieving access tokens for catalog "
+      "authentication. The path `{oauth_server_uri}/oauth/tokens` will be used "
+      "for retrieving tokens. If unset, no authentication will be attempted.",
+      {.visibility = visibility::user},
+      std::nullopt,
+      &validate_non_empty_string_opt)
   , iceberg_delete(
       *this,
       "iceberg_delete",

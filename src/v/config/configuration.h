@@ -717,6 +717,7 @@ struct configuration final : public config_store {
     property<std::optional<ss::sstring>> iceberg_rest_catalog_trust_file;
     property<std::optional<ss::sstring>> iceberg_rest_catalog_crl_file;
     property<std::optional<ss::sstring>> iceberg_rest_catalog_prefix;
+    property<std::optional<ss::sstring>> iceberg_rest_catalog_oauth2_server_uri;
 
     property<bool> iceberg_delete;
 
