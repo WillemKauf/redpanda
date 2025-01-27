@@ -23,6 +23,10 @@ class CatalogType(str, Enum):
     NESSIE = 'nessie'
 
 
+class CatalogImpl(str, Enum):
+    JDBC = 'jdbc'
+    HADOOP = 'hadoop'
+
 
 class CatalogService(Service):
     # Expected to be available after initialization of derived class.
