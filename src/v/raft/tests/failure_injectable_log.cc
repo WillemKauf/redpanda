@@ -240,4 +240,8 @@ failure_injectable_log::retention_offset(storage::gc_config cfg) const {
     return _underlying_log->retention_offset(cfg);
 }
 
+double failure_injectable_log::dirty_ratio() const {
+    return _underlying_log->dirty_ratio();
+}
+
 } // namespace raft

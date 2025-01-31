@@ -131,6 +131,8 @@ public:
     std::optional<model::offset>
       retention_offset(storage::gc_config) const final;
 
+    double dirty_ratio() const final;
+
 private:
     ss::shared_ptr<storage::log> _underlying_log;
     std::optional<append_delay_generator> _append_delay_generator;

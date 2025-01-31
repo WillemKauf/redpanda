@@ -262,10 +262,7 @@ public:
 
     uint64_t closed_segment_bytes() const { return _closed_segment_bytes; }
 
-    // Returns the dirty ratio of the log.
-    // The dirty ratio is the ratio of bytes in closed, dirty segments to the
-    // total number of bytes in all closed segments in the log.
-    double dirty_ratio() const;
+    double dirty_ratio() const final;
 
 private:
     friend class disk_log_appender; // for multi-term appends
