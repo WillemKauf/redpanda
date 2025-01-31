@@ -222,6 +222,13 @@ public:
      */
     virtual std::optional<model::offset> retention_offset(gc_config) const = 0;
 
+    // Returns the dirty ratio of the log. The dirty ratio is the ratio of bytes
+    // in closed, dirty segments to the total number of bytes in all closed
+    // segments in the log.
+    virtual double dirty_ratio() const = 0;
+
+    virtual model::offset last_clean_compaction_offset() const = 0;
+
 private:
     ntp_config _config;
 

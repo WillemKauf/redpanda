@@ -262,10 +262,11 @@ public:
 
     uint64_t closed_segment_bytes() const { return _closed_segment_bytes; }
 
-    // Returns the dirty ratio of the log.
-    // The dirty ratio is the ratio of bytes in closed, dirty segments to the
-    // total number of bytes in all closed segments in the log.
-    double dirty_ratio() const;
+    double dirty_ratio() const final;
+
+    model::offset last_clean_compaction_offset() const final {
+        return _last_clean_compaction_offset;
+    }
 
 private:
     friend class disk_log_appender; // for multi-term appends
@@ -462,6 +463,16 @@ private:
     // since last window compaction.
     std::optional<model::offset> _last_compaction_window_start_offset;
 
+    std::optional<model::offset> _max_indexed_compaction_map_offset;
+
+    // The last offset made clean by sliding compaction.
+    // In other words, the log up to this point has been fully deduplicated, and
+    // all segments with offsets up to this offset are cleanly compacted. This
+    // demarcates the clean portion of the log from the dirty.
+    // The next offset after this can also be considered the "first dirty"
+    // offset.
+    model::offset _last_clean_compaction_offset{};
+
     size_t _reclaimable_size_bytes{0};
 
     uint64_t _dirty_segment_bytes{0};
@@ -489,6 +500,8 @@ private:
     // the tags add_tag or subtract_tag must be used.
     void add_closed_segment_bytes(uint64_t bytes);
     void subtract_closed_segment_bytes(uint64_t bytes);
+
+    void reset_sliding_window_round();
 
     bool _compaction_enabled;
 };

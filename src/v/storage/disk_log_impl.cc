@@ -535,8 +535,8 @@ segment_set disk_log_impl::find_sliding_range(
           config().ntp(),
           _last_compaction_window_start_offset.value(),
           _segs.front()->offsets().get_base_offset());
-        _probe->add_sliding_window_round_complete();
-        _last_compaction_window_start_offset.reset();
+
+        reset_sliding_window_round();
     }
 
     // Collect all segments that have stable data.
@@ -707,22 +707,15 @@ ss::future<bool> disk_log_impl::sliding_window_compact(
       idx_start_offset,
       map.max_offset());
 
-    std::optional<model::offset> next_window_start_offset = idx_start_offset;
-    if (idx_start_offset == segs.front()->offsets().get_base_offset()) {
-        // We have cleanly compacted up to the first segment in the sliding
-        // range (not necessarily equivalent to the first segment in the log-
-        // segments may have been removed from the sliding range if they were
-        // already cleanly compacted or had no compactible offsets). Reset the
-        // start offset to allow new segments into the sliding window range.
-        vlog(
-          gclog.debug,
-          "[{}] fully de-duplicated up to start of sliding range with offset "
-          "{}, resetting sliding window start offset",
-          config().ntp(),
-          idx_start_offset);
-        _probe->add_sliding_window_round_complete();
-        next_window_start_offset.reset();
+    // Set the max indexed compaction map offset, if it doesn't have a value.
+    // This value is reset at the same time as
+    // _last_compaction_window_start_offset.
+    if (!_max_indexed_compaction_map_offset.has_value()) {
+        _max_indexed_compaction_map_offset = map.max_offset();
     }
+
+    const bool sliding_window_round_complete
+      = idx_start_offset == segs.front()->offsets().get_base_offset();
 
     auto segment_modify_lock = co_await _segment_rewrite_lock.get_units();
     for (auto& seg : segs) {
@@ -740,7 +733,23 @@ ss::future<bool> disk_log_impl::sliding_window_compact(
           cfg, seg, map, is_finished_window_compaction, is_clean_compacted);
     }
 
-    _last_compaction_window_start_offset = next_window_start_offset;
+    if (sliding_window_round_complete) {
+        // We have cleanly compacted up to the first segment in the sliding
+        // range (not necessarily equivalent to the first segment in the log-
+        // segments may have been removed from the sliding range if they were
+        // already cleanly compacted or had no compactible offsets). Reset the
+        // start offset to allow new segments into the sliding window range.
+        vlog(
+          gclog.debug,
+          "[{}] fully de-duplicated up to start of sliding range with offset "
+          "{}, resetting sliding window start offset",
+          config().ntp(),
+          idx_start_offset);
+
+        reset_sliding_window_round()
+    } else {
+        _last_compaction_window_start_offset = idx_start_offset;
+    }
 
     co_return true;
 }
@@ -1281,6 +1290,13 @@ ss::future<bool> disk_log_impl::chunked_sliding_window_compact(
         }
     }
 
+    // Set the max indexed compaction map offset, if it doesn't have a
+    // value. This value is reset at the same time as
+    // _last_compaction_window_start_offset.
+    if (!_max_indexed_compaction_map_offset.has_value()) {
+        _max_indexed_compaction_map_offset = map.max_offset();
+    }
+
     // Segments can now be marked as finished window compaction
     for (auto& s : segs) {
         std::ignore
@@ -1315,8 +1331,7 @@ ss::future<bool> disk_log_impl::chunked_sliding_window_compact(
       });
 
     if (sliding_window_round_complete) {
-        _probe->add_sliding_window_round_complete();
-        _last_compaction_window_start_offset.reset();
+        reset_sliding_window_round();
     }
 
     vlog(
@@ -4066,6 +4081,21 @@ void disk_log_impl::subtract_dirty_segment_bytes(uint64_t bytes) {
 void disk_log_impl::subtract_closed_segment_bytes(uint64_t bytes) {
     _closed_segment_bytes -= std::min(bytes, _closed_segment_bytes);
     _probe->set_closed_segment_bytes(_closed_segment_bytes);
+}
+
+void disk_log_impl::reset_sliding_window_round() {
+    // Reset the start offset so we can allow new segments into future sliding
+    // window rounds.
+    _last_compaction_window_start_offset.reset();
+
+    // Set the last clean compacted offset and reset the max indexed offset.
+    if (_max_indexed_compaction_map_offset.has_value()) {
+        _last_clean_compaction_offset
+          = _max_indexed_compaction_map_offset.value();
+        _max_indexed_compaction_map_offset.reset();
+    }
+
+    _probe->add_sliding_window_round_complete();
 }
 
 } // namespace storage

@@ -234,6 +234,8 @@ log_manager::housekeeping_scan(model::timestamp collection_threshold) {
      *   compaction is already sequential when this will be unified with
      *   compaction, the whole task could be made concurrent
      */
+    absl::btree_map<size_t, model::ntp, std::greater<>>
+      ntp_by_compaction_heuristic;
     while (!_logs_list.empty()
            && is_not_set(_logs_list.front().flags, bflags::lifetime_checked)) {
         if (_abort_source.abort_requested()) {
@@ -248,6 +250,60 @@ log_manager::housekeeping_scan(model::timestamp collection_threshold) {
         // prevents the removal of the parent object. this makes awaiting
         // apply_segment_ms safe against removal of segments from _logs_list
         co_await current_log.handle->apply_segment_ms();
+
+        auto should_compact_log = [](ss::shared_ptr<log> l) {
+            // Consider the dirty ratio.
+            const auto min_cleanable_dirty_ratio
+              = l->config().min_cleanable_dirty_ratio().value_or(0.0);
+            const auto dirty_ratio = l->dirty_ratio();
+            if (dirty_ratio >= min_cleanable_dirty_ratio) {
+                return true;
+            }
+
+            // Consider max compaction lag
+            const auto max_compaction_lag_ms
+              = l->config().max_compaction_lag_ms();
+            if (max_compaction_lag_ms.has_value()) {
+                // Need to compare the base timestamp of the FIRST segment that
+                // isn't compacted (first dirty segment) in the log to this
+                // value.
+                // https://github.com/apache/kafka/blob/94a1bfb1281f06263976b1ba8bba8c5ac5d7f2ce/core/src/main/scala/kafka/log/LogCleanerManager.scala#L615
+                // https://github.com/apache/kafka/blob/94a1bfb1281f06263976b1ba8bba8c5ac5d7f2ce/core/src/main/scala/kafka/log/LogCleanerManager.scala#L592C51-L592C67
+                // Book keep: last clean offset per ntp.
+                // Then: grab the first segment whose upper bound corresponds to
+                // the next offset (first dirty offset) per ntp, and compare its
+                // base timestamp.
+                const auto last_clean_compaction_offset
+                  = l->last_clean_compaction_offset();
+                const auto& segments = l->segments();
+                auto first_dirty_segment_it = segments.upper_bound(
+                  last_clean_compaction_offset);
+                if (first_dirty_segment_it != segments.end()) {
+                    auto segment = *first_dirty_segment_it;
+                    auto base_timestamp = segment->index().base_timestamp();
+                    auto compaction_lag_horizon
+                      = base_timestamp + max_compaction_lag_ms->count();
+                    bool should_compact = model::timestamp::now()
+                                          > compaction_lag_horizon;
+                    if (should_compact) {
+                        return true;
+                    }
+                }
+            }
+        };
+
+        const auto compact_log = should_compact_log(current_log.handle);
+
+        if (compact_log) {
+            // Order ntps by compaction heuristic.
+            auto compute_compaction_heuristic = [](ss::shared_ptr<log> l) {
+                return l->dirty_ratio();
+            };
+            auto compaction_heuristic_weight = compute_compaction_heuristic(
+              current_log.handle);
+            ntp_by_compaction_heuristic.emplace(
+              compaction_heuristic_weight, current_log.handle->config().ntp());
+        }
     }
 
     if (
