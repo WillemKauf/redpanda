@@ -662,7 +662,9 @@ struct instance_generator<cluster::topic_properties> {
               return random_generators::random_choice(
                 {model::iceberg_invalid_record_action::drop,
                  model::iceberg_invalid_record_action::dlq_table});
-          })};
+          }),
+          tests::random_tristate(
+            [] { return random_generators::get_real<double>(0.0, 100.0); })};
     }
 
     static std::vector<cluster::topic_properties> limits() { return {}; }

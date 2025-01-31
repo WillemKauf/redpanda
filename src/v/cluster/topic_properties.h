@@ -33,7 +33,7 @@ namespace cluster {
  */
 struct topic_properties
   : serde::
-      envelope<topic_properties, serde::version<11>, serde::compat_version<0>> {
+      envelope<topic_properties, serde::version<12>, serde::compat_version<0>> {
     topic_properties() noexcept = default;
     topic_properties(
       std::optional<model::compression> compression,
@@ -79,7 +79,8 @@ struct topic_properties
       std::optional<bool> iceberg_delete,
       std::optional<ss::sstring> iceberg_partition_spec,
       std::optional<model::iceberg_invalid_record_action>
-        iceberg_invalid_record_action)
+        iceberg_invalid_record_action,
+      tristate<double> min_cleanable_dirty_ratio)
       : compression(compression)
       , cleanup_policy_bitflags(cleanup_policy_bitflags)
       , compaction_strategy(compaction_strategy)
@@ -123,7 +124,8 @@ struct topic_properties
       , delete_retention_ms(delete_retention_ms)
       , iceberg_delete(iceberg_delete)
       , iceberg_partition_spec(std::move(iceberg_partition_spec))
-      , iceberg_invalid_record_action(iceberg_invalid_record_action) {}
+      , iceberg_invalid_record_action(iceberg_invalid_record_action)
+      , min_cleanable_dirty_ratio(min_cleanable_dirty_ratio) {}
 
     std::optional<model::compression> compression;
     std::optional<model::cleanup_policy_bitflags> cleanup_policy_bitflags;
@@ -206,6 +208,8 @@ struct topic_properties
     std::optional<model::iceberg_invalid_record_action>
       iceberg_invalid_record_action;
 
+    tristate<double> min_cleanable_dirty_ratio{std::nullopt};
+
     bool is_compacted() const;
     bool has_overrides() const;
     bool requires_remote_erase() const;
@@ -254,7 +258,8 @@ struct topic_properties
           delete_retention_ms,
           iceberg_delete,
           iceberg_partition_spec,
-          iceberg_invalid_record_action);
+          iceberg_invalid_record_action,
+          min_cleanable_dirty_ratio);
     }
 
     friend bool operator==(const topic_properties&, const topic_properties&)

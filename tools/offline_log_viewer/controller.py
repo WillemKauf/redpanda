@@ -151,6 +151,10 @@ def read_topic_properties_serde(rdr: Reader, version):
             'iceberg_invalid_record_action':
             rdr.read_optional(Reader.read_serde_enum),
         }
+    if version >= 12:
+        topic_properties |= {
+            'min_cleanable_dirty_ratio': rdr.read_tristate(Reader.read_double),
+        }
 
     return topic_properties
 
