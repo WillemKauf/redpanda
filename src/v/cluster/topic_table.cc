@@ -1107,6 +1107,10 @@ topic_properties topic_table::update_topic_properties(
     incremental_update(
       updated_properties.iceberg_invalid_record_action,
       overrides.iceberg_invalid_record_action);
+    incremental_update(
+      updated_properties.min_cleanable_dirty_ratio,
+      overrides.min_cleanable_dirty_ratio);
+
     return updated_properties;
 }
 

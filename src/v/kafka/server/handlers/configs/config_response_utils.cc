@@ -1023,6 +1023,18 @@ config_response_container_t make_topic_configs(
           &describe_as_string<model::iceberg_invalid_record_action>);
     }
 
+    add_topic_config_if_requested(
+      config_keys,
+      result,
+      topic_property_min_cleanable_dirty_ratio,
+      metadata_cache.get_default_min_cleanable_dirty_ratio(),
+      topic_property_min_cleanable_dirty_ratio,
+      topic_properties.min_cleanable_dirty_ratio,
+      include_synonyms,
+      maybe_make_documentation(
+        include_documentation,
+        config::shard_local_cfg().min_cleanable_dirty_ratio.desc()));
+
     return result;
 }
 

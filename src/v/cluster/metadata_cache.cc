@@ -324,6 +324,11 @@ metadata_cache::get_default_delete_retention_ms() const {
     return config::shard_local_cfg().tombstone_retention_ms();
 }
 
+std::optional<double>
+metadata_cache::get_default_min_cleanable_dirty_ratio() const {
+    return config::shard_local_cfg().min_cleanable_dirty_ratio();
+}
+
 topic_properties metadata_cache::get_default_properties() const {
     topic_properties tp;
     tp.compression = {get_default_compression()};
@@ -343,6 +348,8 @@ topic_properties metadata_cache::get_default_properties() const {
       get_default_retention_local_target_ms()};
     tp.delete_retention_ms = tristate<std::chrono::milliseconds>{
       get_default_delete_retention_ms()};
+    tp.min_cleanable_dirty_ratio = tristate<double>{
+      get_default_min_cleanable_dirty_ratio()};
 
     return tp;
 }

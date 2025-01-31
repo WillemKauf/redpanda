@@ -568,7 +568,7 @@ struct property_update<tristate<T>>
 struct incremental_topic_updates
   : serde::envelope<
       incremental_topic_updates,
-      serde::version<8>,
+      serde::version<9>,
       serde::compat_version<0>> {
     static constexpr int8_t version_with_data_policy = -1;
     static constexpr int8_t version_with_shadow_indexing = -3;
@@ -644,6 +644,7 @@ struct incremental_topic_updates
     property_update<std::optional<ss::sstring>> iceberg_partition_spec;
     property_update<std::optional<model::iceberg_invalid_record_action>>
       iceberg_invalid_record_action;
+    property_update<tristate<double>> min_cleanable_dirty_ratio;
 
     // To allow us to better control use of the deprecated shadow_indexing
     // field, use getters and setters instead.
@@ -685,7 +686,8 @@ struct incremental_topic_updates
           delete_retention_ms,
           iceberg_delete,
           iceberg_partition_spec,
-          iceberg_invalid_record_action);
+          iceberg_invalid_record_action,
+          min_cleanable_dirty_ratio);
     }
 
     friend std::ostream&

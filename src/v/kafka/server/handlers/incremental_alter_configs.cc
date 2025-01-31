@@ -389,7 +389,11 @@ create_topic_properties_update(
                   op);
                 continue;
             }
-
+            if (cfg.name == topic_property_min_cleanable_dirty_ratio) {
+                parse_and_set_tristate(
+                  update.properties.min_cleanable_dirty_ratio, cfg.value, op);
+                continue;
+            }
         } catch (const validation_error& e) {
             vlog(
               klog.debug,
