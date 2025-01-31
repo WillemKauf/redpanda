@@ -236,6 +236,9 @@ log_manager::housekeeping_scan(model::timestamp collection_threshold) {
      *   compaction is already sequential when this will be unified with
      *   compaction, the whole task could be made concurrent
      */
+    using compaction_heuristic_t = double;
+    absl::flat_hash_map<model::ntp, compaction_heuristic_t>
+      ntp_to_compaction_heuristic;
     while (!_logs_list.empty()
            && is_not_set(_logs_list.front().flags, bflags::lifetime_checked)) {
         if (_abort_source.abort_requested()) {
@@ -250,7 +253,60 @@ log_manager::housekeeping_scan(model::timestamp collection_threshold) {
         // prevents the removal of the parent object. this makes awaiting
         // apply_segment_ms safe against removal of segments from _logs_list
         co_await current_log.handle->apply_segment_ms();
+
+        auto should_compact_log = [](ss::shared_ptr<log> l) {
+            // Consider the dirty ratio.
+            const auto min_cleanable_dirty_ratio
+              = l->config().min_cleanable_dirty_ratio().value_or(0.0) / 100.0;
+            const auto dirty_ratio = l->dirty_ratio();
+            if (dirty_ratio >= min_cleanable_dirty_ratio) {
+                return true;
+            }
+
+            return false;
+        };
+
+        const auto compact_log = should_compact_log(current_log.handle);
+
+        if (compact_log) {
+            // Order ntps by compaction heuristic.
+            // Currently, this is just the dirty ratio.
+            auto compute_compaction_heuristic =
+              [](ss::shared_ptr<log> l) -> compaction_heuristic_t {
+                return l->dirty_ratio();
+            };
+
+            auto compaction_heuristic_weight = compute_compaction_heuristic(
+              current_log.handle);
+            ntp_to_compaction_heuristic.emplace(
+              current_log.handle->config().ntp(), compaction_heuristic_weight);
+        }
     }
+
+    // If there are no partitions to compact, return early
+    if (ntp_to_compaction_heuristic.empty()) {
+        co_return;
+    }
+
+    auto sort_by_heuristic = [&ntp_to_compaction_heuristic](
+                               const log_housekeeping_meta& a,
+                               const log_housekeeping_meta& b) {
+        auto heuristic_it_a = ntp_to_compaction_heuristic.find(
+          a.handle->config().ntp());
+        compaction_heuristic_t heuristic_a
+          = (heuristic_it_a != ntp_to_compaction_heuristic.end())
+              ? heuristic_it_a->second
+              : 0.0;
+        auto heuristic_it_b = ntp_to_compaction_heuristic.find(
+          b.handle->config().ntp());
+        compaction_heuristic_t heuristic_b
+          = (heuristic_it_b != ntp_to_compaction_heuristic.end())
+              ? heuristic_it_b->second
+              : 0.0;
+        return heuristic_a > heuristic_b;
+    };
+
+    _logs_list.sort(sort_by_heuristic);
 
     if (
       config::shard_local_cfg().log_compaction_use_sliding_window.value()
@@ -274,6 +330,12 @@ log_manager::housekeeping_scan(model::timestamp collection_threshold) {
         _logs_list.shift_forward();
 
         current_log.flags |= bflags::compaction_checked;
+
+        if (!ntp_to_compaction_heuristic.contains(
+              current_log.handle->config().ntp())) {
+            continue;
+        }
+
         current_log.flags |= bflags::compacted;
         current_log.last_compaction = ss::lowres_clock::now();
 
