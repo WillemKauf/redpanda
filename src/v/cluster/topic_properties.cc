@@ -176,6 +176,7 @@ topic_properties::get_ntp_cfg_overrides() const {
     ret.iceberg_mode = iceberg_mode;
     ret.cloud_topic_enabled = cloud_topic_enabled;
     ret.tombstone_retention_ms = delete_retention_ms;
+    ret.min_cleanable_dirty_ratio = min_cleanable_dirty_ratio;
     return ret;
 }
 
