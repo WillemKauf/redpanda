@@ -220,7 +220,9 @@ log_manager::housekeeping_scan(model::timestamp collection_threshold) {
     // algorithm is: mark the logs visited, rotate _logs_list, op, and loop
     // until empty or reaching a marked log
     for (auto& log_meta : _logs_list) {
-        log_meta.flags &= ~(bflags::compacted | bflags::lifetime_checked);
+        log_meta.flags &= ~(
+          bflags::compacted | bflags::lifetime_checked
+          | bflags::compaction_checked);
     }
 
     /*
@@ -260,8 +262,9 @@ log_manager::housekeeping_scan(model::timestamp collection_threshold) {
         co_await compaction_map->initialize(compaction_mem_bytes);
         _compaction_hash_key_map = std::move(compaction_map);
     }
-    while (!_logs_list.empty()
-           && is_not_set(_logs_list.front().flags, bflags::compacted)) {
+    while (
+      !_logs_list.empty()
+      && is_not_set(_logs_list.front().flags, bflags::compaction_checked)) {
         if (_abort_source.abort_requested()) {
             co_return;
         }
@@ -270,6 +273,7 @@ log_manager::housekeeping_scan(model::timestamp collection_threshold) {
 
         _logs_list.shift_forward();
 
+        current_log.flags |= bflags::compaction_checked;
         current_log.flags |= bflags::compacted;
         current_log.last_compaction = ss::lowres_clock::now();
 
