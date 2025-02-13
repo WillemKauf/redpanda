@@ -262,6 +262,8 @@ public:
 
     uint64_t closed_segment_bytes() const { return _closed_segment_bytes; }
 
+    bool has_cloud_gc_offset() const { return _cloud_gc_offset.has_value(); }
+
     double dirty_ratio() const final;
 
 private:
