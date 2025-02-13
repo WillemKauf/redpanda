@@ -352,7 +352,8 @@ log_manager::housekeeping_scan(model::timestamp collection_threshold) {
           _config.compaction_priority,
           _abort_source,
           std::move(ntp_sanitizer_cfg),
-          _compaction_hash_key_map.get()));
+          _compaction_hash_key_map.get(),
+          &_disk_space_alert));
         _probe->housekeeping_log_processed();
 
         // bail out of compaction early in order to get back to gc
