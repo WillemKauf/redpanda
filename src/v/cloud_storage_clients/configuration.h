@@ -12,6 +12,7 @@
 
 #include "cloud_storage_clients/client_probe.h"
 #include "cloud_storage_clients/types.h"
+#include "features/feature_table.h"
 #include "model/metadata.h"
 #include "net/transport.h"
 #include "net/types.h"
@@ -138,5 +139,12 @@ infer_backend_from_uri(const access_point_uri& uri);
 model::cloud_storage_backend infer_backend_from_configuration(
   const client_configuration& client_config,
   model::cloud_credentials_source cloud_storage_credentials_source);
+
+// Returns the cloud storage backend, either by inference (pre-deprecation) or
+// by the cluster config cloud_storage_backend.
+model::cloud_storage_backend get_cloud_storage_backend(
+  const client_configuration& client_config,
+  model::cloud_credentials_source cloud_storage_credentials_source,
+  const features::feature_table& feature_table);
 
 } // namespace cloud_storage_clients

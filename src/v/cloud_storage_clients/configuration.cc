@@ -13,6 +13,7 @@
 #include "cloud_storage_clients/logger.h"
 #include "config/configuration.h"
 #include "config/tls_config.h"
+#include "model/metadata.h"
 #include "net/tls.h"
 #include "net/tls_certificate_probe.h"
 #include "utils/functional.h"
@@ -398,6 +399,29 @@ model::cloud_storage_backend infer_backend_from_configuration(
       uri());
 
     return result;
+}
+
+model::cloud_storage_backend get_cloud_storage_backend(
+  const client_configuration& client_config,
+  model::cloud_credentials_source cloud_storage_credentials_source,
+  const features::feature_table& feature_table) {
+    model::cloud_storage_backend backend
+      = config::shard_local_cfg().cloud_storage_backend;
+    if (backend == model::cloud_storage_backend::unknown) {
+        auto disallow_inference = feature_table.is_active(
+          features::feature::cloud_storage_backend_inference_removal);
+        if (disallow_inference) {
+            vassert(
+              false,
+              "model::cloud_storage_backend must be specified when using cloud "
+              "storage.");
+        } else {
+            backend = cloud_storage_clients::infer_backend_from_configuration(
+              cloud_configs.local().client_config,
+              cloud_configs.local().cloud_credentials_source);
+        }
+    }
+    return backend;
 }
 
 std::ostream& operator<<(std::ostream& o, const client_configuration& c) {

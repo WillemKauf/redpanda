@@ -1516,9 +1516,10 @@ void application::wire_up_redpanda_services(
                 [&c](cloud_storage::configuration cfg) { c = std::move(cfg); });
           })
           .get();
-        backend = cloud_storage_clients::infer_backend_from_configuration(
+        backend = cloud_storage_clients::get_cloud_storage_backend(
           cloud_configs.local().client_config,
-          cloud_configs.local().cloud_credentials_source);
+          cloud_configs.local().cloud_credentials_source,
+          feature_table.local());
         bucket = cloud_configs.local().bucket_name;
         construct_service(
           cloud_storage_clients,
