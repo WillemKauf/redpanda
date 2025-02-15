@@ -102,7 +102,8 @@ std::string_view to_string_view(feature f) {
         return "datalake_iceberg_ga";
     case feature::cloud_storage_metadata_rw_fence:
         return "cloud_storage_metadata_rw_fence";
-
+    case feature::cloud_storage_backend_inference_removal:
+        return "cloud_storage_backend_inference_removal";
     /*
      * testing features
      */

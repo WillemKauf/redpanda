@@ -71,7 +71,8 @@ enum class feature : std::uint64_t {
     raft_symmetric_reconfiguration_cancel = 1ULL << 55U,
     datalake_iceberg_ga = 1ULL << 56U,
     cloud_storage_metadata_rw_fence = 1ULL << 57U,
-    // Dummy features for testing only
+    cloud_storage_backend_inference_removal = 1ULL << 58U,
+    // dummy features for testing only
     test_alpha = 1ULL << 61U,
     test_bravo = 1ULL << 62U,
     test_charlie = 1ULL << 63U,
@@ -427,6 +428,12 @@ inline constexpr std::array feature_schema{
     "cloud_storage_read_write_fence",
     feature::cloud_storage_metadata_rw_fence,
     feature_spec::available_policy::always,
+    feature_spec::prepare_policy::always},
+  feature_spec{
+    release_version::v25_1_1,
+    "cloud_storage_backend_inference_removal",
+    feature::cloud_storage_backend_inference_removal,
+    feature_spec::available_policy::new_clusters_only,
     feature_spec::prepare_policy::always},
 };
 
