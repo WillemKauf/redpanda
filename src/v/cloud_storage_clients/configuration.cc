@@ -177,7 +177,7 @@ std::ostream& operator<<(std::ostream& o, const s3_configuration& c) {
       << ",server_addr:" << c.server_addr << ",max_idle_time:"
       << std::chrono::duration_cast<std::chrono::milliseconds>(c.max_idle_time)
            .count()
-      << "}";
+      << ", backend: " << c.backend << "}";
     return o;
 }
 
@@ -293,7 +293,8 @@ std::ostream& operator<<(std::ostream& o, const abs_configuration& c) {
       << ", max_idle_time:"
       << std::chrono::duration_cast<std::chrono::milliseconds>(c.max_idle_time)
            .count()
-      << ", is_hns_enabled:" << c.is_hns_enabled << "}";
+      << ", is_hns_enabled:" << c.is_hns_enabled << ", backend: " << c.backend
+      << "}";
     return o;
 }
 

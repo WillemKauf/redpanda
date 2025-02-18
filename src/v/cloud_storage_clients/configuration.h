@@ -40,6 +40,7 @@ struct common_configuration : net::base_transport::configuration {
     /// Metrics probe (should be created for every aws account on every shard)
     ss::shared_ptr<client_probe> _probe;
 
+    model::cloud_storage_backend backend;
     bool requires_self_configuration{false};
 };
 
