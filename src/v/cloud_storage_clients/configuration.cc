@@ -425,6 +425,11 @@ model::cloud_storage_backend get_cloud_storage_backend(
     return backend;
 }
 
+model::cloud_storage_backend get_cloud_storage_backend_from_client_conf(
+  const cloud_storage_clients::client_configuration& client_config) {
+    return ss::visit(client_config, [&](auto& cfg) { return cfg.backend; });
+}
+
 std::ostream& operator<<(std::ostream& o, const client_configuration& c) {
     return std::visit(
       [&o](const auto& cfg) -> std::ostream& {

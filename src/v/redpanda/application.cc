@@ -1511,15 +1511,17 @@ void application::wire_up_redpanda_services(
         syschecks::systemd_message("Starting cloud IO").get();
         cloud_configs.start().get();
         cloud_configs
-          .invoke_on_all([](cloud_storage::configuration& c) {
-              return cloud_storage::configuration::get_config().then(
-                [&c](cloud_storage::configuration cfg) { c = std::move(cfg); });
+          .invoke_on_all([this](cloud_storage::configuration& c) {
+              return cloud_storage::configuration::get_config(
+                       feature_table.local())
+                .then([&c](cloud_storage::configuration cfg) {
+                    c = std::move(cfg);
+                });
           })
           .get();
-        backend = cloud_storage_clients::get_cloud_storage_backend(
-          cloud_configs.local().client_config,
-          cloud_configs.local().cloud_credentials_source,
-          feature_table.local());
+        backend
+          = cloud_storage_clients::get_cloud_storage_backend_from_client_conf(
+            cloud_configs.local().client_config);
         bucket = cloud_configs.local().bucket_name;
         construct_service(
           cloud_storage_clients,

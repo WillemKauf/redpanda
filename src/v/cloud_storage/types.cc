@@ -15,6 +15,8 @@
 #include "cloud_storage/logger.h"
 #include "config/node_config.h"
 #include "config/types.h"
+#include "features/feature_table.h"
+#include "model/metadata.h"
 
 #include <absl/container/node_hash_set.h>
 
@@ -333,12 +335,16 @@ static ss::sstring get_value_or_throw(
     return *opt;
 }
 
-ss::future<configuration> configuration::get_config() {
+ss::future<configuration>
+configuration::get_config(const features::feature_table& feature_table) {
+    configuration conf;
     if (config::shard_local_cfg().cloud_storage_azure_storage_account()) {
-        co_return co_await get_abs_config();
+        conf = co_await get_abs_config();
     } else {
-        co_return co_await get_s3_config();
+        conf = co_await get_s3_config();
     }
+    conf.set_client_conf_cloud_storage_backend(feature_table);
+    co_return conf;
 }
 
 ss::future<configuration> configuration::get_s3_config() {
@@ -471,6 +477,14 @@ configuration::get_bucket_config() {
     } else {
         return config::shard_local_cfg().cloud_storage_bucket;
     }
+}
+
+void configuration::set_client_conf_cloud_storage_backend(
+  const features::feature_table& feature_table) {
+    ss::visit(client_config, [&](auto& cfg) {
+        cfg.backend = cloud_storage_clients::get_cloud_storage_backend(
+          client_config, cloud_credentials_source, feature_table);
+    });
 }
 
 std::ostream& operator<<(std::ostream& os, upload_type upload) {

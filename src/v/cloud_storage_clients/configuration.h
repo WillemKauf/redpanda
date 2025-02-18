@@ -148,4 +148,7 @@ model::cloud_storage_backend get_cloud_storage_backend(
   model::cloud_credentials_source cloud_storage_credentials_source,
   const features::feature_table& feature_table);
 
+model::cloud_storage_backend get_cloud_storage_backend_from_client_conf(
+  const cloud_storage_clients::client_configuration& client_config);
+
 } // namespace cloud_storage_clients

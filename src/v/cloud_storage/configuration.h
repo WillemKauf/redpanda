@@ -11,6 +11,7 @@
 
 #include "cloud_storage/types.h"
 #include "cloud_storage_clients/configuration.h"
+#include "model/metadata.h"
 
 namespace cloud_storage {
 
@@ -26,11 +27,15 @@ struct configuration {
 
     friend std::ostream& operator<<(std::ostream& o, const configuration& cfg);
 
-    static ss::future<configuration> get_config();
+    static ss::future<configuration>
+    get_config(const features::feature_table& feature_table);
     static ss::future<configuration> get_s3_config();
     static ss::future<configuration> get_abs_config();
     static const config::property<std::optional<ss::sstring>>&
     get_bucket_config();
+
+    void set_client_conf_cloud_storage_backend(
+      const features::feature_table& feature_table);
 };
 
 } // namespace cloud_storage
