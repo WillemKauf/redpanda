@@ -15,6 +15,7 @@
 #include "cloud_io/logger.h"
 #include "cloud_io/provider.h"
 #include "cloud_io/transfer_details.h"
+#include "cloud_storage/configuration.h"
 #include "cloud_storage_clients/client_pool.h"
 #include "cloud_storage_clients/configuration.h"
 #include "cloud_storage_clients/types.h"
@@ -62,7 +63,7 @@ size_t num_chunks(const R& r, size_t max_batch_size) {
 static constexpr auto gcs_scheme = "gs";
 static constexpr auto s3_scheme = "s3";
 
-cloud_io::provider infer_provider(
+cloud_io::provider get_cloud_io_provider(
   model::cloud_storage_backend backend,
   const cloud_storage_clients::client_configuration& conf) {
     switch (backend) {
@@ -99,10 +100,9 @@ remote::remote(
   , _resources(std::make_unique<io_resources>())
   , _azure_shared_key_binding(
       config::shard_local_cfg().cloud_storage_azure_shared_key.bind())
-  , _cloud_storage_backend{cloud_storage_clients::
-                             infer_backend_from_configuration(
-                               conf, cloud_credentials_source)}
-  , _provider(infer_provider(_cloud_storage_backend, conf)) {
+  , _cloud_storage_backend(
+      cloud_storage_clients::get_cloud_storage_backend_from_client_conf(conf))
+  , _provider(get_cloud_io_provider(_cloud_storage_backend, conf)) {
     vlog(
       log.info, "remote initialized with backend {}", _cloud_storage_backend);
     // If the credentials source is from config file, bypass the background

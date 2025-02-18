@@ -70,6 +70,92 @@ build_tls_credentials(
       std::move(cred_builder), "cloud_storage_client", std::move(name));
 };
 
+// In the case of S3-compatible providers, all that is needed to infer the
+// backend is the access point/uri.
+model::cloud_storage_backend infer_cloud_storage_backend_from_uri(
+  const cloud_storage_clients::access_point_uri& uri) {
+    auto result
+      = string_switch<model::cloud_storage_backend>(uri())
+          .match_expr("google", model::cloud_storage_backend::google_s3_compat)
+          .match_expr(R"(127\.0\.0\.1)", model::cloud_storage_backend::aws)
+          .match_expr("localhost", model::cloud_storage_backend::aws)
+          .match_expr("minio", model::cloud_storage_backend::minio)
+          .match_expr("amazon", model::cloud_storage_backend::aws)
+          .match_expr(
+            "oraclecloud", model::cloud_storage_backend::oracle_s3_compat)
+          .default_match(model::cloud_storage_backend::unknown);
+    return result;
+}
+
+// Attempts to infer the cloud storage backend from the provided client config
+// and credentials source. If we are unable to infer from these, in the case of
+// S3-compatible vendors, we attempt to infer using the access point URI.
+//
+// NOTE: Inference for the cloud storage backend is deprecated as of v25.1.
+// New clusters spun up past this version MUST provide the cloud storage backend
+// as a cluster property via `cloud_storage_backend`. Clusters with an original
+// version lower than v25.1 which have historically relied on inference will
+// continue to use this code path.
+model::cloud_storage_backend infer_cloud_storage_backend(
+  const cloud_storage_clients::client_configuration& client_config,
+  model::cloud_credentials_source cloud_storage_credentials_source) {
+    if (auto v = config::shard_local_cfg().cloud_storage_backend.value();
+        v != model::cloud_storage_backend::unknown) {
+        vlog(
+          cloud_storage_clients::client_config_log.info,
+          "cloud_storage_backend is explicitly set to {}",
+          v);
+        return v;
+    }
+
+    if (std::holds_alternative<cloud_storage_clients::abs_configuration>(
+          client_config)) {
+        return model::cloud_storage_backend::azure;
+    }
+
+    switch (cloud_storage_credentials_source) {
+    case model::cloud_credentials_source::aws_instance_metadata:
+        [[fallthrough]];
+    case model::cloud_credentials_source::sts:
+        vlog(
+          cloud_storage_clients::client_config_log.info,
+          "cloud_storage_backend derived from cloud_credentials_source {} "
+          "as aws",
+          cloud_storage_credentials_source);
+        return model::cloud_storage_backend::aws;
+    case model::cloud_credentials_source::gcp_instance_metadata:
+        vlog(
+          cloud_storage_clients::client_config_log.info,
+          "cloud_storage_backend derived from cloud_credentials_source {} "
+          "as google_s3_compat",
+          cloud_storage_credentials_source);
+        return model::cloud_storage_backend::google_s3_compat;
+    case model::cloud_credentials_source::azure_aks_oidc_federation:
+    case model::cloud_credentials_source::azure_vm_instance_metadata:
+        vlog(
+          cloud_storage_clients::client_config_log.info,
+          "cloud_storage_backend derived from cloud_credentials_source {} "
+          "as azure",
+          cloud_storage_credentials_source);
+        return model::cloud_storage_backend::azure;
+    case model::cloud_credentials_source::config_file:
+        break;
+    }
+
+    auto& s3_config = std::get<cloud_storage_clients::s3_configuration>(
+      client_config);
+    const auto& uri = s3_config.uri;
+    auto result = infer_cloud_storage_backend_from_uri(uri);
+
+    vlog(
+      cloud_storage_clients::client_config_log.info,
+      "Inferred backend {} using uri: {}",
+      result,
+      uri());
+
+    return result;
+}
+
 } // namespace
 
 namespace cloud_storage_clients {
@@ -329,79 +415,6 @@ operator<<(std::ostream& o, const client_self_configuration_output& r) {
       r);
 }
 
-model::cloud_storage_backend
-infer_backend_from_uri(const access_point_uri& uri) {
-    auto result
-      = string_switch<model::cloud_storage_backend>(uri())
-          .match_expr("google", model::cloud_storage_backend::google_s3_compat)
-          .match_expr(R"(127\.0\.0\.1)", model::cloud_storage_backend::aws)
-          .match_expr("localhost", model::cloud_storage_backend::aws)
-          .match_expr("minio", model::cloud_storage_backend::minio)
-          .match_expr("amazon", model::cloud_storage_backend::aws)
-          .match_expr(
-            "oraclecloud", model::cloud_storage_backend::oracle_s3_compat)
-          .default_match(model::cloud_storage_backend::unknown);
-    return result;
-}
-
-model::cloud_storage_backend infer_backend_from_configuration(
-  const client_configuration& client_config,
-  model::cloud_credentials_source cloud_storage_credentials_source) {
-    if (auto v = config::shard_local_cfg().cloud_storage_backend.value();
-        v != model::cloud_storage_backend::unknown) {
-        vlog(
-          client_config_log.info,
-          "cloud_storage_backend is explicitly set to {}",
-          v);
-        return v;
-    }
-
-    if (std::holds_alternative<abs_configuration>(client_config)) {
-        return model::cloud_storage_backend::azure;
-    }
-
-    switch (cloud_storage_credentials_source) {
-    case model::cloud_credentials_source::aws_instance_metadata:
-        [[fallthrough]];
-    case model::cloud_credentials_source::sts:
-        vlog(
-          client_config_log.info,
-          "cloud_storage_backend derived from cloud_credentials_source {} "
-          "as aws",
-          cloud_storage_credentials_source);
-        return model::cloud_storage_backend::aws;
-    case model::cloud_credentials_source::gcp_instance_metadata:
-        vlog(
-          client_config_log.info,
-          "cloud_storage_backend derived from cloud_credentials_source {} "
-          "as google_s3_compat",
-          cloud_storage_credentials_source);
-        return model::cloud_storage_backend::google_s3_compat;
-    case model::cloud_credentials_source::azure_aks_oidc_federation:
-    case model::cloud_credentials_source::azure_vm_instance_metadata:
-        vlog(
-          client_config_log.info,
-          "cloud_storage_backend derived from cloud_credentials_source {} "
-          "as azure",
-          cloud_storage_credentials_source);
-        return model::cloud_storage_backend::azure;
-    case model::cloud_credentials_source::config_file:
-        break;
-    }
-
-    auto& s3_config = std::get<s3_configuration>(client_config);
-    const auto& uri = s3_config.uri;
-    auto result = infer_backend_from_uri(uri);
-
-    vlog(
-      client_config_log.info,
-      "Inferred backend {} using uri: {}",
-      result,
-      uri());
-
-    return result;
-}
-
 model::cloud_storage_backend get_cloud_storage_backend(
   const client_configuration& client_config,
   model::cloud_credentials_source cloud_storage_credentials_source,
@@ -414,12 +427,11 @@ model::cloud_storage_backend get_cloud_storage_backend(
         if (disallow_inference) {
             vassert(
               false,
-              "model::cloud_storage_backend must be specified when using cloud "
-              "storage.");
+              "The cluster property `cloud_storage_backend` must be specified "
+              "when using cloud storage.");
         } else {
-            backend = cloud_storage_clients::infer_backend_from_configuration(
-              cloud_configs.local().client_config,
-              cloud_configs.local().cloud_credentials_source);
+            backend = infer_cloud_storage_backend(
+              client_config, cloud_storage_credentials_source);
         }
     }
     return backend;
