@@ -544,7 +544,8 @@ s3_client::s3_client(
   ss::lw_shared_ptr<const cloud_roles::apply_credentials> apply_credentials)
   : _requestor(conf, std::move(apply_credentials))
   , _client(conf)
-  , _probe(conf._probe) {}
+  , _probe(conf._probe)
+  , _backend(conf.backend) {}
 
 s3_client::s3_client(
   const s3_configuration& conf,
@@ -552,7 +553,8 @@ s3_client::s3_client(
   ss::lw_shared_ptr<const cloud_roles::apply_credentials> apply_credentials)
   : _requestor(conf, std::move(apply_credentials))
   , _client(conf, &as, conf._probe, conf.max_idle_time)
-  , _probe(conf._probe) {}
+  , _probe(conf._probe)
+  , _backend(conf.backend) {}
 
 ss::future<result<client_self_configuration_output, error_outcome>>
 s3_client::self_configure() {
@@ -563,8 +565,7 @@ s3_client::self_configure() {
     // but self-configuration will misconfigure to virtual-host style due to a
     // ListObjects request that happens to succeed. Override for this
     // specific case.
-    auto inferred_backend = infer_backend_from_uri(_requestor._ap);
-    if (inferred_backend == model::cloud_storage_backend::oracle_s3_compat) {
+    if (_backend == model::cloud_storage_backend::oracle_s3_compat) {
         result.url_style = s3_url_style::path;
         co_return result;
     }

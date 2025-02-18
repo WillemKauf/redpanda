@@ -17,6 +17,7 @@
 #include "cloud_storage_clients/types.h"
 #include "http/client.h"
 #include "model/fundamental.h"
+#include "model/metadata.h"
 
 #include <seastar/core/future.hh>
 #include <seastar/core/lowres_clock.hh>
@@ -258,6 +259,7 @@ private:
     request_creator _requestor;
     http::client _client;
     ss::shared_ptr<client_probe> _probe;
+    model::cloud_storage_backend _backend;
 };
 
 std::variant<client::delete_objects_result, rest_error_response>
