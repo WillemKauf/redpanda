@@ -86,8 +86,8 @@ public:
     ss::future<> truncate(truncate_config) final;
     ss::future<> truncate_prefix(truncate_prefix_config) final;
     ss::future<> housekeeping(housekeeping_config) final;
-    ss::future<> apply_segment_ms() final;
     ss::future<> gc(gc_config) final;
+    ss::future<> apply_segment_ms() final;
 
     ss::future<model::offset> monitor_eviction(ss::abort_source&) final;
 
@@ -519,6 +519,11 @@ private:
     // number of self compactions that must occur before attempting to
     // compaction adjacent segments.
     size_t _adjacent_merge_counter{0};
+
+    // Mutex used for handling concurrency between housekeeping
+    // (`disk_log_impl::housekeeping()`) and urgent garbage collection (`gc()`
+    // related functions).
+    mutex _housekeeping_lock{"housekeeping_lock"};
 };
 
 } // namespace storage

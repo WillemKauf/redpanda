@@ -1190,6 +1190,7 @@ gc_config disk_log_impl::apply_overrides(gc_config defaults) const {
 
 ss::future<> disk_log_impl::housekeeping(housekeeping_config cfg) {
     ss::gate::holder holder{_compaction_housekeeping_gate};
+    auto housekeeping_lock_holder = co_await _housekeeping_lock.get_units();
     vlog(
       gclog.trace,
       "[{}] house keeping with configuration from manager: {}",
