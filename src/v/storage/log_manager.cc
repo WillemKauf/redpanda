@@ -960,4 +960,14 @@ void log_manager::update_log_count() {
     _probe->set_log_count(count);
 }
 
+std::ostream&
+operator<<(std::ostream& o, const log_manager::housekeeping_job_t& h) {
+    switch (h) {
+    case log_manager::housekeeping_job_t::housekeeping:
+        return o << "housekeeping";
+    case log_manager::housekeeping_job_t::gc:
+        return o << "gc";
+    }
+}
+
 } // namespace storage
