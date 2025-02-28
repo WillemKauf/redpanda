@@ -46,7 +46,8 @@ std::ostream& operator<<(std::ostream& o, const topic_properties& properties) {
       "iceberg_partition_spec: {}, "
       "iceberg_invalid_record_action: {}, "
       "iceberg_target_lag_ms: {}, "
-      "min_cleanable_dirty_ratio: {}",
+      "min_cleanable_dirty_ratio: {}, "
+      "max_compaction_lag_ms: {}",
       properties.compression,
       properties.cleanup_policy_bitflags,
       properties.compaction_strategy,
@@ -87,7 +88,8 @@ std::ostream& operator<<(std::ostream& o, const topic_properties& properties) {
       properties.iceberg_partition_spec,
       properties.iceberg_invalid_record_action,
       properties.iceberg_target_lag_ms,
-      properties.min_cleanable_dirty_ratio);
+      properties.min_cleanable_dirty_ratio,
+      properties.max_compaction_lag_ms);
 
     if (config::shard_local_cfg().development_enable_cloud_topics()) {
         fmt::print(
@@ -136,7 +138,8 @@ bool topic_properties::has_overrides() const {
         || iceberg_delete.has_value() || iceberg_partition_spec.has_value()
         || iceberg_invalid_record_action.has_value()
         || iceberg_target_lag_ms.has_value()
-        || min_cleanable_dirty_ratio.is_engaged();
+        || min_cleanable_dirty_ratio.is_engaged()
+        || max_compaction_lag_ms.has_value();
 
     if (config::shard_local_cfg().development_enable_cloud_topics()) {
         return overrides
@@ -277,6 +280,7 @@ adl<cluster::topic_properties>::from(iobuf_parser& parser) {
       std::nullopt,
       std::nullopt,
       tristate<double>{std::nullopt},
+      std::nullopt,
     };
 }
 
