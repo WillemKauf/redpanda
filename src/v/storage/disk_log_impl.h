@@ -470,6 +470,15 @@ private:
     // since last window compaction.
     std::optional<model::offset> _last_compaction_window_start_offset;
 
+    // The offset at which the FULL round of last window compaction started.
+    // After it completes, this helps define the `_compaction_lag_offset`.
+    std::optional<model::offset> _last_compaction_window_end_offset;
+
+    // The last offset, inclusive, that was made cleanly compacted.
+    // This means that the next offset is the first "dirty" (in the compaction
+    // sense) offset.
+    model::offset _compaction_lag_offset;
+
     // Clears stateful data used for sliding window compaction.
     void reset_sliding_window_round();
 

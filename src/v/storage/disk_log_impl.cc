@@ -144,13 +144,25 @@ disk_log_impl::disk_log_impl(
       _manager.config().readers_cache_eviction_timeout,
       config::shard_local_cfg().readers_cache_target_max_size.bind()))
   , _compaction_enabled(config().is_compacted()) {
+    std::optional<model::offset> compaction_lag_offset;
     for (auto& s : _segs) {
         _probe->add_initial_segment(*s);
         if (_compaction_enabled) {
             s->mark_as_compacted_segment();
         }
         add_segment_bytes(s, s->size_bytes());
+        if (
+          !s->has_clean_compact_timestamp()
+          && !compaction_lag_offset.has_value()) {
+            // model::prev_offset() because model::next_offset() is used in
+            // compaction_lag_timestamp() (compaction_lag_offset is inclusive of
+            // cleaned records)
+            compaction_lag_offset = model::prev_offset(
+              s->offsets().get_base_offset());
+        }
     }
+    _compaction_lag_offset = compaction_lag_offset.value_or(
+      model::offset::min());
     _probe->initial_segments_count(_segs.size());
     _probe->setup_metrics(this->config().ntp());
 }
@@ -671,6 +683,13 @@ ss::future<bool> disk_log_impl::sliding_window_compact(
       segs.front()->filename(),
       segs.back()->filename());
 
+    if (!_last_compaction_window_end_offset.has_value()) {
+        // This is the start of a brand new sliding window round.
+        // Book-keep the end offset (i.e, the dirty offset of the last segment)
+        _last_compaction_window_end_offset
+          = segs.back()->offsets().get_dirty_offset();
+    }
+
     // TODO: add configuration to use simple_key_offset_map.
     std::unique_ptr<simple_key_offset_map> simple_map;
     if (cfg.hash_key_map) {
@@ -702,10 +721,11 @@ ss::future<bool> disk_log_impl::sliding_window_compact(
           "[{}] failed to build offset map. Stopping compaction: {}",
           config().ntp(),
           std::current_exception());
-        // Reset the sliding window start offset so that compaction may still
-        // make progress in the future. Otherwise, we will fail to build the
-        // offset map for the same segment over and over.
+        // We shouldn't hit this code path anymore. However, to be safe, reset
+        // the start and end offsets to allow new segments into the sliding
+        // window range.
         _last_compaction_window_start_offset.reset();
+        _last_compaction_window_end_offset.reset();
         co_return false;
     }
 
@@ -4224,6 +4244,13 @@ void disk_log_impl::reset_sliding_window_round() {
     // Reset the start offset so we can allow new segments into future sliding
     // window rounds.
     _last_compaction_window_start_offset.reset();
+
+    // Set the new compaction lag offset (in other words, the last cleanly
+    // compacted offset)
+    if (_last_compaction_window_end_offset.has_value()) {
+        _compaction_lag_offset = _last_compaction_window_end_offset.value();
+        _last_compaction_window_end_offset.reset();
+    }
 
     _probe->add_sliding_window_round_complete();
 }
