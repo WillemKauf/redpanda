@@ -5693,3 +5693,69 @@ FIXTURE_TEST(compaction_scheduling, storage_test_fixture) {
         auto batches = read_and_validate_all_batches(log);
     }
 }
+
+FIXTURE_TEST(max_compaction_lag_ms_scheduling, storage_test_fixture) {
+    using log_manager_accessor = storage::testing_details::log_manager_accessor;
+    storage::log_manager mgr = make_log_manager();
+    info("Configuration: {}", mgr.config());
+    auto deferred = ss::defer([&mgr]() mutable { mgr.stop().get(); });
+
+    // Make the dirty ratio very restrictive, but max.compaction.lag.ms=1ms.
+    // This should essentially force unconditional compaction.
+    auto very_restrictive_dirty_ratio = 0.95;
+    using overrides_t = storage::ntp_config::default_overrides;
+    overrides_t ov;
+    ov.cleanup_policy_bitflags = model::cleanup_policy_bitflags::compaction;
+    ov.min_cleanable_dirty_ratio = tristate<double>{
+      very_restrictive_dirty_ratio};
+    ov.max_compaction_lag_ms = std::make_optional<std::chrono::milliseconds>(
+      1ms);
+
+    auto ntp = model::ntp("kafka", "tapioca", 0);
+    auto log
+      = mgr
+          .manage(storage::ntp_config(
+            ntp, mgr.config().base_dir, std::make_unique<overrides_t>(ov)))
+          .get();
+
+    auto& meta_list = log_manager_accessor::logs_list(mgr);
+    auto& log_meta = meta_list.front();
+
+    using bflags = storage::log_housekeeping_meta::bitflags;
+
+    static constexpr auto is_set = [](bflags var, auto flag) {
+        return (var & flag) == flag;
+    };
+
+    // Floating point comparison tolerance
+    static constexpr auto tol = 1.0e-6;
+
+    auto append_and_force_roll = [this](auto& log, int num_batches = 10) {
+        auto headers = append_random_batches<linear_int_kv_batch_generator>(
+          log, num_batches);
+        log->force_roll(ss::default_priority_class()).get();
+    };
+
+    // Append batches and force roll. We expect a dirty ratio of 1.0 in this
+    // case.
+    append_and_force_roll(log, 30);
+    BOOST_REQUIRE_CLOSE(log->dirty_ratio(), 1.0, tol);
+
+    // Compact for the first time, expect a dirty ratio of 0.0.
+    log_manager_accessor::housekeeping_scan(mgr).get();
+    BOOST_REQUIRE(is_set(log_meta.flags, bflags::compacted));
+    BOOST_REQUIRE_CLOSE(log->dirty_ratio(), 0.0, tol);
+
+    // Append fewer batches and force roll.
+    append_and_force_roll(log, 10);
+    BOOST_REQUIRE_LT(log->dirty_ratio(), very_restrictive_dirty_ratio);
+
+    ss::sleep(1000ms).get();
+
+    // Despite the fact the min.cleanable.dirty.ratio is much higher than the
+    // log's current dirty_ratio(), max.compaction.lag.ms forces the compaction
+    // to occur.
+    log_manager_accessor::housekeeping_scan(mgr).get();
+    BOOST_REQUIRE(is_set(log_meta.flags, bflags::compacted));
+    BOOST_REQUIRE_CLOSE(log->dirty_ratio(), 0.0, tol);
+}
