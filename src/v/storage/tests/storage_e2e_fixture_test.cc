@@ -215,3 +215,43 @@ FIXTURE_TEST(test_concurrent_segment_roll_and_ntp_remove, storage_e2e_fixture) {
 
     ss::when_all(std::move(roll_fut), std::move(remove_ntp_fut)).get();
 }
+
+FIXTURE_TEST(test_max_compaction_lag_ms_rolls_segment, storage_e2e_fixture) {
+    test_local_cfg.get("log_segment_ms_min")
+      .set_value(std::chrono::duration_cast<std::chrono::milliseconds>(1ms));
+
+    const auto topic_name = model::topic("tapioca");
+    const auto ntp = model::ntp(model::kafka_namespace, topic_name, 0);
+
+    cluster::topic_properties props;
+    // Set segment_ms arbitrarily high.
+    props.segment_ms = tristate<std::chrono::milliseconds>(24h);
+
+    // Set max.compaction.lag.ms and cleanup.policy=compact
+    props.max_compaction_lag_ms = std::optional<std::chrono::milliseconds>(
+      100ms);
+    props.cleanup_policy_bitflags = model::cleanup_policy_bitflags::compaction;
+
+    add_topic({model::kafka_namespace, topic_name}, 1, props).get();
+    wait_for_leader(ntp).get();
+
+    auto partition = app.partition_manager.local().get(ntp);
+    auto* log = dynamic_cast<storage::disk_log_impl*>(partition->log().get());
+
+    // Call apply_segment_ms() in a loop until 5 segments are in the log.
+    size_t offset = 0;
+    tests::kafka_produce_transport producer(make_kafka_client().get());
+    producer.start().get();
+    while (log->segment_count() < 5) {
+        // Produced at least one record to the partition (otherwise
+        // apply_segment_ms() won't roll)
+        producer
+          .produce_to_partition(
+            topic_name,
+            model::partition_id(0),
+            tests::kv_t::sequence(offset++, 1))
+          .get();
+        log->apply_segment_ms().get();
+        ss::sleep(500ms).get();
+    }
+}

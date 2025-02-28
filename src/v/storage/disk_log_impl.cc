@@ -2075,6 +2075,15 @@ ss::future<> disk_log_impl::apply_segment_ms() {
     }
 
     auto seg_ms = config().segment_ms();
+
+    // If the log is compacted, segment rolls are also controlled by
+    // max.compaction.lag.ms. See KIP-354.
+    if (config().is_compacted()) {
+        seg_ms = std::min(
+          seg_ms.value_or(std::chrono::milliseconds::max()),
+          config().max_compaction_lag_ms());
+    }
+
     if (!seg_ms.has_value()) {
         // skip, disabled or no default value
         co_return;
