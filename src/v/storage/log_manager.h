@@ -266,11 +266,6 @@ private:
       std::vector<model::record_batch_type> translator_batch_types);
     ss::future<> clean_close(ss::shared_ptr<storage::log>);
 
-    /**
-     * \brief delete old segments and trigger compacted segments
-     *        runs inside a seastar thread
-     */
-    ss::future<> housekeeping();
     enum class housekeeping_job_t {
         housekeeping, // Performs garbage collection and then compaction.
         gc            // Performs urgent garbage collection.
@@ -278,10 +273,25 @@ private:
 
     friend std::ostream& operator<<(std::ostream&, const housekeeping_job_t&);
 
+    // Kicks off a housekeeping job loop specified by the template parameter.
+    template<housekeeping_job_t job_t>
+    ss::future<> run_housekeeping_job();
+
+    // The housekeeping loop, which runs according to
+    // `log_compaction_interval_ms`. Calls into log->housekeeping() serially,
+    // which invokes garbage collection and then compaction.
     ss::future<> housekeeping_loop();
     ss::future<> housekeeping_scan(model::timestamp);
     ssx::semaphore _housekeeping_sem{0, "log_manager::housekeeping"};
 
+    // The garbage collection loop, which waits for urgent garbage collection to
+    // be triggered by space management via trigger_gc(), or by an update to
+    // disk alerts via handle_disk_notification(). In order of estimated
+    // reclaimable space, per-partition garbage collection futures are kicked
+    // off and waited on. This loop runs in a detached fibre
+    // concurrently with housekeeping_loop(), and therefore considerations about
+    // scheduling/early bailing out of compaction must be taken.
+    ss::future<> gc_loop();
     bool _gc_triggered{false};
     ssx::semaphore _gc_sem{0, "log_manager::gc"};
 
