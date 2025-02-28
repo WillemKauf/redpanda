@@ -290,6 +290,30 @@ log_manager::housekeeping_scan(model::timestamp collection_threshold) {
               = l->config().min_cleanable_dirty_ratio().value_or(0.0);
             const auto dirty_ratio = l->dirty_ratio();
             if (dirty_ratio >= min_cleanable_dirty_ratio) {
+                vlog(
+                  gclog.trace,
+                  "{}: Triggering compaction due to dirty ratio ({}) >= "
+                  "min.cleanable.dirty_ratio ({})",
+                  l->config().ntp(),
+                  dirty_ratio,
+                  min_cleanable_dirty_ratio);
+                return true;
+            }
+
+            // Consider max.compaction.lag.ms.
+            const auto max_compaction_lag_ms
+              = l->config().max_compaction_lag_ms();
+
+            auto compact_lag_ts = l->compaction_lag_timestamp();
+            auto compact_lag_horizon = model::timestamp(
+              compact_lag_ts.value() + max_compaction_lag_ms.count());
+            if (model::timestamp::now() > compact_lag_horizon) {
+                vlog(
+                  gclog.trace,
+                  "{}: Triggering compaction due to compaction lag timestamp "
+                  "{}",
+                  l->config().ntp(),
+                  compact_lag_horizon);
                 return true;
             }
 
