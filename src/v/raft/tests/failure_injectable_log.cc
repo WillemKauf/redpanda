@@ -32,6 +32,9 @@ ss::future<>
 failure_injectable_log::truncate_prefix(storage::truncate_prefix_config tpc) {
     return _underlying_log->truncate_prefix(tpc);
 }
+ss::future<> failure_injectable_log::try_gc(storage::gc_config cfg) {
+    return _underlying_log->try_gc(cfg);
+}
 ss::future<> failure_injectable_log::gc(storage::gc_config cfg) {
     return _underlying_log->gc(cfg);
 }

@@ -1539,6 +1539,18 @@ ss::future<> disk_log_impl::rewrite_segment_with_offset_map(
     vlog(gclog.debug, "[{}] Final compacted segment {}", config().ntp(), seg);
 }
 
+ss::future<> disk_log_impl::try_gc(gc_config cfg) {
+    ss::gate::holder holder{_compaction_housekeeping_gate};
+    // Attempt to get units from the _housekeeping_lock right away.
+    // If we are unable to, there is a housekeeping (gc/compaction) fiber
+    // underway for this log.
+    auto housekeeping_lock_holder = _housekeeping_lock.try_get_units();
+    if (!housekeeping_lock_holder.has_value()) {
+        co_return;
+    }
+    co_await do_gc(cfg);
+}
+
 ss::future<> disk_log_impl::gc(gc_config cfg) {
     ss::gate::holder holder{_compaction_housekeeping_gate};
     co_await do_gc(cfg);

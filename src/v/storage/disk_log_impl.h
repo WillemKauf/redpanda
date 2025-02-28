@@ -85,7 +85,12 @@ public:
     ss::future<> flush() final;
     ss::future<> truncate(truncate_config) final;
     ss::future<> truncate_prefix(truncate_prefix_config) final;
+    // Attempts to hold `_housekeeping_lock`. Cannot be concurrent with
+    // `disk_log_impl::gc()` related functions.
     ss::future<> housekeeping(housekeeping_config) final;
+    // Attempts to hold `_housekeeping_lock`. Cannot be concurrent with
+    // `disk_log_impl::housekeeping()`.
+    ss::future<> try_gc(gc_config) final;
     ss::future<> gc(gc_config) final;
     ss::future<> apply_segment_ms() final;
 

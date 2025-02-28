@@ -80,6 +80,7 @@ public:
      * be replayed against the snapshot is X+1.
      */
     virtual ss::future<> truncate_prefix(truncate_prefix_config) = 0;
+    virtual ss::future<> try_gc(gc_config) = 0;
     virtual ss::future<> gc(gc_config) = 0;
 
     // TODO should compact be merged in this?

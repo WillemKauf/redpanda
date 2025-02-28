@@ -40,6 +40,7 @@ public:
     ss::future<> truncate(storage::truncate_config) final;
 
     ss::future<> truncate_prefix(storage::truncate_prefix_config) final;
+    ss::future<> try_gc(storage::gc_config) final;
     ss::future<> gc(storage::gc_config) final;
     ss::future<> apply_segment_ms() final;
 
