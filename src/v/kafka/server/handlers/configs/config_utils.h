@@ -559,6 +559,24 @@ struct min_cleanable_dirty_ratio_validator {
     }
 };
 
+struct max_compaction_lag_ms_validator {
+    std::optional<ss::sstring> operator()(
+      const ss::sstring&,
+      const std::optional<std::chrono::milliseconds>& maybe_value) {
+        if (!maybe_value) {
+            return std::nullopt;
+        }
+        auto value = maybe_value.value();
+        if (value < 1ms || value > serde::max_serializable_ms) {
+            return fmt::format(
+              "max.compaction.lag.ms value invalid, expected to be in range "
+              "[1, {}]",
+              serde::max_serializable_ms);
+        }
+        return std::nullopt;
+    }
+};
+
 template<typename T, typename... ValidatorTypes>
 requires requires(
   model::topic_namespace_view tns,

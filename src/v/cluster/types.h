@@ -644,10 +644,11 @@ struct incremental_topic_updates
     property_update<std::optional<ss::sstring>> iceberg_partition_spec;
     property_update<std::optional<model::iceberg_invalid_record_action>>
       iceberg_invalid_record_action;
-    property_update<tristate<double>> min_cleanable_dirty_ratio;
-
     property_update<std::optional<std::chrono::milliseconds>>
       iceberg_target_lag_ms;
+    property_update<tristate<double>> min_cleanable_dirty_ratio;
+    property_update<std::optional<std::chrono::milliseconds>>
+      max_compaction_lag_ms;
 
     // To allow us to better control use of the deprecated shadow_indexing
     // field, use getters and setters instead.
@@ -691,7 +692,8 @@ struct incremental_topic_updates
           iceberg_partition_spec,
           iceberg_invalid_record_action,
           iceberg_target_lag_ms,
-          min_cleanable_dirty_ratio);
+          min_cleanable_dirty_ratio,
+          max_compaction_lag_ms);
     }
 
     friend std::ostream&

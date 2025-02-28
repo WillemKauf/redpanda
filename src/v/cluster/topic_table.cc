@@ -1113,6 +1113,9 @@ topic_properties topic_table::update_topic_properties(
     incremental_update(
       updated_properties.min_cleanable_dirty_ratio,
       overrides.min_cleanable_dirty_ratio);
+    incremental_update(
+      updated_properties.max_compaction_lag_ms,
+      overrides.max_compaction_lag_ms);
 
     return updated_properties;
 }

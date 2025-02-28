@@ -1049,6 +1049,19 @@ config_response_container_t make_topic_configs(
         include_documentation,
         config::shard_local_cfg().min_cleanable_dirty_ratio.desc()));
 
+    add_topic_config_if_requested(
+      config_keys,
+      result,
+      config::shard_local_cfg().max_compaction_lag_ms.name(),
+      config::shard_local_cfg().max_compaction_lag_ms(),
+      topic_property_max_compaction_lag_ms,
+      topic_properties.max_compaction_lag_ms,
+      include_synonyms,
+      maybe_make_documentation(
+        include_documentation,
+        config::shard_local_cfg().max_compaction_lag_ms.desc()),
+      &describe_as_string<std::chrono::milliseconds>);
+
     return result;
 }
 

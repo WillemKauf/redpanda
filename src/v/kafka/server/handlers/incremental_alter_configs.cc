@@ -405,6 +405,14 @@ create_topic_properties_update(
                   min_cleanable_dirty_ratio_validator{});
                 continue;
             }
+            if (cfg.name == topic_property_max_compaction_lag_ms) {
+                parse_and_set_optional_duration(
+                  update.properties.max_compaction_lag_ms,
+                  cfg.value,
+                  op,
+                  max_compaction_lag_ms_validator{});
+                continue;
+            }
         } catch (const validation_error& e) {
             vlog(
               klog.debug,

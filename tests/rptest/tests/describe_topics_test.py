@@ -323,6 +323,16 @@ class DescribeTopicsTest(RedpandaTest):
                 "before a partition's log is eligible for compaction in a compact topic. "
                 "The topic property `min.cleanable.dirty.ratio` overrides the value of "
                 "`min_cleanable_dirty_ratio` at the topic level."),
+            "max.compaction.lag.ms":
+            ConfigProperty(
+                config_type="LONG",
+                value="604800000",
+                doc_string=
+                "The maximum amount of time a record is considered ineligible for "
+                "compaction in a compact topic. The topic property "
+                "`max.compaction.lag.ms` overrides the value of `max_compaction_lag_ms` "
+                "at the topic level.",
+            ),
         }
 
         tp_spec = TopicSpec()
