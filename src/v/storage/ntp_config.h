@@ -19,6 +19,7 @@
 
 #include <seastar/core/sstring.hh>
 
+#include <chrono>
 #include <optional>
 
 namespace storage {
@@ -87,6 +88,8 @@ public:
         tristate<std::chrono::milliseconds> tombstone_retention_ms;
 
         tristate<double> min_cleanable_dirty_ratio;
+
+        std::optional<std::chrono::milliseconds> max_compaction_lag_ms;
 
         friend std::ostream&
         operator<<(std::ostream&, const default_overrides&);
@@ -377,6 +380,14 @@ public:
             }
         }
         return config::shard_local_cfg().min_cleanable_dirty_ratio();
+    }
+
+    std::chrono::milliseconds max_compaction_lag_ms() const {
+        if (_overrides && _overrides->max_compaction_lag_ms.has_value()) {
+            return _overrides->max_compaction_lag_ms.value();
+        }
+
+        return config::shard_local_cfg().max_compaction_lag_ms();
     }
 
     ntp_config copy() const {
