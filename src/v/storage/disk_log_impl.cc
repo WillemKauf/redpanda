@@ -555,8 +555,7 @@ segment_set disk_log_impl::find_sliding_range(
           config().ntp(),
           _last_compaction_window_start_offset.value(),
           _segs.front()->offsets().get_base_offset());
-        _probe->add_sliding_window_round_complete();
-        _last_compaction_window_start_offset.reset();
+        reset_sliding_window_round();
     }
 
     // Collect all segments that have stable data.
@@ -724,22 +723,10 @@ ss::future<bool> disk_log_impl::sliding_window_compact(
       idx_start_offset,
       map.max_offset());
 
-    std::optional<model::offset> next_window_start_offset = idx_start_offset;
-    if (idx_start_offset == segs.front()->offsets().get_base_offset()) {
-        // We have cleanly compacted up to the first segment in the sliding
-        // range (not necessarily equivalent to the first segment in the log-
-        // segments may have been removed from the sliding range if they were
-        // already cleanly compacted or had no compactible offsets). Reset the
-        // start offset to allow new segments into the sliding window range.
-        vlog(
-          gclog.debug,
-          "[{}] fully de-duplicated up to start of sliding range with offset "
-          "{}, resetting sliding window start offset",
-          config().ntp(),
-          idx_start_offset);
-        _probe->add_sliding_window_round_complete();
-        next_window_start_offset.reset();
-    }
+    bool sliding_window_round_complete
+      = idx_start_offset == segs.front()->offsets().get_base_offset();
+
+    _last_compaction_window_start_offset = idx_start_offset;
 
     auto segment_modify_lock = co_await _segment_rewrite_lock.get_units();
     for (auto& seg : segs) {
@@ -757,7 +744,20 @@ ss::future<bool> disk_log_impl::sliding_window_compact(
           cfg, seg, map, is_finished_window_compaction, is_clean_compacted);
     }
 
-    _last_compaction_window_start_offset = next_window_start_offset;
+    if (sliding_window_round_complete) {
+        // We have cleanly compacted up to the first segment in the sliding
+        // range (not necessarily equivalent to the first segment in the log-
+        // segments may have been removed from the sliding range if they were
+        // already cleanly compacted or had no compactible offsets). Reset the
+        // start offset to allow new segments into the sliding window range.
+        vlog(
+          gclog.debug,
+          "[{}] fully de-duplicated up to start of sliding range with offset "
+          "{}, resetting sliding window start offset",
+          config().ntp(),
+          idx_start_offset);
+        reset_sliding_window_round();
+    }
 
     co_return true;
 }
@@ -1360,8 +1360,7 @@ ss::future<bool> disk_log_impl::chunked_sliding_window_compact(
       });
 
     if (sliding_window_round_complete) {
-        _probe->add_sliding_window_round_complete();
-        _last_compaction_window_start_offset.reset();
+        reset_sliding_window_round();
     }
 
     vlog(
@@ -4219,6 +4218,14 @@ void disk_log_impl::reset_dirty_and_closed_bytes() {
     }
     _dirty_segment_bytes = dirty;
     _closed_segment_bytes = closed;
+}
+
+void disk_log_impl::reset_sliding_window_round() {
+    // Reset the start offset so we can allow new segments into future sliding
+    // window rounds.
+    _last_compaction_window_start_offset.reset();
+
+    _probe->add_sliding_window_round_complete();
 }
 
 } // namespace storage

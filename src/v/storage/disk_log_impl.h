@@ -470,6 +470,9 @@ private:
     // since last window compaction.
     std::optional<model::offset> _last_compaction_window_start_offset;
 
+    // Clears stateful data used for sliding window compaction.
+    void reset_sliding_window_round();
+
     size_t _reclaimable_size_bytes{0};
 
     ssize_t _dirty_segment_bytes{0};
