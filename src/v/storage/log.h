@@ -231,6 +231,8 @@ public:
     // segments in the log.
     virtual double dirty_ratio() = 0;
 
+    virtual model::timestamp compaction_lag_timestamp() const = 0;
+
 private:
     ntp_config _config;
 

@@ -4255,4 +4255,18 @@ void disk_log_impl::reset_sliding_window_round() {
     _probe->add_sliding_window_round_complete();
 }
 
+model::timestamp disk_log_impl::compaction_lag_timestamp() const {
+    // model::next_offset() because we are calling into lower bound.
+    auto seg_it = _segs.lower_bound(model::next_offset(_compaction_lag_offset));
+
+    // This can happen if there are no segments, or if the entire log is cleanly
+    // compacted.
+    if (seg_it == _segs.end()) {
+        return model::timestamp::max();
+    }
+
+    auto base_ts = (*seg_it)->index().base_timestamp();
+    return base_ts;
+}
+
 } // namespace storage

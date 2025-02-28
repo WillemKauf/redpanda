@@ -482,6 +482,13 @@ private:
     // Clears stateful data used for sliding window compaction.
     void reset_sliding_window_round();
 
+    // Uses `_compaction_lag_offset` to find the first segment which has not
+    // been made cleanly compacted by compaction. The base timestamp of this
+    // segment's index, along with `max.compaction.lag.ms`, defines the time
+    // horizon for forcing compaction on a log. This is therefore inclusive of
+    // the first dirty segment.
+    model::timestamp compaction_lag_timestamp() const final;
+
     size_t _reclaimable_size_bytes{0};
 
     ssize_t _dirty_segment_bytes{0};

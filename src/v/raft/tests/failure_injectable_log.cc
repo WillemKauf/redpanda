@@ -255,4 +255,8 @@ double failure_injectable_log::dirty_ratio() {
     return _underlying_log->dirty_ratio();
 }
 
+model::timestamp failure_injectable_log::compaction_lag_timestamp() const {
+    return _underlying_log->compaction_lag_timestamp();
+}
+
 } // namespace raft
