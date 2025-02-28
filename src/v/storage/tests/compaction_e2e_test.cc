@@ -120,12 +120,14 @@ public:
       size_t records_per_batch = 1,
       size_t starting_value = 0,
       bool produce_tombstones = false,
-      map_t* latest_kv = nullptr) {
+      map_t* latest_kv = nullptr,
+      std::optional<int64_t> starting_ts = std::nullopt) {
         tests::kafka_produce_transport producer(co_await make_kafka_client());
         co_await producer.start();
 
         // Generate some segments.
         size_t val_count = starting_value;
+        std::optional<int64_t> ts_index = starting_ts;
         for (size_t i = 0; i < num_segments; i++) {
             for (size_t r = 0; r < batches_per_segment; r++) {
                 auto kvs = tests::kv_t::sequence(
@@ -139,8 +141,14 @@ public:
                         latest_kv->insert_or_assign(kv.key, kv.val);
                     }
                 }
+
+                std::optional<model::timestamp> ts;
+                if (ts_index.has_value()) {
+                    ts = model::timestamp{ts_index.value()++};
+                }
                 co_await producer.produce_to_partition(
-                  topic_name, model::partition_id(0), std::move(kvs));
+                  topic_name, model::partition_id(0), std::move(kvs), ts);
+
                 val_count += records_per_batch;
             }
             co_await log->flush();
@@ -1336,3 +1344,67 @@ INSTANTIATE_TEST_SUITE_P(
   RandomDistributionMultiPass,
   CompactionFixtureTombstonesMultiPassRandomParamTest,
   ::testing::Combine(::testing::Bool(), ::testing::Values(10, 25, 100)));
+
+TEST_F(CompactionFixtureTest, TestCompactionLagOffset) {
+    auto num_segments = 10;
+    auto cardinality = 100;
+    auto batches_per_segment = 1;
+    auto records_per_batch = 1;
+
+    generate_data(
+      num_segments,
+      cardinality,
+      batches_per_segment,
+      records_per_batch,
+      /*starting_value=*/0,
+      /*produce_tombstones=*/false,
+      /*latest_kv=*/nullptr,
+      /*starting_ts=*/0)
+      .get();
+
+    // Timestamps generated above start from 0, so our compaction lag timestamp
+    // should be 0.
+    ASSERT_EQ(log->compaction_lag_timestamp(), model::timestamp{0});
+
+    auto& disk_log = dynamic_cast<storage::disk_log_impl&>(*log);
+
+    ss::abort_source never_abort;
+    storage::compaction_config cfg(
+      model::offset::max(),
+      std::nullopt,
+      ss::default_priority_class(),
+      never_abort,
+      std::nullopt,
+      cardinality);
+    disk_log.sliding_window_compact(cfg).get();
+
+    // After cleanly compacting the log, compaction_lag_timestamp() should
+    // return max.
+    ASSERT_EQ(log->compaction_lag_timestamp(), model::timestamp::max());
+
+    generate_data(
+      num_segments,
+      cardinality,
+      batches_per_segment,
+      records_per_batch,
+      /*starting_value=*/0,
+      /*produce_tombstones=*/false,
+      /*latest_kv=*/nullptr,
+      /*starting_ts=*/10)
+      .get();
+
+    // After generating more data, compaction_lag_timestamp() should
+    // be the same as the first uncompacted segment's base timestamp.
+    ASSERT_EQ(log->compaction_lag_timestamp(), model::timestamp{10});
+
+    cfg.key_offset_map_max_keys = 1;
+    disk_log.sliding_window_compact(cfg).get();
+    // Check that an incomplete round of window compaction does not reset the
+    // compaction lag timestamp.
+    ASSERT_EQ(log->compaction_lag_timestamp(), model::timestamp{10});
+
+    // And sanity check that a complete round again resets it.
+    cfg.key_offset_map_max_keys.reset();
+    disk_log.sliding_window_compact(cfg).get();
+    ASSERT_EQ(log->compaction_lag_timestamp(), model::timestamp::max());
+}
