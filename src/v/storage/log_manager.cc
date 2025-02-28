@@ -142,12 +142,12 @@ log_manager::log_manager(
   , _kvstore(kvstore)
   , _resources(resources)
   , _feature_table(feature_table)
-  , _jitter(_config.compaction_interval())
+  , _housekeeping_jitter(_config.compaction_interval())
   , _trigger_gc_jitter(0s, 5s)
   , _batch_cache(_config.reclaim_opts)
   , _probe(std::make_unique<log_manager_probe>()) {
     _config.compaction_interval.watch([this]() {
-        _jitter = simple_time_jitter<ss::lowres_clock>{
+        _housekeeping_jitter = simple_time_jitter<ss::lowres_clock>{
           _config.compaction_interval()};
         _housekeeping_sem.signal();
     });
@@ -187,6 +187,7 @@ ss::future<> log_manager::start() {
 ss::future<> log_manager::stop() {
     _abort_source.request_abort();
     _housekeeping_sem.broken();
+    _gc_sem.broken();
 
     co_await _gate.close();
     co_await ss::coroutine::parallel_for_each(
@@ -399,9 +400,9 @@ ss::future<> log_manager::housekeeping_loop() {
      */
     while (true) {
         try {
-            const auto prev_jitter_base = _jitter.base_duration();
+            const auto prev_jitter_base = _housekeeping_jitter.base_duration();
             co_await _housekeeping_sem.wait(
-              _jitter.next_duration(),
+              _housekeeping_jitter.next_duration(),
               std::max(_housekeeping_sem.current(), size_t(1)));
 
             /*
@@ -410,7 +411,7 @@ ss::future<> log_manager::housekeeping_loop() {
              * this attempts to avoid thundering herd since config changes are
              * delivered immediately to all shards.
              */
-            if (_jitter.base_duration() != prev_jitter_base) {
+            if (_housekeeping_jitter.base_duration() != prev_jitter_base) {
                 continue;
             }
         } catch (const ss::semaphore_timed_out&) {

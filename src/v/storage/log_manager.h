@@ -279,9 +279,13 @@ private:
     friend std::ostream& operator<<(std::ostream&, const housekeeping_job_t&);
 
     ss::future<> housekeeping_loop();
+    ss::future<> housekeeping_scan(model::timestamp);
     ssx::semaphore _housekeeping_sem{0, "log_manager::housekeeping"};
-    disk_space_alert _disk_space_alert{disk_space_alert::ok};
+
     bool _gc_triggered{false};
+    ssx::semaphore _gc_sem{0, "log_manager::gc"};
+
+    disk_space_alert _disk_space_alert{disk_space_alert::ok};
 
     std::optional<batch_cache_index> create_cache(with_cache);
 
@@ -289,15 +293,13 @@ private:
     ss::future<> maybe_clear_kvstore(const ntp_config&);
     ss::future<> async_clear_logs();
 
-    ss::future<> housekeeping_scan(model::timestamp);
-
     void update_log_count();
 
     log_config _config;
     kvstore& _kvstore;
     storage_resources& _resources;
     ss::sharded<features::feature_table>& _feature_table;
-    simple_time_jitter<ss::lowres_clock> _jitter;
+    simple_time_jitter<ss::lowres_clock> _housekeeping_jitter;
     simple_time_jitter<ss::lowres_clock> _trigger_gc_jitter;
     logs_type _logs;
     compaction_list_type _logs_list;
