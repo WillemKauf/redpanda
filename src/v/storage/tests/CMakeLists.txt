@@ -197,3 +197,14 @@ rp_test(
   ARGS "-- -c 1"
   LABELS storage
 )
+
+rp_test(
+  UNIT_TEST
+  GTEST
+  BINARY_NAME inspector
+  SOURCES
+    log_inspector_test.cc
+  LIBRARIES  v::storage v::storage_test_utils v::gtest_main v::kafka
+  LABELS storage
+  ARGS "-- -c 1"
+)
