@@ -11,6 +11,7 @@
 
 #include "base/vassert.h"
 #include "metrics/prometheus_sanitize.h"
+#include "model/timestamp.h"
 #include "raft/consensus.h"
 #include "raft/types.h"
 
@@ -63,6 +64,10 @@ void follower_recovery_state::update_progress(
     // Of these only 1 is valid but for the purposes of progress tracking it
     // should be okay to just take the max.
     _leader_last_offset = std::max(_leader_last_offset, leader_last);
+
+    if (_our_last_offset == _leader_last_offset) {
+        _last_caught_up_time = model::timestamp::now();
+    }
 
     if (_scheduler) {
         _scheduler->_offsets_pending += pending_offset_count() - prev_pending;

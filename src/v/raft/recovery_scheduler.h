@@ -10,10 +10,12 @@
 #pragma once
 
 #include "base/seastarx.h"
+#include "config/configuration.h"
 #include "config/property.h"
 #include "container/intrusive_list_helpers.h"
 #include "metrics/metrics.h"
 #include "model/fundamental.h"
+#include "model/timestamp.h"
 #include "raft/fwd.h"
 #include "seastar/core/gate.hh"
 #include "seastar/core/lowres_clock.hh"
@@ -73,6 +75,14 @@ public:
 
     const model::ntp& ntp() const;
     bool is_active() const { return _is_active; }
+    bool is_caught_up() const {
+        auto max_replica_lag
+          = config::shard_local_cfg().replica_lag_time_max_ms();
+        auto now = model::to_time_point(model::timestamp::now());
+
+        return _our_last_offset == _leader_last_offset
+               || (now - model::to_time_point(_last_caught_up_time) <= max_replica_lag);
+    }
     int64_t pending_offset_count() const;
 
     friend std::ostream&
@@ -89,6 +99,8 @@ private:
 
     recovery_scheduler_base* _scheduler = nullptr;
     safe_intrusive_list_hook _list_hook;
+
+    model::timestamp _last_caught_up_time{model::timestamp::now()};
 };
 
 /**
