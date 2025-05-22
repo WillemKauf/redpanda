@@ -294,6 +294,7 @@ struct configuration final : public config_store {
     property<std::optional<uint32_t>> raft_smp_max_non_local_requests;
     deprecated_property raft_max_concurrent_append_requests_per_follower;
     enum_property<model::write_caching_mode> write_caching_default;
+    bounded_property<std::chrono::milliseconds> replica_lag_time_max_ms;
 
     property<size_t> reclaim_min_size;
     property<size_t> reclaim_max_size;

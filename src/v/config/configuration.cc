@@ -1279,6 +1279,16 @@ configuration::configuration()
       {model::write_caching_mode::default_true,
        model::write_caching_mode::default_false,
        model::write_caching_mode::disabled})
+  , replica_lag_time_max_ms(
+      *this,
+      "replica_lag_time_max_ms",
+      "The maximum amount of time a follower may lag behind the leaders log "
+      "end offset before it is reset.",
+      {.needs_restart = needs_restart::no,
+       .example = "30000",
+       .visibility = visibility::user},
+      30s,
+      {.min = 1ms, .max = serde::max_serializable_ms})
   , reclaim_min_size(
       *this,
       "reclaim_min_size",
