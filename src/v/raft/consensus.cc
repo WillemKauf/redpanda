@@ -2338,6 +2338,22 @@ consensus::do_append_entries(append_entries_request&& r) {
             // and will exit recovery only via heartbeats (which is okay
             // but can inflate the number of recovering partitions
             // statistic a bit).
+
+            if (!_follower_recovery_state->is_caught_up()) {
+                auto replica_lag_time_max_ms
+                  = config::shard_local_cfg().replica_lag_time_max_ms;
+                vlog(
+                  raftlog.warn,
+                  "follower_recovery_state {} lagged behind leader for longer "
+                  "than {} ({}). Resetting follower",
+                  _follower_recovery_state.value(),
+                  replica_lag_time_max_ms.name(),
+                  replica_lag_time_max_ms());
+
+                co_await _log->truncate(storage::truncate_config(
+                  model::offset{0}, _scheduling.default_iopc));
+                _follower_recovery_state.reset();
+            }
         }
         co_return make_append_entries_reply(reply.target_node_id, ofs);
     } catch (...) {
