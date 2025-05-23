@@ -412,6 +412,7 @@ ss::future<storage::index_state> do_copy_segment_data(
     const bool past_tombstone_delete_horizon
       = internal::is_past_tombstone_delete_horizon(seg, cfg);
     bool may_have_tombstone_records = false;
+    bool has_transaction_batches = false;
 
     auto offset_in_compacted_list =
       [compacted_offsets = std::move(compacted_offsets)](
@@ -427,7 +428,8 @@ ss::future<storage::index_state> do_copy_segment_data(
                           segment_last_offset,
                           past_tombstone_delete_horizon,
                           &may_have_tombstone_records,
-                          &pb](
+                          &pb,
+                          &has_transaction_batches](
                            const model::record_batch& b,
                            const model::record& r,
                            bool is_last_record_in_batch) {
@@ -440,7 +442,8 @@ ss::future<storage::index_state> do_copy_segment_data(
           feature_table,
           segment_last_offset,
           past_tombstone_delete_horizon,
-          may_have_tombstone_records);
+          may_have_tombstone_records,
+          has_transaction_batches);
     };
 
     auto copy_reducer = copy_data_segment_reducer(
@@ -492,6 +495,9 @@ ss::future<storage::index_state> do_copy_segment_data(
 
     // Set may_have_tombstone_records
     new_index.may_have_tombstone_records = may_have_tombstone_records;
+
+    // Set has_transaction_batches
+    new_index.has_transaction_batches = has_transaction_batches;
 
     if (
       seg->index().may_have_tombstone_records()
@@ -800,6 +806,33 @@ ss::future<compaction_result> self_compact_segment(
           gclog.debug,
           "detected {} is already compacted",
           s->path().to_compacted_index());
+        if (!s->has_self_compact_timestamp()) {
+            // This is required for old segments that have not yet had a self
+            // compact timestamp set, nor were produced at a time where they
+            // would be properly marked as having transactional batches in the
+            // append path. We need to make sure that the `segment`, if it has a
+            // `self_compact_timestamp` set, has the correct value for
+            // `has_transaction_batches` (this is required for safe recovery in
+            // a `compact`-enabled topic with `delete.retention.ms` set).
+            struct contains_tx_consumer {
+                ss::future<ss::stop_iteration>
+                operator()(const model::record_batch& batch) {
+                    if (batch.contains_transactional_data()) {
+                        _has_transactional_batches = true;
+                        co_return ss::stop_iteration::yes;
+                    }
+                    co_return ss::stop_iteration::no;
+                }
+                bool end_of_stream() { return _has_transactional_batches; }
+                bool _has_transactional_batches;
+            };
+
+            auto rdr = create_segment_full_reader(
+              s, cfg, pb, std::move(read_holder));
+            auto has_transactional_batches = co_await std::move(rdr).consume(
+              contains_tx_consumer{}, model::no_timeout);
+            s->index().set_has_transaction_batches(has_transactional_batches);
+        }
         co_await internal::mark_segment_as_finished_self_compaction(s, pb);
         co_return compaction_result{s->size_bytes()};
     }
@@ -966,6 +999,12 @@ make_concatenated_segment(
           .self_compact_timestamp()
           .value();
 
+    // If any of the segments contain a transactional batch, then the new index
+    // should reflect that.
+    auto new_has_transaction_batches = std::ranges::any_of(
+      segments,
+      [](const auto& s) { return s->index().has_transaction_batches(); });
+
     segment_index index(
       index_path,
       offsets.get_base_offset(),
@@ -975,7 +1014,8 @@ make_concatenated_segment(
       new_broker_timestamp,
       new_clean_compact_timestamp,
       new_may_have_tombstone_records,
-      new_self_compact_timestamp);
+      new_self_compact_timestamp,
+      new_has_transaction_batches);
 
     co_return std::make_tuple(
       ss::make_lw_shared<segment>(

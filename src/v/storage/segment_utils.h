@@ -354,7 +354,8 @@ ss::future<bool> should_keep(
   ss::sharded<features::feature_table>& feature_table,
   model::offset segment_last_offset,
   bool past_tombstone_delete_horizon,
-  bool& may_have_tombstone_records) {
+  bool& may_have_tombstone_records,
+  bool& has_tx_batches) {
     auto compaction_placeholder_enabled = feature_table.local().is_active(
       features::feature::compaction_placeholder_batch);
     auto is_last_batch = b.last_offset() == segment_last_offset;
@@ -373,6 +374,10 @@ ss::future<bool> should_keep(
             may_have_tombstone_records = true;
         }
 
+        if (b.contains_transactional_data()) {
+            has_tx_batches = true;
+        }
+
         co_return true;
     }
 
@@ -382,10 +387,20 @@ ss::future<bool> should_keep(
         co_return false;
     }
 
+    auto& header = b.header();
+    if (header.attrs.is_control()) {
+        has_tx_batches = true;
+        co_return true;
+    }
+
     auto keep = co_await is_latest_key(b, r);
 
     if (r.is_tombstone() && keep) {
         may_have_tombstone_records = true;
+    }
+
+    if (b.contains_transactional_data() && keep) {
+        has_tx_batches = true;
     }
 
     co_return keep;
