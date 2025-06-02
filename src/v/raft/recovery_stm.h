@@ -12,6 +12,7 @@
 #pragma once
 
 #include "base/outcome.h"
+#include "model/timestamp.h"
 #include "raft/fwd.h"
 #include "raft/recovery_client_protocol.h"
 #include "raft/recovery_memory_quota.h"
@@ -31,7 +32,8 @@ public:
       vnode,
       recovery_client_protocol&,
       scheduling_config,
-      recovery_memory_quota&);
+      recovery_memory_quota&,
+      model::timestamp safe_recovery_timestamp = model::timestamp::now());
     ss::future<> apply();
 
 private:
@@ -63,6 +65,47 @@ private:
     // variant encapsulating two different reader types
     using snapshot_reader_t
       = std::variant<storage::snapshot_reader, on_demand_snapshot_reader>;
+    // Recovery of compacted topics needs special care and attention due to
+    // possible races with removed tombstones and transactional
+    // control batches. The following functions deal with making this process
+    // safe.
+    //
+    // Returns true iff the log being recovered is from a compacted topic, and
+    // if recovery safety checks are not disabled.
+    bool needs_recovery_checks() const;
+
+    // Issues an RPC to reset the follower node by invoking
+    // `consensus::clear_state()`. This suffix truncates the log and removes any
+    // snapshots/persistent state on the follower. Locally, it sets
+    // `_stop_requested` to `true` to allow recovery to restart organically per
+    // the follower's new state.
+    ss::future<> reset_follower(std::string_view ctx);
+
+    // We may need to reset the learner of a compacted topic if
+    // the learner is continuing (i.e it has performed a partial recovery
+    // from a previous leader, and is now reading another portion of the log
+    // from this leader) its recovery below the current log's
+    // earliest_removable_timestamp().
+    bool needs_initial_reset();
+
+    // Issues an RPC via `reset_follower()` depending if recovery is un-safe and
+    // the follower needs resetting per the result of `needs_initial_reset()`.
+    // This check is only performed once, at the beginning of the `recovery_stm`
+    // lifecycle.
+    ss::future<> maybe_initial_reset_follower();
+
+    // Returns true iff the current time to recover has exceeded the log's
+    // configured `delete.retention.ms`. Always returns `false` if recovery
+    // checks are disabled.
+    bool recovery_time_exceeds_safe_horizon();
+
+    // Issues an RPC via `reset_follower()` iff
+    // `recovery_time_exceeds_safe_horizon()` has returned true. This
+    // check is performed on every invocation of `do_recover()` as a check that
+    // the current recovery is still safe from divergence as a result of removed
+    // state in the current log.
+    ss::future<> maybe_reset_follower();
+
     ss::future<> recover();
     ss::future<> do_recover();
     ss::future<
@@ -92,6 +135,8 @@ private:
     bool is_recovery_finished();
     flush_after_append should_flush(model::offset) const;
     bool is_snapshot_at_offset_supported() const;
+    void set_safe_recovery_timestamp(
+      model::offset next_offset, model::timestamp ts_override);
     consensus* _ptr;
     vnode _node_id;
     model::offset _base_batch_offset;
@@ -116,6 +161,15 @@ private:
     bool _stop_requested = false;
     recovery_memory_quota& _memory_quota;
     size_t _recovered_bytes_since_flush = 0;
+    // The timestamp that sets the base of the horizon for a safe recovery in
+    // the presence of delete.retention.ms. That is, recovery is guaranteed to
+    // be divergence free if it finishes by the timestamp t =
+    // _safe_recovery_timestamp + delete.retention.ms. This is set upon
+    // construction of the recovery_stm to the earliest removable timestamp in
+    // the log, and set again in the case the learner is forced to reset. In the
+    // case the log doesn't yet have any removable records, this is equivalent
+    // to the timestamp at which recovery was started.
+    model::timestamp _safe_recovery_timestamp;
 };
 
 } // namespace raft
