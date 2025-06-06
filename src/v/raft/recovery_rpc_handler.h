@@ -41,6 +41,7 @@ private:
       reset_learner_state_request, cluster::consensus_ptr);
 
     ss::sharded<cluster::controller_api>& _api;
+    friend class in_memory_recovery_client;
 };
 
 } // namespace raft
