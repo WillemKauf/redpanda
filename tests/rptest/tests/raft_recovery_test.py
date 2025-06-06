@@ -8,18 +8,22 @@
 # by the Apache License, Version 2.0
 
 import time
+from enum import Enum
 
 from rptest.util import wait_until, wait_until_result
+from rptest.utils import si_utils
 from rptest.utils.mode_checks import skip_debug_mode
 from rptest.clients.types import TopicSpec
 from rptest.clients.rpk import RpkTool
 from rptest.tests.redpanda_test import RedpandaTest
+from rptest.tests.prealloc_nodes import PreallocNodesTest
 from rptest.services.admin import Admin
+from rptest.services.redpanda import MetricsEndpoint, SISettings
 from rptest.services.cluster import cluster
 from ducktape.cluster.cluster import ClusterNode
 from ducktape.mark import matrix
 from rptest.services.redpanda import RESTART_LOG_ALLOW_LIST
-from rptest.services.kgo_verifier_services import KgoVerifierProducer
+from rptest.services.kgo_verifier_services import KgoVerifierProducer, KgoVerifierSeqConsumer
 from rptest.services.redpanda_installer import RedpandaInstaller
 
 
@@ -287,3 +291,208 @@ class RaftRecoveryTest(RedpandaTest):
             return count == 0
 
         wait_with_invariants(recovery_finished, timeout_sec=120, backoff_sec=1)
+
+
+class ProducerMode(str, Enum):
+    WITH_TOMBSTONES = "with_tombstones"
+    WITH_TRANSACTIONS = "with_transactions"
+
+
+class RaftRecoveryWithCompactionTest(PreallocNodesTest):
+    def __init__(self, test_context):
+        self.test_context = test_context
+
+        enable_cloud_storage = self.test_context.injected_args[
+            "enable_cloud_storage"]
+        si_settings = SISettings(
+            test_context=self.test_context,
+            cloud_storage_segment_max_upload_interval_sec=5,
+            cloud_storage_enable_remote_read=True,
+            cloud_storage_enable_remote_write=True,
+            fast_uploads=True) if enable_cloud_storage else None
+
+        # Artificially low limits to slow down recovery enough that we
+        # can watch the partitions trickle through
+        self.extra_rp_conf = {
+            'log_compaction_interval_ms': 4000,
+            'raft_recovery_concurrency_per_shard': 4,
+            'min_cleanable_dirty_ratio': 0.0,
+            'raft_max_recovery_memory': 32 * 1024 * 1024,
+            'enable_leader_balancer': False,
+        }
+        super().__init__(test_context=test_context,
+                         num_brokers=3,
+                         node_prealloc_count=1,
+                         extra_rp_conf=self.extra_rp_conf,
+                         si_settings=si_settings)
+
+    def get_recovery_resets(self):
+        return self.redpanda.metric_sum(
+            metric_name="vectorized_raft_recovery_resets",
+            metrics_endpoint=MetricsEndpoint.METRICS,
+            topic=self.topic_spec.name,
+            expect_metric=True)
+
+    def get_complete_sliding_window_rounds(self, node):
+        return self.redpanda.metric_sum(
+            metric_name=
+            "vectorized_storage_log_complete_sliding_window_rounds_total",
+            metrics_endpoint=MetricsEndpoint.METRICS,
+            topic=self.topic_spec.name,
+            nodes=[node])
+
+    @skip_debug_mode
+    @cluster(num_nodes=4, log_allow_list=RESTART_LOG_ALLOW_LIST)
+    @matrix(producer_mode=[
+        ProducerMode.WITH_TOMBSTONES, ProducerMode.WITH_TRANSACTIONS
+    ],
+            enable_cloud_storage=[False, True])
+    def test_recovery_with_compaction(self, producer_mode,
+                                      enable_cloud_storage):
+        partition_count = 1
+
+        msg_size = 4096
+        total_size = 2 * 1024**3  # 2 GiB
+        segment_bytes = 1024**2  # 1 MiB
+        produce_bandwidth = 5 * 1024**2
+
+        self.topic_spec = TopicSpec(partition_count=partition_count,
+                                    cleanup_policy=TopicSpec.CLEANUP_COMPACT,
+                                    delete_retention_ms=60,
+                                    replication_factor=3,
+                                    segment_bytes=segment_bytes,
+                                    retention_bytes=16 * segment_bytes)
+        self.client().create_topic(self.topic_spec)
+
+        # Arbitrary choice of node to be restarted
+        victim_node = self.redpanda.nodes[1]
+
+        self.redpanda.stop_node(victim_node)
+
+        validate_latest_values = producer_mode == ProducerMode.WITH_TOMBSTONES and enable_cloud_storage == False
+        if producer_mode == ProducerMode.WITH_TOMBSTONES:
+            producer = KgoVerifierProducer(
+                self.test_context,
+                self.redpanda,
+                self.topic_spec.name,
+                msg_size=msg_size,
+                msg_count=total_size // msg_size,
+                rate_limit_bps=produce_bandwidth,
+                tombstone_probability=0.8,
+                validate_latest_values=validate_latest_values,
+                custom_node=self.preallocated_nodes)
+        elif producer_mode == ProducerMode.WITH_TRANSACTIONS:
+            # Transactions can take a lot longer to produce.
+            total_size //= 20
+            produce_bandwidth *= 2
+            validate_latest_values = False
+            producer = KgoVerifierProducer(self.test_context,
+                                           self.redpanda,
+                                           self.topic_spec.name,
+                                           msg_size=msg_size,
+                                           msg_count=total_size // msg_size,
+                                           rate_limit_bps=produce_bandwidth,
+                                           use_transactions=True,
+                                           msgs_per_transaction=5,
+                                           transaction_abort_rate=0.4,
+                                           custom_node=self.preallocated_nodes)
+        producer.start()
+
+        if validate_latest_values:
+            producer.wait_for_latest_value_map()
+        producer.wait(timeout_sec=180)
+        producer.stop()
+
+        self.redpanda.start_node(victim_node)
+
+        admin = Admin(self.redpanda)
+
+        def wait_with_invariants(check_fn, *, timeout_sec, backoff_sec):
+            def wrapped():
+                state = admin.get_raft_recovery_status(node=victim_node)
+                return check_fn(state)
+
+            return wait_until(wrapped,
+                              timeout_sec=timeout_sec,
+                              backoff_sec=backoff_sec)
+
+        def recovery_started(state):
+            return state['partitions_active'] > 0
+
+        def recovery_finished(state):
+            if state['partitions_to_recover'] > 0 or state[
+                    'offsets_pending'] > 0:
+                return False
+
+            # if recovery status says that we are done, additionally check metrics
+
+            count = self.redpanda.metric_sum(
+                'vectorized_cluster_partition_under_replicated_replicas')
+            self.logger.info(f"under-replicated partitions count: {count}")
+
+            return count == 0
+
+        # wait for recovery to start
+        wait_with_invariants(recovery_started, timeout_sec=15, backoff_sec=1)
+
+        time.sleep(5)
+
+        # We should have seen the log truncated as a result of recovery safety checks.
+        assert self.get_recovery_resets() > 0
+
+        # Recovery would never be able to finish with such a low delete.retention.ms. Raise it to a reasonable value.
+        rpk = RpkTool(self.redpanda)
+        rpk.alter_topic_config(self.topic_spec.name, "delete.retention.ms",
+                               86400000)
+
+        wait_with_invariants(recovery_finished, timeout_sec=120, backoff_sec=1)
+
+        # Transfer leadership to the victim node
+        victim_node_id = self.redpanda.node_id(victim_node)
+        self.redpanda._admin.transfer_leadership_to(namespace="kafka",
+                                                    topic=self.topic_spec.name,
+                                                    partition=0,
+                                                    target_id=victim_node_id)
+        self.redpanda._admin.await_stable_leader(namespace='kafka',
+                                                 topic=self.topic_spec.name,
+                                                 partition=0)
+
+        # Sleep until the log has been fully compacted.
+        self.prev_sliding_window_rounds = -1
+
+        def compaction_has_completed():
+            # In order to be confident that compaction has settled,
+            # we check that the number of compaction rounds that
+            # have occured have stabilized over some period longer than
+            # log_compaction_interval_ms (and expected time for compaction to complete).
+            new_sliding_window_rounds = self.get_complete_sliding_window_rounds(
+                victim_node)
+            res = self.prev_sliding_window_rounds == new_sliding_window_rounds
+            self.prev_sliding_window_rounds = new_sliding_window_rounds
+            return res
+
+        if enable_cloud_storage:
+            si_utils.quiesce_uploads(self.redpanda, [self.topic_spec.name],
+                                     120)
+
+        wait_until(
+            compaction_has_completed,
+            timeout_sec=120,
+            backoff_sec=self.extra_rp_conf['log_compaction_interval_ms'] /
+            1000 * 4,
+            err_msg="Compaction did not stabilize.")
+
+        consumer = KgoVerifierSeqConsumer(
+            self.test_context,
+            self.redpanda,
+            self.topic_spec.name,
+            msg_size,
+            compacted=True,
+            validate_latest_values=validate_latest_values,
+            nodes=self.preallocated_nodes)
+
+        consumer.start(clean=False)
+        consumer.wait(timeout_sec=180)
+        consumer.stop()
+
+        assert consumer.consumer_status.validator.invalid_reads == 0
