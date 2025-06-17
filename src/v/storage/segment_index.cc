@@ -120,7 +120,11 @@ void segment_index::maybe_track(
       hdr.max_timestamp >= _last_batch_max_timestamp);
     _last_batch_max_timestamp = std::max(
       hdr.first_timestamp, hdr.max_timestamp);
-
+    bool new_term = false;
+    if (hdr.ctx.term != _last_term) {
+        _last_term = hdr.ctx.term;
+        new_term = true;
+    }
     if (_state.maybe_index(
           _acc,
           _step,
@@ -132,8 +136,8 @@ void segment_index::maybe_track(
           to_optional_model_timestamp(new_broker_ts),
           path().is_internal_topic()
             || hdr.type == model::record_batch_type::raft_data,
-          internal::is_compactible(_path.get_ntp(), hdr) ? hdr.record_count
-                                                         : 0)) {
+          internal::is_compactible(_path.get_ntp(), hdr) ? hdr.record_count : 0,
+          new_term)) {
         _acc = 0;
     }
     _needs_persistence = true;
@@ -157,6 +161,10 @@ segment_index::find_below_size_bytes(size_t distance) {
 std::optional<segment_index::entry>
 segment_index::find_nearest(model::offset o) {
     return _state.find_nearest(o);
+}
+std::optional<segment_index::entry>
+segment_index::find_nearest(model::term_id t) {
+    return _state.find_nearest(t);
 }
 
 ss::future<> segment_index::truncate(

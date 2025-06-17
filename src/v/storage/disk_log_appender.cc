@@ -62,11 +62,8 @@ bool disk_log_appender::segment_is_appendable(model::term_id batch_term) const {
     // concurrent truncation (from 0) of an active log segment while we hold the
     // lock of a valid segment.
     //
-    // Checking for term is because we support multiple term appends which
-    // always roll
-    //
     // _bytes_left_in_segment is for initial condition
-    return _bytes_left_in_segment > 0 && _log.term() == batch_term
+    return _bytes_left_in_segment > 0
            && !_log._segs.empty() /*see above before removing this condition*/;
 }
 

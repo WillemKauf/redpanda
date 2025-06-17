@@ -81,6 +81,31 @@ index_columns::time_lower_bound(uint32_t needle) const noexcept {
     return std::distance(std::begin(_relative_time_index), it);
 }
 
+std::optional<int>
+index_columns::term_lower_bound(uint32_t needle) const noexcept {
+    auto it = std::lower_bound(
+      std::begin(_relative_term_index),
+      std::end(_relative_term_index),
+      needle,
+      std::less<uint32_t>());
+    if (it == std::end(_relative_term_index)) {
+        return std::nullopt;
+    }
+    return std::distance(std::begin(_relative_term_index), it);
+}
+std::optional<int>
+index_columns::term_upper_bound(uint32_t needle) const noexcept {
+    auto it = std::upper_bound(
+      std::begin(_relative_term_index),
+      std::end(_relative_term_index),
+      needle,
+      std::less<uint32_t>());
+    if (it == std::end(_relative_term_index)) {
+        return std::nullopt;
+    }
+    return std::distance(std::begin(_relative_term_index), it);
+}
+
 bool index_columns::try_reset_relative_time_index(uint32_t t) {
     if (_relative_time_index.size() != 1) {
         return false;
@@ -100,6 +125,10 @@ index_columns::copy_relative_time_index() const noexcept {
 chunked_vector<uint64_t> index_columns::copy_position_index() const noexcept {
     return _position_index.copy();
 }
+chunked_vector<uint32_t>
+index_columns::copy_relative_term_index() const noexcept {
+    return _relative_term_index.copy();
+}
 
 void index_columns::assign_relative_offset_index(
   chunked_vector<uint32_t> xs) noexcept {
@@ -113,23 +142,33 @@ void index_columns::assign_position_index(
   chunked_vector<uint64_t> xs) noexcept {
     _position_index = std::move(xs);
 }
+void index_columns::assign_relative_term_index(
+  chunked_vector<uint32_t> xs) noexcept {
+    _relative_term_index = std::move(xs);
+}
 
 void index_columns::add_entry(
-  uint32_t relative_offset, uint32_t relative_time, uint64_t pos) {
+  uint32_t relative_offset,
+  uint32_t relative_time,
+  uint64_t pos,
+  uint32_t relative_term) {
     _relative_offset_index.push_back(relative_offset);
     _relative_time_index.push_back(relative_time);
     _position_index.push_back(pos);
+    _relative_term_index.push_back(relative_term);
 }
 
 void index_columns::shrink_to_fit() {
     vassert(
       _relative_offset_index.size() == _relative_time_index.size()
-        && _relative_offset_index.size() == _position_index.size(),
+        && _relative_offset_index.size() == _position_index.size()
+        && _relative_offset_index.size() == _relative_term_index.size(),
       "ALL indexes must match in size. {}",
       *this);
     _relative_offset_index.shrink_to_fit();
     _relative_time_index.shrink_to_fit();
     _position_index.shrink_to_fit();
+    _relative_term_index.shrink_to_fit();
 }
 
 index_columns index_columns::copy() const {
@@ -167,15 +206,17 @@ void index_columns::pop_back(int n) {
     _relative_offset_index.pop_back_n(n);
     _relative_time_index.pop_back_n(n);
     _position_index.pop_back_n(n);
+    _relative_term_index.pop_back_n(n);
 }
 
 std::ostream& operator<<(std::ostream& o, const index_columns& s) {
     fmt::print(
       o,
-      "index({}, {}, {})",
+      "index({}, {}, {}, {})",
       s._relative_offset_index.size(),
       s._relative_time_index.size(),
-      s._position_index.size());
+      s._position_index.size(),
+      s._relative_term_index.size());
     return o;
 }
 
@@ -219,7 +260,7 @@ index_state index_state::make_empty_index(
 
 std::ostream& operator<<(std::ostream& o, const index_state::entry& e) {
     return o << "{offset:" << e.offset << ", time:" << e.timestamp
-             << ", filepos:" << e.filepos << "}";
+             << ", filepos:" << e.filepos << ", term: " << e.term << "}";
 }
 
 bool index_state::maybe_index(
@@ -232,7 +273,8 @@ bool index_state::maybe_index(
   model::timestamp last_timestamp,
   std::optional<model::timestamp> new_broker_timestamp,
   bool user_data,
-  size_t compactible_records) {
+  size_t compactible_records,
+  model::term_id term) {
     vassert(
       batch_base_offset >= base_offset,
       "cannot track offsets that are lower than our base, o:{}, "
@@ -276,6 +318,7 @@ bool index_state::maybe_index(
         // the walltime timestamps with the user data timestamps.
         should_set_non_data_timestamp = !user_data;
 
+        base_term = term;
         base_timestamp = first_timestamp;
         max_timestamp = first_timestamp;
         is_empty = true;
@@ -301,8 +344,11 @@ bool index_state::maybe_index(
         num_compactible_records_appended
           = num_compactible_records_appended.value_or(0) + compactible_records;
     }
+
+    auto is_new_term = term != max_term;
+    max_term = term;
     // always saving the first batch simplifies a lot of book keeping
-    if ((accumulator >= step && user_data) || is_empty) {
+    if ((accumulator >= step && user_data) || is_empty || is_new_term) {
         auto offset_delta = batch_base_offset() - base_offset();
         // on sparse compacted topic indexes, there could be a case where the
         // offset range between valid keys is greater than can be represented
@@ -318,7 +364,8 @@ bool index_state::maybe_index(
               // We know that a segment cannot be > 4GB
               batch_base_offset() - base_offset(),
               offset_time_index{last_timestamp - base_timestamp, with_offset},
-              starting_position_in_file);
+              starting_position_in_file,
+              term() - base_term());
             if (should_set_non_data_timestamp) {
                 non_data_timestamps = true;
             }
@@ -481,6 +528,12 @@ void read_nested(
     } else {
         st.may_have_tombstone_records = true;
     }
+
+    chunked_vector<uint32_t> term_index;
+    if (hdr._version >= index_state::relative_term_index_version) {
+        read_nested(p, term_index, 0U);
+    }
+    st.index.assign_relative_term_index(std::move(relative_term_index));
 }
 
 index_state index_state::copy() const { return *this; }
@@ -490,8 +543,12 @@ size_t index_state::size() const { return index.size(); }
 bool index_state::empty() const { return index.empty(); }
 
 void index_state::add_entry(
-  uint32_t relative_offset, offset_time_index relative_time, uint64_t pos) {
-    index.add_entry(relative_offset, relative_time.raw_value(), pos);
+  uint32_t relative_offset,
+  offset_time_index relative_time,
+  uint64_t pos,
+  uint32_t relative_term) {
+    index.add_entry(
+      relative_offset, relative_time.raw_value(), pos, relative_term);
 }
 void index_state::pop_back(size_t n) {
     index.pop_back(n);
@@ -499,12 +556,13 @@ void index_state::pop_back(size_t n) {
         non_data_timestamps = false;
     }
 }
-std::tuple<uint32_t, offset_time_index, uint64_t>
+std::tuple<uint32_t, offset_time_index, uint64_t, uint32_t>
 index_state::get_entry(size_t i) const {
     return {
       index.get_relative_offset_index(i),
       offset_time_index{index.get_relative_time_index(i), with_offset},
-      index.get_position_index(i)};
+      index.get_position_index(i),
+      index.get_relative_term_index(i)};
 }
 
 void index_state::shrink_to_fit() { index.shrink_to_fit(); }
@@ -682,13 +740,13 @@ iobuf index_state_serde::encode(const index_state& st) {
 } // namespace serde_compat
 
 index_state::entry index_state::translate_index_entry(
-  std::tuple<uint32_t, offset_time_index, uint64_t> input) {
-    auto [relative_offset, relative_time, filepos] = input;
+  std::tuple<uint32_t, offset_time_index, uint64_t, uint32_t> input) {
+    auto [relative_offset, relative_time, filepos, relative_term] = input;
     return entry{
       .offset = model::offset(relative_offset + base_offset()),
       .timestamp = model::timestamp(relative_time() + base_timestamp()),
       .filepos = filepos,
-    };
+      .term = model::term_id(relative_term + base_term())};
 }
 
 std::optional<index_state::entry> index_state::find_nearest(model::offset o) {
@@ -733,6 +791,42 @@ index_state::find_nearest(model::timestamp t) {
     }
 
     return translate_index_entry(*entry);
+}
+
+std::optional<index_state::entry>
+index_state::find_first_entry_for_term(model::term_id t) {
+    if (t < base_term || empty()) {
+        return std::nullopt;
+    }
+    int64_t expected_ix = t() - base_term();
+}
+
+std::optional<index_state::entry>
+index_state::find_last_entry_for_term(model::term_id t) {
+    if (t < base_term || empty()) {
+        return std::nullopt;
+    }
+
+    int64_t query_term_delta = t() - base_term();
+    int64_t seg_term_delta = max_term - base_term;
+    static constexpr int64_t uint32_max = std::numeric_limits<uint32_t>::max();
+    if (query_term_delta > uint32_max || seg_term_delta > uint32_max) {
+        // The chances of this happening are slim... but never zero!
+        return translate_index_entry(get_entry(0));
+    }
+
+    const auto needle = static_cast<uint32_t>(query_term_delta);
+
+    auto ix = index.term_upper_bound(needle).value_or(index.size() - 1);
+
+    // make it signed so it can be negative
+    do {
+        if (index.get_relative_term_index(ix) <= needle) {
+            return translate_index_entry(get_entry(ix));
+        }
+    } while (ix-- > 0);
+
+    return std::nullopt;
 }
 
 std::optional<index_state::entry>

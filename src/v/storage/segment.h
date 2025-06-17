@@ -42,6 +42,8 @@ class offset_tracker_accessor;
 
 class segment {
 public:
+    static constexpr auto segment_version_type = record_version_type::v2;
+
     using generation_id = named_type<uint64_t, struct segment_gen_tag>;
     class offset_tracker {
     public:
@@ -52,9 +54,8 @@ public:
         using dirty_offset_t
           = named_type<model::offset, struct dirty_offset_tag>;
 
-        offset_tracker(model::term_id t, model::offset base)
-          : _term(t)
-          , _base_offset(base)
+        offset_tracker(model::offset base)
+          : _base_offset(base)
           , _committed_offset(model::prev_offset(base))
           , _stable_offset(model::prev_offset(base))
           , _dirty_offset(model::prev_offset(base)) {}
@@ -97,7 +98,6 @@ public:
             }
         }
 
-        model::term_id _term;
         model::offset _base_offset;
 
         /// \brief These offsets are the `batch.last_offset()` and not
@@ -285,6 +285,10 @@ public:
     // For use in testing. _gate.close() is called during segment::close()
     // and is used to ensure release_appender_in_background() safely completes.
     ss::gate& gate() { return _gate; }
+
+    model::term_id term_for_offset(model::offset o) const;
+    model::term_id min_term() const noexcept;
+    model::term_id max_term() const noexcept;
 
 private:
     void set_close();

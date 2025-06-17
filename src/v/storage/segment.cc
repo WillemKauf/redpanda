@@ -702,9 +702,8 @@ void segment::advance_stable_offset(size_t filepos) {
 std::ostream& operator<<(std::ostream& o, const segment::offset_tracker& t) {
     fmt::print(
       o,
-      "{{term:{}, base_offset:{}, committed_offset:{}, stable_offset:{}, "
+      "{{base_offset:{}, committed_offset:{}, stable_offset:{}, "
       "dirty_offset:{}}}",
-      t.get_term(),
       t.get_base_offset(),
       t.get_committed_offset(),
       t.get_stable_offset(),
@@ -773,13 +772,13 @@ ss::future<ss::lw_shared_ptr<segment>> open_segment(
   storage_resources& resources,
   ss::sharded<features::feature_table>& feature_table,
   std::optional<ntp_sanitizer_config> ntp_sanitizer_config) {
-    if (path.get_version() != record_version_type::v1) {
-        throw std::runtime_error(fmt::format(
-          "Segment has invalid version {} != {} path {}",
-          path.get_version(),
-          record_version_type::v1,
-          path));
-    }
+    // if (path.get_version() != record_version_type::v1) {
+    //     throw std::runtime_error(fmt::format(
+    //       "Segment has invalid version {} != {} path {}",
+    //       path.get_version(),
+    //       record_version_type::v1,
+    //       path));
+    // }
 
     auto rdr = std::make_unique<segment_reader>(
       path, buf_size, read_ahead, ntp_sanitizer_config);
@@ -902,5 +901,11 @@ bool segment::may_have_compactible_records() const {
     }
     return num_compactible_records.value() > 0;
 }
+
+model::term_id segment::term_for_offset(model::offset o) const {
+    return _idx.term_for_offset(o);
+}
+model::term_id segment::min_term() const noexcept { return _idx.min_term(); }
+model::term_id segment::max_term() const noexcept { return _idx.max_term(); }
 
 } // namespace storage

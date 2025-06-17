@@ -43,10 +43,10 @@ struct segment_ordering {
     }
 
     bool operator()(const type& seg, model::term_id value) const {
-        return seg->offsets().get_term() < value;
+        return seg->get_min_term() < value;
     }
     bool operator()(model::term_id value, const type& seg) const {
-        return value < seg->offsets().get_term();
+        return value < seg->get_min_term();
     }
 };
 

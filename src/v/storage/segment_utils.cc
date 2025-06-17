@@ -852,7 +852,7 @@ make_concatenated_segment(
     auto& back = segments.back()->offsets();
 
     // offsets span the concatenated range
-    segment::offset_tracker offsets(front.get_term(), front.get_base_offset());
+    segment::offset_tracker offsets(front.get_base_offset());
     const auto committed_offset = std::max(
       front.get_committed_offset(), back.get_committed_offset());
     const auto stable_offset = std::max(

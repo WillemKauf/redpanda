@@ -33,6 +33,7 @@ public:
     uint32_t get_relative_offset_index(int ix) const noexcept;
     uint32_t get_relative_time_index(int ix) const noexcept;
     uint64_t get_position_index(int ix) const noexcept;
+    uint32_t get_relative_term_index(int ix) const noexcept;
 
     /// Return index of the element or nullopt
     std::optional<int> offset_lower_bound(uint32_t needle) const noexcept;
@@ -42,6 +43,12 @@ public:
 
     /// Return index of the element or nullopt
     std::optional<int> time_lower_bound(uint32_t needle) const noexcept;
+
+    /// Return index of the element or nullopt
+    std::optional<int> term_lower_bound(uint32_t needle) const noexcept;
+
+    /// Return index of the element or nullopt
+    std::optional<int> term_upper_bound(uint32_t needle) const noexcept;
 
     /// If the size() ==  1 reset the time column with the
     /// provided value.
@@ -56,12 +63,17 @@ public:
     chunked_vector<uint32_t> copy_relative_offset_index() const noexcept;
     chunked_vector<uint32_t> copy_relative_time_index() const noexcept;
     chunked_vector<uint64_t> copy_position_index() const noexcept;
+    chunked_vector<uint32_t> copy_relative_term_index() const noexcept;
     void assign_relative_offset_index(chunked_vector<uint32_t>) noexcept;
     void assign_relative_time_index(chunked_vector<uint32_t>) noexcept;
     void assign_position_index(chunked_vector<uint64_t>) noexcept;
+    void assign_relative_term_index(chunked_vector<uint32_t>) noexcept;
 
-    void
-    add_entry(uint32_t relative_offset, uint32_t relative_time, uint64_t pos);
+    void add_entry(
+      uint32_t relative_offset,
+      uint32_t relative_time,
+      uint64_t pos,
+      uint32_t relative_term);
 
     /// Pop back one element. This is ineffective with columnar format but
     /// it's not invoked often and when it is invoked it usually invoked not
@@ -82,6 +94,7 @@ private:
     chunked_vector<uint32_t> _relative_offset_index;
     chunked_vector<uint32_t> _relative_time_index;
     chunked_vector<uint64_t> _position_index;
+    chunked_vector<uint32_t> _relative_term_index;
 };
 
 using offset_delta_time = ss::bool_class<struct offset_delta_time_tag>;
@@ -131,12 +144,13 @@ private:
    1 byte  - non_data_timestamps
  */
 struct index_state
-  : serde::envelope<index_state, serde::version<9>, serde::compat_version<4>> {
+  : serde::envelope<index_state, serde::version<10>, serde::compat_version<4>> {
     static constexpr auto monotonic_timestamps_version = 5;
     static constexpr auto broker_timestamp_version = 6;
     static constexpr auto num_compactible_records_version = 7;
     static constexpr auto clean_compact_timestamp_version = 8;
     static constexpr auto may_have_tombstone_records_version = 9;
+    static constexpr auto relative_term_index_version = 10;
 
     static index_state
     make_empty_index(model::offset base_offset, offset_delta_time with_offset);
@@ -145,6 +159,7 @@ struct index_state
         model::offset offset;
         model::timestamp timestamp;
         size_t filepos;
+        model::term_id term;
         friend std::ostream& operator<<(std::ostream&, const entry&);
     };
 
@@ -161,9 +176,15 @@ struct index_state
 
     std::optional<entry> find_nearest(model::timestamp);
 
+    std::optional<entry> find_nearest(model::term_id);
+
     std::optional<entry> find_above_size_bytes(size_t distance);
 
     std::optional<entry> find_below_size_bytes(size_t distance);
+
+    std::optional<entry> find_first_entry_for_term(model::term_id t);
+
+    std::optional<entry> find_last_entry_for_term(model::term_id t);
 
     bool
     truncate(model::offset new_max_offset, model::timestamp new_max_timestamp);
@@ -178,6 +199,10 @@ struct index_state
     model::timestamp base_timestamp{0};
     // the batch's max_timestamp of the last batch
     model::timestamp max_timestamp{0};
+    // The term_id of the first batch.
+    model::term_id base_term{0};
+    // The term_id of the last batch.
+    model::term_id max_term{0};
 
     index_columns index;
 
@@ -226,7 +251,8 @@ struct index_state
 
     void pop_back(size_t n = 1);
 
-    std::tuple<uint32_t, offset_time_index, uint64_t> get_entry(size_t i) const;
+    std::tuple<uint32_t, offset_time_index, uint64_t, uint32_t>
+    get_entry(size_t i) const;
 
     void shrink_to_fit();
 
@@ -243,7 +269,8 @@ struct index_state
       model::timestamp last_timestamp,
       std::optional<model::timestamp> new_broker_timestamp,
       bool user_data,
-      size_t compactible_records);
+      size_t compactible_records,
+      bool new_term);
 
     void update_batch_timestamps_are_monotonic(bool pred);
 
@@ -257,7 +284,7 @@ struct index_state
 private:
     index_state(const index_state& o) noexcept;
     entry translate_index_entry(
-      std::tuple<uint32_t, offset_time_index, uint64_t> entry);
+      std::tuple<uint32_t, offset_time_index, uint64_t, uint32_t> entry);
 };
 
 namespace serde_compat {

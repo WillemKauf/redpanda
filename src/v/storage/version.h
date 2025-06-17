@@ -22,11 +22,14 @@
 
 namespace storage {
 
-enum class record_version_type { v1 };
+enum class record_version_type { v1, v2 };
 
 inline record_version_type from_string(std::string_view version) {
     if (version == "v1") {
         return record_version_type::v1;
+    }
+    if (version == "v2") {
+        return record_version_type::v2;
     }
     throw std::invalid_argument(
       fmt::format("Wrong record version name: {}", version));
@@ -36,6 +39,8 @@ inline ss::sstring to_string(record_version_type version) {
     switch (version) {
     case record_version_type::v1:
         return "v1";
+    case record_version_type::v2:
+        return "v2";
     }
     throw std::runtime_error("Wrong record version");
 }

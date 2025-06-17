@@ -64,8 +64,8 @@ struct time_based_retention_cfg {
     bool use_broker_time;
     bool use_escape_hatch_for_timestamps_in_the_future;
 
-    static auto make(const features::feature_table& ft)
-      -> time_based_retention_cfg {
+    static auto
+    make(const features::feature_table& ft) -> time_based_retention_cfg {
         return {
           .use_broker_time = ft.is_active(
             features::feature::broker_time_based_retention),
@@ -150,6 +150,7 @@ public:
       size_t filepos);
     std::optional<entry> find_nearest(model::offset);
     std::optional<entry> find_nearest(model::timestamp);
+    std::optional<entry> find_nearest(model::term_id);
     /// Find entry by file offset (the value may overshoot or find precise
     /// match)
     std::optional<entry> find_above_size_bytes(size_t distance);
@@ -157,6 +158,8 @@ public:
     /// match)
     std::optional<entry> find_below_size_bytes(size_t distance);
 
+    std::optional<entry> min_offset_for_term(model::term_id);
+    std::optional<entry> max_offset_for_term(model::term_id);
     /// Fallback timestamp search for if the recorded max ts appears to be
     /// invalid, e.g. too far in the future
     std::optional<model::timestamp>
@@ -169,6 +172,8 @@ public:
     model::offset max_offset() const { return _state.max_offset; }
     model::timestamp max_timestamp() const { return _state.max_timestamp; }
     model::timestamp base_timestamp() const { return _state.base_timestamp; }
+    model::term_id base_term() const { return _state.base_term; }
+    model::term_id max_term() const { return _state.max_term; }
     // this is the broker timestamp of the last record in the index, used by
     // time-based retention. introduced in v23.3, indices created before this
     // version do not have it and will rely on max_timestamp

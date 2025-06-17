@@ -925,21 +925,18 @@ disk_log_impl::find_adjacent_compaction_ranges(
 
     auto it = _segs.begin();
     size_t current_size{0};
-    model::term_id current_term{(*it)->offsets().get_term()};
 
     std::pair<segment_set::iterator, segment_set::iterator> current_range = {
       it, it};
     while (it != _segs.end()) {
         auto& seg = *it;
         auto seg_size = seg->size_bytes();
-        auto seg_term = seg->offsets().get_term();
 
         current_size += seg_size;
 
         auto num_segments_in_range = std::distance(
           current_range.first, current_range.second);
 
-        bool term_boundary = seg_term != current_term;
         bool size_boundary = current_size
                              > _manager.config().max_compacted_segment_size();
         bool is_unstable = unstable(seg);
@@ -953,8 +950,8 @@ disk_log_impl::find_adjacent_compaction_ranges(
           *current_range.first, seg);
 
         if (
-          term_boundary || size_boundary || reached_max_range_size
-          || is_unstable || !is_valid_offset_range) {
+          size_boundary || reached_max_range_size || is_unstable
+          || !is_valid_offset_range) {
             if (num_segments_in_range > 1) {
                 ranges.push_back(current_range);
                 auto max_ranges_size
@@ -968,12 +965,8 @@ disk_log_impl::find_adjacent_compaction_ranges(
 
             auto next_it = is_unstable ? std::next(it) : it;
             auto next_size = is_unstable ? 0 : seg_size;
-            auto next_term = next_it != _segs.end()
-                               ? (*next_it)->offsets().get_term()
-                               : model::term_id{};
             current_range = {next_it, next_it};
             current_size = next_size;
-            current_term = next_term;
 
             if (!is_unstable) {
                 ++current_range.second;
@@ -1876,7 +1869,7 @@ model::term_id disk_log_impl::term() const {
         // the next append() will truncate if greater
         return model::term_id{0};
     }
-    return _segs.back()->offsets().get_term();
+    return _segs.back()->max_term();
 }
 
 bool disk_log_impl::is_new_log() const {
@@ -1925,19 +1918,22 @@ offset_stats disk_log_impl::offsets() const {
     }
     // we have valid begin and end
     const auto& bof = _segs.front()->offsets();
-    const auto& eof = (*it)->offsets();
+    auto& eseg = *it;
+    const auto& eof = eseg->offsets();
 
     const auto start_offset = _start_offset() >= 0 ? _start_offset
                                                    : bof.get_base_offset();
 
+    auto committed_offset = eof.get_committed_offset();
+    auto dirty_offset = eof.get_dirty_offset();
     return storage::offset_stats{
       .start_offset = start_offset,
 
-      .committed_offset = eof.get_committed_offset(),
-      .committed_offset_term = eof.get_term(),
+      .committed_offset = committed_offset,
+      .committed_offset_term = eseg->term_for_offset(committed_offset),
 
-      .dirty_offset = eof.get_dirty_offset(),
-      .dirty_offset_term = eof.get_term(),
+      .dirty_offset = dirty_offset,
+      .dirty_offset_term = eseg->term_for_offset(dirty_offset),
     };
 }
 
@@ -2170,7 +2166,7 @@ ss::future<> disk_log_impl::maybe_roll_unlocked(
     if (ptr->appender().file_byte_offset() >= _max_segment_size) {
         size_should_roll = true;
     }
-    if (t != term() || size_should_roll) {
+    if (size_should_roll) {
         add_segment_bytes(ptr, ptr->size_bytes());
         co_await ptr->release_appender(_readers_cache.get());
         co_await new_segment(next_offset, t);
@@ -2974,7 +2970,7 @@ disk_log_impl::make_reader(timequery_config config) {
 std::optional<model::term_id> disk_log_impl::get_term(model::offset o) const {
     auto it = _segs.lower_bound(o);
     if (it != _segs.end() && o >= _start_offset) {
-        return (*it)->offsets().get_term();
+        return (*it)->term_for_offset(o);
     }
 
     return std::nullopt;
@@ -3496,7 +3492,7 @@ void disk_log_impl::set_overrides(ntp_config::default_overrides o) {
     mutable_config().set_overrides(o);
 }
 
-/// Calculate the compaction backlog of the segments within a particular term
+/// Calculate the compaction backlog of the segments within a particular window
 ///
 /// This is the inner part of compaction_backlog()
 int64_t compaction_backlog_term(
@@ -3597,10 +3593,9 @@ int64_t disk_log_impl::compaction_backlog() const {
         return 0;
     }
 
-    auto current_term = _segs.front()->offsets().get_term();
     auto cf = _compaction_ratio.get();
     int64_t backlog = 0;
-    std::vector<ss::lw_shared_ptr<segment>> segments_this_term;
+    std::vector<ss::lw_shared_ptr<segment>> segment_window;
 
     // Limit how large we will try to allocate the sgements_this_term vector:
     // this protects us against corner cases where a term has a really large
@@ -3608,7 +3603,8 @@ int64_t disk_log_impl::compaction_backlog() const {
     // segments per term than this (because segments are continuously compacted
     // away).  Corner cases include non-compactible data in a compacted topic,
     // or enabling compaction on a previously non-compacted topic.
-    static constexpr size_t limit_segments_this_term = 1024;
+    static constexpr size_t limit_segment_window = 1024;
+    segment_window.reserve(limit_segment_window);
 
     for (auto& s : _segs) {
         if (!s->finished_self_compaction()) {
@@ -3619,19 +3615,17 @@ int64_t disk_log_impl::compaction_backlog() const {
             continue;
         }
 
-        if (current_term != s->offsets().get_term()) {
-            // New term: consume segments from the previous term.
-            backlog += compaction_backlog_term(
-              std::move(segments_this_term), cf);
-            segments_this_term.clear();
-        }
-
-        if (segments_this_term.size() < limit_segments_this_term) {
-            segments_this_term.push_back(s);
+        if (segment_window.size() < limit_segment_window) {
+            segment_window.push_back(s);
+        } else {
+            // Hit limit, consume and reset
+            backlog += compaction_backlog_term(std::move(segment_window), cf);
+            segment_window.clear();
+            segment_window.reserve(limit_segment_window);
         }
     }
 
-    // Consume segments from last term in the log after falling out of loop
+    // Consume segments from window in the log after falling out of loop
     backlog += compaction_backlog_term(std::move(segments_this_term), cf);
 
     return backlog;
