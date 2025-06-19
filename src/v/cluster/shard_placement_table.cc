@@ -136,6 +136,13 @@ shard_placement_table::placement_state::get_reconciliation_action(
             return reconciliation_action::wait_for_target_update;
         } else if (_current->status == hosted_status::obsolete) {
             return reconciliation_action::remove_kvstore_state;
+        } else if (_current->remake_state != remake_partition_state::none) {
+            if (_current->remake_state == remake_partition_state::initiated) {
+                return reconciliation_action::remake;
+            } else if (
+              _current->remake_state == remake_partition_state::deleted) {
+                return reconciliation_action::create;
+            }
         }
     } else if (_is_initial_for) {
         if (_is_initial_for < expected_log_revision) {

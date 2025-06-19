@@ -119,6 +119,8 @@ public:
         wait_for_target_update,
         /// Partition must be created on this shard
         create,
+        /// Partition must be re-created on this shard
+        remake,
     };
 
     /// A struct holding both current shard-local and target states for an ntp.
