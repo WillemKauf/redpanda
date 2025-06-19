@@ -68,22 +68,36 @@ public:
         obsolete,
     };
 
+    enum class remake_partition_state {
+        // Default state, no remake necessary.
+        none,
+        // A request has been made to remake the partition.
+        initiated,
+        // The partition has been deleted, pending remake.
+        deleted,
+        // The partition has been remade, operation is complete.
+        remade,
+    };
+
     /// Current state of shard-local partition kvstore data on this shard.
     struct shard_local_state {
         raft::group_id group;
         model::revision_id log_revision;
         hosted_status status;
         model::shard_revision_id shard_revision;
+        remake_partition_state remake_state{remake_partition_state::none};
 
         shard_local_state(
           raft::group_id g,
           model::revision_id lr,
           hosted_status s,
-          model::shard_revision_id sr)
+          model::shard_revision_id sr,
+          remake_partition_state nr = remake_partition_state::none)
           : group(g)
           , log_revision(lr)
           , status(s)
-          , shard_revision(sr) {}
+          , shard_revision(sr)
+          , remake_state(nr) {}
 
         shard_local_state(
           const shard_local_assignment& as, hosted_status status)
@@ -297,6 +311,8 @@ private:
 };
 
 std::ostream& operator<<(std::ostream&, shard_placement_table::hosted_status);
+std::ostream&
+operator<<(std::ostream&, shard_placement_table::remake_partition_state);
 
 /// Enum with all key types in the shard_placement key space. All keys in this
 /// key space must be prefixed with the serialized type. Enum type is

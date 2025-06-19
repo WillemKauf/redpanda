@@ -95,12 +95,29 @@ std::ostream& operator<<(
   std::ostream& o, const shard_placement_table::shard_local_state& ls) {
     fmt::print(
       o,
-      "{{group: {}, log_revision: {}, status: {}, shard_revision: {}}}",
+      "{{group: {}, log_revision: {}, status: {}, shard_revision: {}, "
+      "remake_state: {}}}",
       ls.group,
       ls.log_revision,
       ls.status,
-      ls.shard_revision);
+      ls.shard_revision,
+      ls.remake_state);
     return o;
+}
+
+std::ostream&
+operator<<(std::ostream& o, shard_placement_table::remake_partition_state s) {
+    switch (s) {
+    case shard_placement_table::remake_partition_state::none:
+        return o << "none";
+    case shard_placement_table::remake_partition_state::initiated:
+        return o << "initiated";
+    case shard_placement_table::remake_partition_state::deleted:
+        return o << "deleted";
+    case shard_placement_table::remake_partition_state::remade:
+        return o << "remade";
+    }
+    __builtin_unreachable();
 }
 
 shard_placement_table::reconciliation_action
@@ -235,7 +252,7 @@ bytes assignment_kvstore_key(const raft::group_id group) {
 struct current_state_marker
   : serde::envelope<
       current_state_marker,
-      serde::version<0>,
+      serde::version<1>,
       serde::compat_version<0>> {
     // NOTE: we need ntp in this marker because we want to be able to find and
     // clean garbage kvstore state for old groups that have already been deleted
@@ -245,9 +262,12 @@ struct current_state_marker
     model::revision_id log_revision;
     model::shard_revision_id shard_revision;
     bool is_complete = false;
+    shard_placement_table::remake_partition_state remake_state
+      = shard_placement_table::remake_partition_state::none;
 
     auto serde_fields() {
-        return std::tie(ntp, log_revision, shard_revision, is_complete);
+        return std::tie(
+          ntp, log_revision, shard_revision, is_complete, remake_state);
     }
 };
 
@@ -351,6 +371,7 @@ ss::future<> shard_placement_table::persist_shard_local_state() {
                 .shard_revision = pstate.current()->shard_revision,
                 .is_complete = pstate.current()->status
                                == hosted_status::hosted,
+                .remake_state = pstate.current()->remake_state,
               };
               f2 = _kvstore.put(
                 kvstore_key_space,
@@ -567,12 +588,13 @@ shard_placement_table::gather_init_states(
               vlog(
                 clusterlog.trace,
                 "[{}] shard {}: recovered cur state marker, lr: {} sr: {} "
-                "complete: {}",
+                "complete: {}, remake_state: {}",
                 marker.ntp,
                 _shard,
                 marker.log_revision,
                 marker.shard_revision,
-                marker.is_complete);
+                marker.is_complete,
+                marker.remake_state);
 
               auto& state = _states[marker.ntp];
               if (state.current()) {
@@ -588,7 +610,8 @@ shard_placement_table::gather_init_states(
                   marker.log_revision,
                   marker.is_complete ? hosted_status::hosted
                                      : hosted_status::receiving,
-                  marker.shard_revision),
+                  marker.shard_revision,
+                  marker.remake_state),
                 *_probe);
               break;
           }
@@ -1148,11 +1171,16 @@ shard_placement_table::prepare_transfer(
         }
         ret.destination = maybe_dest.value();
 
+        remake_partition_state remake_state = remake_partition_state::none;
+        if (state.current()) {
+            remake_state = state.current()->remake_state;
+        }
+
         // check if destination is ready
         model::shard_revision_id shard_rev;
         co_await sharded_spt.invoke_on(
           ret.destination.value(),
-          [&ntp, &shard_rev, &ret, expected_log_rev, is_initial](
+          [&ntp, &shard_rev, &ret, expected_log_rev, is_initial, remake_state](
             shard_placement_table& dest) {
               auto dest_it = dest._states.find(ntp);
               if (
@@ -1192,6 +1220,7 @@ shard_placement_table::prepare_transfer(
                     .log_revision = expected_log_rev,
                     .shard_revision = dest_state.current()->shard_revision,
                     .is_complete = false,
+                    .remake_state = remake_state,
                   });
                   vlog(
                     clusterlog.trace,
@@ -1280,6 +1309,7 @@ ss::future<> shard_placement_table::finish_transfer(
                 .log_revision = dest_state.current()->log_revision,
                 .shard_revision = dest_state.current()->shard_revision,
                 .is_complete = true,
+                .remake_state = dest_state.current()->remake_state,
               });
               vlog(
                 clusterlog.trace,
