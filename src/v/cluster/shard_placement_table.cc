@@ -1455,4 +1455,66 @@ void shard_placement_table::assert_is_assignment_shard() const {
       _shard);
 }
 
+ss::future<std::error_code> shard_placement_table::set_remake_state(
+  const model::ntp& ntp,
+  remake_partition_state remake_state,
+  model::revision_id expected_log_rev) {
+    vlog(
+      clusterlog.trace,
+      "setting remake state {} for ntp {}",
+      remake_state,
+      ntp);
+    // ensure that there is no concurrent enable_persistence() call
+    auto persistence_lock_holder = co_await _persistence_lock.hold_read_lock();
+
+    auto it = _states.find(ntp);
+    if (it == _states.end()) {
+        co_return errc::waiting_for_shard_placement_update;
+    }
+
+    auto& state = it->second;
+    auto& current = it->second._current.value();
+
+    if (state.assigned()->log_revision != expected_log_rev) {
+        // assignments got updated while we were waiting for the lock
+        co_return errc::waiting_for_shard_placement_update;
+    }
+
+    if (state._next.has_value()) {
+        // Partition movement in progress
+        co_return errc::waiting_for_shard_placement_update;
+    }
+
+    if (current.log_revision != expected_log_rev) {
+        // wait until partition with obsolete log revision is removed
+        co_return errc::waiting_for_reconfiguration_finish;
+    }
+
+    if (current.status != hosted_status::hosted) {
+        // x-shard transfer is in progress, wait for it to end.
+        co_return errc::waiting_for_partition_shutdown;
+    }
+
+    current.remake_state = remake_state;
+
+    if (_persistence_enabled) {
+        auto marker_buf = serde::to_iobuf(current_state_marker{
+          .ntp = ntp,
+          .log_revision = current.log_revision,
+          .shard_revision = current.shard_revision,
+          .is_complete = true,
+          .remake_state = remake_state});
+        co_await _kvstore.put(
+          kvstore_key_space,
+          current_state_kvstore_key(current.group),
+          std::move(marker_buf));
+    }
+
+    if (remake_state == remake_partition_state::remade) {
+        _probe->partition_remade();
+    }
+
+    co_return errc::success;
+}
+
 } // namespace cluster

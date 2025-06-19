@@ -260,6 +260,12 @@ public:
     ss::future<>
     finish_delete(const model::ntp&, model::revision_id expected_log_rev);
 
+    ss::future<std::error_code> set_remake_state(
+      const model::ntp& ntp,
+      remake_partition_state remake_state,
+      model::revision_id expected_log_rev);
+
+
 private:
     void assert_is_assignment_shard() const;
 
