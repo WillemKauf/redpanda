@@ -387,4 +387,33 @@ enum class shard_placement_kvstore_key_type {
     balancer_state = 3,
 };
 
+inline bytes current_state_kvstore_key(const raft::group_id group) {
+    iobuf buf;
+    serde::write(buf, shard_placement_kvstore_key_type::current_state);
+    serde::write(buf, group);
+    return iobuf_to_bytes(buf);
+}
+
+struct current_state_marker
+  : serde::envelope<
+      current_state_marker,
+      serde::version<1>,
+      serde::compat_version<0>> {
+    // NOTE: we need ntp in this marker because we want to be able to find and
+    // clean garbage kvstore state for old groups that have already been deleted
+    // from topic_table. Some of the partition kvstore state items use keys
+    // based on group id and some - based on ntp, so we need both.
+    model::ntp ntp;
+    model::revision_id log_revision;
+    model::shard_revision_id shard_revision;
+    bool is_complete = false;
+    shard_placement_table::remake_partition_state remake_state
+      = shard_placement_table::remake_partition_state::none;
+
+    auto serde_fields() {
+        return std::tie(
+          ntp, log_revision, shard_revision, is_complete, remake_state);
+    }
+};
+
 } // namespace cluster
