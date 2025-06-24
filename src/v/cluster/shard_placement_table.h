@@ -322,6 +322,7 @@ public:
       remake_partition_state remake_state,
       model::revision_id expected_log_rev);
 
+    probe* get_probe() const { return _probe.get(); }
 
 private:
     void assert_is_assignment_shard() const;
