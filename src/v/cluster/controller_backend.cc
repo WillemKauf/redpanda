@@ -2107,4 +2107,32 @@ controller_backend::do_remake_partition(const model::ntp& ntp) {
     co_return errc::success;
 }
 
+ss::future<std::error_code>
+controller_backend::remake_partition(const model::ntp& ntp) {
+    auto maybe_placement = _shard_placement.state_on_this_shard(ntp);
+
+    if (!maybe_placement.has_value()) {
+        co_return errc::partition_not_exists;
+    }
+
+    auto& current = maybe_placement->current();
+
+    if (!current.has_value()) {
+        co_return errc::waiting_for_shard_placement_update;
+    }
+
+    auto ec = co_await _shard_placement.set_remake_state(
+      ntp,
+      shard_placement_table::remake_partition_state::initiated,
+      current->log_revision);
+
+    if (ec) {
+        co_return ec;
+    }
+
+    notify_reconciliation(ntp);
+
+    co_return errc::success;
+}
+
 } // namespace cluster

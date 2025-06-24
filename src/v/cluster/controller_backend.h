@@ -244,6 +244,8 @@ public:
     ss::future<> transfer_partitions_from_extra_shard(
       storage::kvstore&, shard_placement_table&);
 
+    ss::future<std::error_code> remake_partition(const model::ntp&);
+
 private:
     struct ntp_reconciliation_state;
     using force_reconfiguration
