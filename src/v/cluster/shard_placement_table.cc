@@ -14,58 +14,12 @@
 #include "cluster/cluster_utils.h"
 #include "cluster/logger.h"
 #include "cluster/topic_table.h"
-#include "metrics/prometheus_sanitize.h"
 #include "ssx/async_algorithm.h"
 #include "types.h"
 
 #include <seastar/util/defer.hh>
 
 namespace cluster {
-
-class shard_placement_table::probe {
-public:
-    probe() = default;
-    probe(const probe&) = delete;
-    probe& operator=(const probe&) = delete;
-    probe(probe&&) = delete;
-    probe& operator=(probe&&) = delete;
-
-    void update_assigned(int64_t delta) { _total_assigned += delta; }
-    void update_hosted(int64_t delta) { _total_hosted += delta; }
-    void update_to_reconcile(int64_t delta) { _to_reconcile += delta; }
-
-    void setup_metrics() {
-        if (config::shard_local_cfg().disable_metrics()) {
-            return;
-        }
-
-        namespace sm = ss::metrics;
-        _metrics.add_group(
-          prometheus_sanitize::metrics_name("cluster:shard_placement"),
-          {
-            sm::make_gauge(
-              "assigned_partitions",
-              [this] { return _total_assigned; },
-              sm::description("Number of partitions assigned to this shard")),
-            sm::make_gauge(
-              "hosted_partitions",
-              [this] { return _total_hosted; },
-              sm::description("Number of partitions hosted on this shard")),
-            sm::make_gauge(
-              "partitions_to_reconcile",
-              [this] { return _to_reconcile; },
-              sm::description("Number of partitions needing reconciliation of "
-                              "shard-local state")),
-          });
-    }
-
-private:
-    int64_t _total_assigned = 0;
-    int64_t _total_hosted = 0;
-    int64_t _to_reconcile = 0;
-
-    metrics::internal_metric_groups _metrics;
-};
 
 std::ostream& operator<<(
   std::ostream& o, const shard_placement_table::shard_local_assignment& as) {

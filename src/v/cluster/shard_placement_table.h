@@ -15,6 +15,7 @@
 #include "base/seastarx.h"
 #include "cluster/types.h"
 #include "container/chunked_hash_map.h"
+#include "metrics/prometheus_sanitize.h"
 #include "storage/fwd.h"
 #include "utils/mutex.h"
 #include "utils/rwlock.h"
@@ -41,7 +42,61 @@ namespace cluster {
 class shard_placement_table
   : public ss::peering_sharded_service<shard_placement_table> {
 private:
-    class probe;
+    class probe {
+    public:
+        probe() = default;
+        probe(const probe&) = delete;
+        probe& operator=(const probe&) = delete;
+        probe(probe&&) = delete;
+        probe& operator=(probe&&) = delete;
+
+        void update_assigned(int64_t delta) { _total_assigned += delta; }
+        void update_hosted(int64_t delta) { _total_hosted += delta; }
+        void update_to_reconcile(int64_t delta) { _to_reconcile += delta; }
+        void partition_remade() { ++_remade_partitions; }
+
+        uint32_t remade_partitions() const { return _remade_partitions; }
+
+        void setup_metrics() {
+            if (config::shard_local_cfg().disable_metrics()) {
+                return;
+            }
+
+            namespace sm = ss::metrics;
+            _metrics.add_group(
+              prometheus_sanitize::metrics_name("cluster:shard_placement"),
+              {
+                sm::make_gauge(
+                  "assigned_partitions",
+                  [this] { return _total_assigned; },
+                  sm::description(
+                    "Number of partitions assigned to this shard")),
+                sm::make_gauge(
+                  "hosted_partitions",
+                  [this] { return _total_hosted; },
+                  sm::description("Number of partitions hosted on this shard")),
+                sm::make_gauge(
+                  "partitions_to_reconcile",
+                  [this] { return _to_reconcile; },
+                  sm::description(
+                    "Number of partitions needing reconciliation of "
+                    "shard-local state")),
+                sm::make_gauge(
+                  "remade_partitions",
+                  [this] { return _remade_partitions; },
+                  sm::description(
+                    "Number of partitions that were forced to be remade")),
+              });
+        }
+
+    private:
+        int64_t _total_assigned = 0;
+        int64_t _total_hosted = 0;
+        int64_t _to_reconcile = 0;
+        uint32_t _remade_partitions = 0;
+
+        metrics::internal_metric_groups _metrics;
+    };
 
 public:
     // assignment modification methods must be called on this shard
