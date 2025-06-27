@@ -321,6 +321,8 @@ public:
       const model::ntp& ntp,
       remake_partition_state remake_state,
       model::revision_id expected_log_rev);
+    std::optional<remake_partition_state>
+    get_remake_state(const model::ntp& ntp) const;
 
     probe* get_probe() const { return _probe.get(); }
 

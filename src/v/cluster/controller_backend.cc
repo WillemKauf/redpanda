@@ -2135,4 +2135,27 @@ controller_backend::remake_partition(const model::ntp& ntp) {
     co_return errc::success;
 }
 
+ss::future<std::error_code> controller_backend::wait_for_remade_partition(
+  const model::ntp& ntp, model::timeout_clock::time_point deadline) const {
+    while (!_as.local().abort_requested()) {
+        if (model::timeout_clock::now() > deadline) {
+            co_return make_error_code(errc::timeout);
+        }
+
+        auto state_opt = _shard_placement.get_remake_state(ntp);
+        auto p = _partition_manager.local().get(ntp);
+        if (
+          p && state_opt.has_value()
+          && state_opt.value()
+               == shard_placement_table::remake_partition_state::remade) {
+            co_return errc::success;
+        }
+
+        co_await ss::sleep_abortable(
+          std::chrono::milliseconds(100), _as.local());
+    }
+
+    co_return make_error_code(errc::timeout);
+}
+
 } // namespace cluster

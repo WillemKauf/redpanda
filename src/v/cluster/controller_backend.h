@@ -245,6 +245,8 @@ public:
       storage::kvstore&, shard_placement_table&);
 
     ss::future<std::error_code> remake_partition(const model::ntp&);
+    ss::future<std::error_code> wait_for_remade_partition(
+      const model::ntp& ntp, model::timeout_clock::time_point deadline) const;
 
 private:
     struct ntp_reconciliation_state;

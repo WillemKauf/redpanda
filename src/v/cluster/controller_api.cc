@@ -589,7 +589,15 @@ controller_api::remake_partition(const model::ntp& ntp) {
     auto shard = shard_for_opt.value();
     co_return co_await _backend.invoke_on(
       shard, [&ntp](cluster::controller_backend& b) {
-          return b.remake_partition(ntp);
+          return b.remake_partition(ntp).then([&b, &ntp](auto e) {
+              if (e) {
+                  return ss::make_ready_future<std::error_code>(e);
+              }
+
+              static auto timeout = 30s;
+              return b.wait_for_remade_partition(
+                ntp, model::timeout_clock::now() + timeout);
+          });
       });
 }
 

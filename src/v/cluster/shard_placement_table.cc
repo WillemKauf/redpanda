@@ -1449,4 +1449,20 @@ ss::future<std::error_code> shard_placement_table::set_remake_state(
     co_return errc::success;
 }
 
+std::optional<shard_placement_table::remake_partition_state>
+shard_placement_table::get_remake_state(const model::ntp& ntp) const {
+    auto it = _states.find(ntp);
+    if (it == _states.end()) {
+        return std::nullopt;
+    }
+
+    auto& state = it->second;
+    if (!state._current.has_value()) {
+        return std::nullopt;
+    }
+
+    auto& current = state._current.value();
+    return current.remake_state;
+}
+
 } // namespace cluster
