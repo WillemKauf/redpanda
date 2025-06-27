@@ -259,7 +259,8 @@ is_compactible_control_batch(const model::record_batch_type batch_type) {
     // Control batches in consumer offsets are special compared to
     // the ones in data partitions can be safely compacted away.
     // Fence batches can also be safely removed.
-    return batch_type == model::record_batch_type::tx_fence
+    return (!config::shard_local_cfg().log_compaction_disable_tx_batch_removal()
+            && batch_type == model::record_batch_type::tx_fence)
            || batch_type == model::record_batch_type::group_fence_tx
            || batch_type == model::record_batch_type::group_prepare_tx
            || batch_type == model::record_batch_type::group_abort_tx
@@ -393,14 +394,19 @@ ss::future<bool> should_keep(
     // We can also safely remove fence batches.
     if (header.attrs.is_control()) {
         if (
-          past_tx_delete_horizon || is_compactible_control_batch(header.type)) {
+          !config::shard_local_cfg().log_compaction_disable_tx_batch_removal()
+          && past_tx_delete_horizon) {
             max_removed_offset = b.base_offset()
                                  + model::offset_delta(r.offset_delta());
             co_return false;
-        } else {
-            has_tx_batches = true;
-            co_return true;
         }
+
+        if (is_compactible_control_batch(header.type)) {
+            co_return false;
+        }
+
+        has_tx_batches = true;
+        co_return true;
     }
 
     auto keep = co_await is_latest_key(b, r);
