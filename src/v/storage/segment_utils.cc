@@ -423,8 +423,10 @@ ss::future<storage::index_state> do_copy_segment_data(
         return ss::make_ready_future<bool>(keep);
     };
 
+    const auto& ntp = seg->path().get_ntp();
     auto record_filter = [f = std::move(offset_in_compacted_list),
                           &feature_table,
+                          &ntp,
                           segment_last_offset,
                           past_tombstone_delete_horizon,
                           &may_have_tombstone_records,
@@ -436,6 +438,7 @@ ss::future<storage::index_state> do_copy_segment_data(
         return internal::should_keep(
           b,
           r,
+          ntp,
           is_last_record_in_batch,
           f,
           pb,
@@ -447,7 +450,7 @@ ss::future<storage::index_state> do_copy_segment_data(
     };
 
     auto copy_reducer = copy_data_segment_reducer(
-      seg->path().get_ntp(),
+      ntp,
       std::move(record_filter),
       appender.get(),
       seg->path().is_internal_topic(),

@@ -205,8 +205,10 @@ ss::future<index_state> deduplicate_segment(
         return is_latest_record_for_key(map, b, r);
     };
 
+    const auto& ntp = seg->path().get_ntp();
     auto record_filter = [f = std::move(is_latest_record),
                           &feature_table,
+                          &ntp,
                           segment_last_offset,
                           past_tombstone_delete_horizon,
                           &may_have_tombstone_records,
@@ -218,6 +220,7 @@ ss::future<index_state> deduplicate_segment(
         return internal::should_keep(
           b,
           r,
+          ntp,
           is_last_record_in_batch,
           f,
           probe,
@@ -229,7 +232,7 @@ ss::future<index_state> deduplicate_segment(
     };
 
     auto copy_reducer = internal::copy_data_segment_reducer(
-      seg->path().get_ntp(),
+      ntp,
       std::move(record_filter),
       &appender,
       seg->path().is_internal_topic(),

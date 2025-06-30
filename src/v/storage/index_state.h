@@ -200,10 +200,11 @@ struct index_state
     // the index.
     std::optional<model::timestamp> broker_timestamp{std::nullopt};
 
-    // The number of compactible records appended to the segment. This may not
-    // necessarily indicate the exact number of compactible records, e.g. if
-    // the segment was truncated, the count will remain the same. As such, this
-    // value may be an overestimate of the exact number of compactible records.
+    // The number of records appended to the segment that could be considered
+    // for removal via compaction. This may not necessarily indicate the exact
+    // number of compactible records, e.g. if the segment was truncated, the
+    // count will remain the same. As such, this value may be an overestimate of
+    // the exact number of compactible records.
     //
     // Returns std::nullopt if this index was written in a version that didn't
     // support this field, and we can't conclude anything.
