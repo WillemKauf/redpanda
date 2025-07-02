@@ -300,6 +300,8 @@ public:
     std::optional<model::timestamp>
       earliest_removable_timestamp(model::offset) const final;
 
+    std::optional<model::offset> max_removed_offset() const final;
+
 private:
     friend class disk_log_appender; // for multi-term appends
     friend class disk_log_builder;  // for tests
