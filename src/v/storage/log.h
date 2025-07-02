@@ -239,6 +239,9 @@ public:
     virtual std::optional<model::timestamp>
     earliest_dirty_segment_ts() const = 0;
 
+    virtual std::optional<model::timestamp>
+      earliest_removable_timestamp(model::offset) const = 0;
+
 private:
     ntp_config _config;
 

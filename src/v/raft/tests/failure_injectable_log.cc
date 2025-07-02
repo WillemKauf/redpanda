@@ -261,4 +261,9 @@ failure_injectable_log::earliest_dirty_segment_ts() const {
     return _underlying_log->earliest_dirty_segment_ts();
 }
 
+std::optional<model::timestamp>
+failure_injectable_log::earliest_removable_timestamp(model::offset o) const {
+    return _underlying_log->earliest_removable_timestamp(o);
+}
+
 } // namespace raft
