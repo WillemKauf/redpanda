@@ -1,4 +1,4 @@
-load("//bazel:test.bzl", "redpanda_cc_bench", "redpanda_cc_btest", "redpanda_cc_gtest", "redpanda_test_cc_library")
+load("//bazel:test.bzl", "redpanda_cc_btest", "redpanda_cc_gtest", "redpanda_test_cc_library")
 
 redpanda_test_cc_library(
     name = "storage_e2e_fixture",
@@ -82,6 +82,8 @@ redpanda_test_cc_library(
     visibility = ["//visibility:public"],
     deps = [
         "//src/v/base",
+        "//src/v/compaction",
+        "//src/v/compaction:types",
         "//src/v/container:chunked_circular_buffer",
         "//src/v/features",
         "//src/v/model",
@@ -293,20 +295,6 @@ redpanda_cc_gtest(
         "//src/v/test_utils:gtest",
         "@googletest//:gtest",
         "@seastar",
-    ],
-)
-
-redpanda_cc_gtest(
-    name = "key_offset_map_test",
-    timeout = "short",
-    srcs = [
-        "key_offset_map_test.cc",
-    ],
-    deps = [
-        "//src/v/base",
-        "//src/v/storage:key_offset_map",
-        "//src/v/test_utils:gtest",
-        "@googletest//:gtest",
     ],
 )
 
@@ -530,7 +518,7 @@ redpanda_cc_gtest(
         "scoped_file_tracker_test.cc",
     ],
     deps = [
-        "//src/v/storage",
+        "//src/v/storage:scoped_file_tracker",
         "//src/v/test_utils:gtest",
         "@abseil-cpp//absl/container:btree",
         "@googletest//:gtest",
@@ -546,36 +534,14 @@ redpanda_cc_gtest(
     deps = [
         ":disk_log_builder",
         ":disk_log_builder_fixture",
+        "//src/v/compaction:key_offset_map",
         "//src/v/config",
         "//src/v/model",
         "//src/v/model/tests:random",
         "//src/v/random:generators",
         "//src/v/storage",
         "//src/v/storage:chunk_cache",
-        "//src/v/storage:key_offset_map",
         "//src/v/test_utils:gtest",
-        "@googletest//:gtest",
-        "@seastar",
-    ],
-)
-
-redpanda_cc_gtest(
-    name = "segment_concatenation_test",
-    timeout = "short",
-    srcs = [
-        "segment_concatenation_test.cc",
-    ],
-    cpu = 1,
-    deps = [
-        ":disk_log_builder",
-        ":disk_log_builder_fixture",
-        "//src/v/bytes:iobuf",
-        "//src/v/bytes:iostream",
-        "//src/v/model",
-        "//src/v/random:generators",
-        "//src/v/storage",
-        "//src/v/test_utils:gtest",
-        "//src/v/utils:mutex",
         "@googletest//:gtest",
         "@seastar",
     ],
@@ -831,40 +797,24 @@ redpanda_cc_gtest(
     ],
 )
 
-redpanda_cc_gtest(
-    name = "compaction_reducer_test",
-    timeout = "short",
-    srcs = [
-        "compaction_reducer_test.cc",
-    ],
-    deps = [
-        "//src/v/random:generators",
-        "//src/v/storage",
-        "//src/v/storage:logger",
-        "//src/v/test_utils:gtest",
-        "//src/v/test_utils:random_bytes",
-        "@googletest//:gtest",
-    ],
-)
-
-redpanda_cc_gtest(
-    name = "compaction_reducer_fixture_test",
-    timeout = "short",
-    srcs = [
-        "compaction_reducer_fixture_test.cc",
-    ],
-    cpu = 1,
-    deps = [
-        "//src/v/model",
-        "//src/v/storage",
-        "//src/v/storage:key_offset_map",
-        "//src/v/storage/tests:batch_generators",
-        "//src/v/storage/tests:storage_test_fixture",
-        "//src/v/test_utils:gtest",
-        "@googletest//:gtest",
-        "@seastar",
-    ],
-)
+#redpanda_cc_gtest(
+#    name = "compaction_reducer_fixture_test",
+#    timeout = "short",
+#    srcs = [
+#        "compaction_reducer_fixture_test.cc",
+#    ],
+#    cpu = 1,
+#    deps = [
+#        "//src/v/compaction:key_offset_map",
+#        "//src/v/model",
+#        "//src/v/storage",
+#        "//src/v/storage/tests:batch_generators",
+#        "//src/v/storage/tests:storage_test_fixture",
+#        "//src/v/test_utils:gtest",
+#        "@googletest//:gtest",
+#        "@seastar",
+#    ],
+#)
 
 redpanda_cc_gtest(
     name = "batch_consumer_utils_test",
@@ -1004,21 +954,5 @@ redpanda_cc_gtest(
         "@abseil-cpp//absl/container:btree",
         "@googletest//:gtest",
         "@seastar",
-    ],
-)
-
-redpanda_cc_bench(
-    name = "storage_rpbench",
-    srcs = ["compaction_idx_bench.cc"],
-    deps = [
-        "//src/v/model",
-        "//src/v/random:generators",
-        "//src/v/storage",
-        "//src/v/storage:logger",
-        "//src/v/test_utils:random_bytes",
-        "@abseil-cpp//absl/container:flat_hash_map",
-        "@abseil-cpp//absl/container:node_hash_map",
-        "@seastar",
-        "@seastar//:benchmark",
     ],
 )

@@ -32,11 +32,7 @@
 #include <optional>
 
 namespace storage {
-struct segment_closed_exception final : std::exception {
-    const char* what() const noexcept final {
-        return "segment_closed exception";
-    }
-};
+
 namespace testing_details {
 class offset_tracker_accessor;
 class segment_accessor;
@@ -222,7 +218,7 @@ public:
     const compacted_index_writer& compaction_index() const;
     // We currently use `max_removable_local_log_offset` to control both
     // deletion/eviction, and compaction.
-    bool is_compactible(const compaction_config& cfg) const;
+    bool is_compactible(const compaction::compaction_config& cfg) const;
 
     // Calls `_cache->reset()`, iff the optional `_cache` has a value. This
     // leaves the object in a re-usable state. If there is no contained object
@@ -459,7 +455,8 @@ inline bool segment::has_compaction_index() const {
     return _compaction_index != std::nullopt;
 }
 
-inline bool segment::is_compactible(const compaction_config& cfg) const {
+inline bool
+segment::is_compactible(const compaction::compaction_config& cfg) const {
     // Because we don't support partially-compacted segments, to be eligible for
     // compaction a segment must both
     // 1. have latest batch timestamp longer ago than min.compaction.lag.ms, and

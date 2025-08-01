@@ -12,6 +12,7 @@
 #include "model/record.h"
 #include "model/timestamp.h"
 #include "storage/disk_log_impl.h"
+#include "storage/exceptions.h"
 #include "storage/log.h"
 #include "storage/log_manager.h"
 #include "storage/segment.h"
@@ -557,7 +558,7 @@ TEST_F(storage_test_fixture, test_concurrent_truncate_and_compaction) {
     // compaction, which initially self compacts one segment at a time, while
     // leaving room for further windowed compaction.
     ss::abort_source as;
-    compaction_config compaction_cfg(
+    compaction::compaction_config compaction_cfg(
       model::offset::max(), std::nullopt, std::nullopt, as);
     auto& disk_log = *dynamic_cast<disk_log_impl*>(log.get());
     disk_log.adjacent_merge_compact(disk_log.segments(), compaction_cfg).get();
@@ -606,8 +607,7 @@ TEST_F(storage_test_fixture, test_concurrent_truncate_and_compaction) {
     }
     if (housekeeping_eptr) {
         EXPECT_THROW(
-          std::rethrow_exception(housekeeping_eptr),
-          storage::segment_closed_exception);
+          std::rethrow_exception(housekeeping_eptr), segment_closed_exception);
     }
     ASSERT_FALSE(truncation_eptr);
 

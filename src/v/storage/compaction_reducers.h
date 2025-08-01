@@ -14,6 +14,7 @@
 #include "absl/container/btree_map.h"
 #include "base/units.h"
 #include "bytes/bytes.h"
+#include "compaction/fwd.h"
 #include "container/fragmented_vector.h"
 #include "hashing/xx.h"
 #include "model/fundamental.h"
@@ -339,7 +340,9 @@ private:
 class map_building_reducer : public compaction_reducer {
 public:
     explicit map_building_reducer(
-      model::ntp ntp, key_offset_map* map, model::offset start_offset_inclusive)
+      model::ntp ntp,
+      compaction::key_offset_map* map,
+      model::offset start_offset_inclusive)
       : _ntp(std::move(ntp))
       , _map(map)
       , _start_offset(start_offset_inclusive) {}
@@ -356,7 +359,7 @@ private:
       bool& fully_indexed_batch);
 
     model::ntp _ntp;
-    key_offset_map* _map;
+    compaction::key_offset_map* _map;
     model::offset _start_offset;
     bool _fully_indexed_segment = true;
 };

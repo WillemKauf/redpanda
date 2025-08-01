@@ -18,6 +18,17 @@
 #include <exception>
 #include <utility>
 
+namespace storage {
+struct segment_closed_exception final : std::exception {
+    explicit segment_closed_exception(ss::sstring s)
+      : _msg(std::move(s)) {}
+
+    const char* what() const noexcept override { return _msg.c_str(); }
+
+private:
+    ss::sstring _msg;
+};
+
 class malformed_batch_stream_exception : public std::exception {
 public:
     explicit malformed_batch_stream_exception(ss::sstring s)
@@ -50,3 +61,5 @@ public:
 private:
     ss::sstring _msg;
 };
+
+} // namespace storage

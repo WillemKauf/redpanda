@@ -139,37 +139,6 @@ redpanda_cc_library(
 )
 
 redpanda_cc_library(
-    name = "compaction",
-    hdrs = [
-        "compaction.h",
-    ],
-    include_prefix = "storage",
-    deps = [
-        "//src/v/bytes",
-    ],
-)
-
-redpanda_cc_library(
-    name = "key_offset_map",
-    srcs = [
-        "key_offset_map.cc",
-    ],
-    hdrs = [
-        "key_offset_map.h",
-    ],
-    include_prefix = "storage",
-    deps = [
-        ":compaction",
-        "//src/v/container:fragmented_vector",
-        "//src/v/hashing:secure",
-        "//src/v/model",
-        "//src/v/utils:tracking_allocator",
-        "@abseil-cpp//absl/container:btree",
-        "@seastar",
-    ],
-)
-
-redpanda_cc_library(
     name = "chunk_cache",
     srcs = [
         "chunk_cache.cc",
@@ -283,6 +252,7 @@ redpanda_cc_library(
         "backlog_controller.cc",
         "compacted_index_chunk_reader.cc",
         "compaction_controller.cc",
+        "compaction_reducer.cc",
         "compaction_reducers.cc",
         "disk_log_appender.cc",
         "disk_log_impl.cc",
@@ -320,6 +290,7 @@ redpanda_cc_library(
         "compacted_index_writer.h",
         "compacted_offset_list.h",
         "compaction_controller.h",
+        "compaction_reducer.h",
         "compaction_reducers.h",
         "config.h",
         "directories.h",
@@ -350,7 +321,6 @@ redpanda_cc_library(
         "probe.h",
         "readers_cache.h",
         "readers_cache_probe.h",
-        "scoped_file_tracker.h",
         "segment.h",
         "segment_deduplication_utils.h",
         "segment_index.h",
@@ -372,20 +342,24 @@ redpanda_cc_library(
     deps = [
         ":batch_cache",
         ":chunk_cache",
-        ":compaction",
         ":index_state",
-        ":key_offset_map",
         ":logger",
         ":parser_utils",
         ":record_batch_builder",
         ":record_batch_utils",
         ":resources",
+        ":scoped_file_tracker",
         ":segment_appender",
         "//src/v/base",
         "//src/v/bytes",
         "//src/v/bytes:iobuf",
         "//src/v/bytes:iobuf_parser",
         "//src/v/bytes:iostream",
+        "//src/v/compaction",
+        "//src/v/compaction:key",
+        "//src/v/compaction:key_offset_map",
+        "//src/v/compaction:types",
+        "//src/v/compaction:utils",
         "//src/v/compression",
         "//src/v/config",
         "//src/v/container:chunked_circular_buffer",
@@ -453,6 +427,41 @@ redpanda_cc_library(
         "@fmt",
         "@roaring",
         "@seastar",
+    ],
+)
+
+redpanda_cc_library(
+    name = "file_sanitizer_types",
+    srcs = [
+        "file_sanitizer_types.cc",
+    ],
+    hdrs = [
+        "file_sanitizer_types.h",
+    ],
+    implementation_deps = [
+        ":logger",
+        "//src/v/strings:string_switch",
+        "//src/v/utils:file_io",
+    ],
+    include_prefix = "storage",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/v/json",
+        "//src/v/model",
+        "@abseil-cpp//absl/container:flat_hash_map",
+        "@seastar",
+    ],
+)
+
+redpanda_cc_library(
+    name = "scoped_file_tracker",
+    hdrs = [
+        "scoped_file_tracker.h",
+    ],
+    include_prefix = "storage",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@abseil-cpp//absl/container:btree",
     ],
 )
 

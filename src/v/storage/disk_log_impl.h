@@ -12,6 +12,7 @@
 #pragma once
 
 #include "absl/container/flat_hash_map.h"
+#include "compaction/fwd.h"
 #include "features/feature_table.h"
 #include "model/fundamental.h"
 #include "storage/disk_log_appender.h"
@@ -213,13 +214,11 @@ public:
     // returns a contiguous range of segments. It is up to the caller to filter
     // out these already cleanly-compacted segments.
     segment_set find_sliding_range(
-      const compaction_config& cfg,
+      const compaction::compaction_config& cfg,
       std::optional<model::offset> new_start_offset = std::nullopt);
 
     void
-    set_last_compaction_window_start_offset(std::optional<model::offset> o) {
-        _last_compaction_window_start_offset = o;
-    }
+    set_last_compaction_window_start_offset(std::optional<model::offset> o);
 
     const std::optional<model::offset>&
     get_last_compaction_window_start_offset() const {
@@ -232,32 +231,30 @@ public:
 
     // Self compacts a segment.
     ss::future<compaction_result> segment_self_compact(
-      compaction_config,
+      compaction::compaction_config,
       ss::lw_shared_ptr<segment> seg,
       bool force_compaction = false);
 
     ss::future<> adjacent_merge_compact(
       segment_set& segments,
-      compaction_config,
+      compaction::compaction_config,
       std::optional<model::offset> new_start_offset = std::nullopt);
 
     ss::future<bool> sliding_window_compact(
-      const compaction_config& cfg,
+      const compaction::compaction_config& cfg,
       std::optional<model::offset> new_start_offset = std::nullopt);
 
     ss::future<> rewrite_segment_with_offset_map(
-      const compaction_config& cfg,
+      const compaction::compaction_config& cfg,
       ss::lw_shared_ptr<segment> seg,
-      key_offset_map& map,
+      compaction::key_offset_map& map,
       bool is_finished_window_compaction,
       bool is_clean_compacted);
 
     ss::future<bool> chunked_sliding_window_compact(
-      const compaction_config& cfg,
-      const segment_set& segs,
-      key_offset_map& map);
+      const compaction::compaction_config& cfg, const segment_set& segs);
 
-    const auto& compaction_ratio() const { return _compaction_ratio; }
+    auto& compaction_ratio() { return _compaction_ratio; }
 
     static ss::future<> copy_kvstore_state(
       model::ntp,
@@ -293,12 +290,12 @@ public:
     std::optional<
       chunked_vector<std::pair<segment_set::iterator, segment_set::iterator>>>
     find_adjacent_compaction_ranges(
-      const compaction_config& cfg,
+      const compaction::compaction_config& cfg,
       std::optional<model::offset> new_start_offset = std::nullopt);
 
     ss::future<std::optional<chunked_vector<compaction_result>>>
     compact_adjacent_segment_ranges(
-      storage::compaction_config cfg,
+      compaction::compaction_config cfg,
       std::optional<model::offset> new_start_offset = std::nullopt);
 
     // Returns the timestamp of the earliest removable data in the log above
@@ -326,6 +323,40 @@ public:
       std::optional<segment_index::entry> index_entry,
       model::offset target,
       boundary_type boundary);
+
+    ss::future<bool> index_segment_in_offset_map(
+      const compaction::compaction_config& cfg,
+      ss::lw_shared_ptr<segment> seg,
+      compaction::key_offset_map& m);
+
+    ss::sharded<features::feature_table>& feature_table() const {
+        return _feature_table;
+    }
+
+    // Update the number of bytes in dirty segments.
+    //
+    // Dirty segments are closed segments which have not yet been cleanly
+    // compacted- i.e, duplicates for keys in this segment _could_ be found in
+    // the prefix of the log up to this segment.
+    //
+    // This value can increase AND decrease. It increases
+    // when a new segment is rolled, and decreases when the segment is marked as
+    // cleanly compacted, closed segments are evicted from the log, or when
+    // bytes are removed by compaction.
+    void add_dirty_segment_bytes(ssize_t bytes);
+    void subtract_dirty_segment_bytes(ssize_t bytes);
+
+    // Update the number of bytes in closed segments.
+    //
+    // This value can increase AND decrease. It increases when a new
+    // segment is rolled, and decreases when closed segments are evicted from
+    // the log, or when bytes are removed by compaction.
+    void add_closed_segment_bytes(ssize_t bytes);
+    void subtract_closed_segment_bytes(ssize_t bytes);
+
+    mutex& segment_rewrite_lock() { return _segment_rewrite_lock; }
+
+    ss::future<> erase_segment(ss::lw_shared_ptr<segment> seg);
 
 private:
     friend class disk_log_appender; // for multi-term appends
@@ -356,11 +387,12 @@ private:
     // operation.
     ss::future<compaction_result> do_compact_adjacent_segments(
       chunked_vector<ss::lw_shared_ptr<segment>>& segments,
-      storage::compaction_config cfg);
+      compaction::compaction_config cfg);
 
     ss::future<std::optional<model::offset>> do_gc(gc_config);
     ss::future<> do_compact(
-      compaction_config, std::optional<model::offset> new_start_offset);
+      compaction::compaction_config,
+      std::optional<model::offset> new_start_offset);
 
     ss::future<> remove_empty_segments();
 
@@ -505,29 +537,6 @@ private:
 
     ssize_t _dirty_segment_bytes{0};
     ssize_t _closed_segment_bytes{0};
-
-    // Update the number of bytes in dirty segments.
-    //
-    // Dirty segments are closed segments which have not yet been cleanly
-    // compacted- i.e, duplicates for keys in this segment _could_ be found in
-    // the prefix of the log up to this segment.
-    //
-    // This value can increase AND decrease. It increases
-    // when a new segment is rolled, and decreases when the segment is marked as
-    // cleanly compacted, closed segments are evicted from the log, or when
-    // bytes are removed by compaction. For that reason, one of the tags add_tag
-    // or subtract_tag must be used.
-    void add_dirty_segment_bytes(ssize_t bytes);
-    void subtract_dirty_segment_bytes(ssize_t bytes);
-
-    // Update the number of bytes in closed segments.
-    //
-    // This value can increase AND decrease. It increases when a new
-    // segment is rolled, and decreases when closed segments are evicted from
-    // the log, or when bytes are removed by compaction. For that reason, one of
-    // the tags add_tag or subtract_tag must be used.
-    void add_closed_segment_bytes(ssize_t bytes);
-    void subtract_closed_segment_bytes(ssize_t bytes);
 
     // Updates the number of closed & dirty bytes on segment roll (i.e when a
     // segment's appender is released) or when recovering existing segments from

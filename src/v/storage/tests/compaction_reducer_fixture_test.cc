@@ -8,10 +8,10 @@
  * the Business Source License, use of this software will be governed
  * by the Apache License, Version 2.0
  */
+#include "compaction/key_offset_map.h"
 #include "model/fundamental.h"
 #include "model/record_batch_reader.h"
 #include "storage/compaction_reducers.h"
-#include "storage/key_offset_map.h"
 #include "storage/lock_manager.h"
 #include "storage/log_reader.h"
 #include "storage/probe.h"
