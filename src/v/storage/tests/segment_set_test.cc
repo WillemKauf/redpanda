@@ -72,6 +72,7 @@ public:
         auto segment_path = make_segment_path(test_idx, spec);
         auto reader = std::make_unique<segment_reader>(
           segment_path, 128_KiB, 10);
+        reader->set_file_size(1);
 
         // Touch the file on disk (it may be renamed in
         // maybe_create_contiguous_segment_set).
@@ -259,6 +260,32 @@ TEST_F(SegmentSetFixtureTest, recovery) {
     for (size_t idx = 0; idx < test_cases.size(); ++idx) {
         run_test_case(idx, test_cases[idx]).get();
     }
+}
+
+TEST_F(SegmentSetFixtureTest, range) {
+    using o = model::offset;
+    auto segment_specs = std::vector<test_case::segment_spec>{
+      test_case::segment_spec(o{0}, o{2}),
+      test_case::segment_spec(o{3}, o{5}),
+      test_case::segment_spec(o{6}, o{8}),
+      test_case::segment_spec(o{9}, o{10})};
+    segment_set::underlying_t deque;
+    for (const auto& spec : segment_specs) {
+        deque.push_back(make_segment(0, spec).get());
+    }
+    segment_set segs(std::move(deque));
+
+    auto s = 3;
+    auto e = 8;
+    auto start = o{s};
+    auto end = model::next_offset(o{e});
+    auto s_it = segs.lower_bound(start);
+    auto e_it = segs.lower_bound(end);
+    segment_set::underlying_t d(s_it, e_it);
+    segment_set filtered_segs(std::move(d));
+    EXPECT_EQ(filtered_segs.size(), 3);
+    EXPECT_EQ(filtered_segs.front()->offsets().get_base_offset(), o{0});
+    EXPECT_EQ(filtered_segs.back()->offsets().get_dirty_offset(), o{8});
 }
 
 } // namespace storage

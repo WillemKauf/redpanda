@@ -119,6 +119,9 @@ Iterator segments_lower_bound(Iterator begin, Iterator end, Needle needle) {
 /// _inclusive_ we must check the previous iterator in the case that we are at
 /// the end, we also check the last element.
 segment_set::iterator segment_set::lower_bound(model::offset offset) {
+    for (const auto& v : _handles) {
+        std::cout << "offsets: " << v->offsets() << '\n';
+    }
     return segments_lower_bound(
       std::begin(_handles), std::end(_handles), offset);
 }

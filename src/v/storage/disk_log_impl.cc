@@ -831,10 +831,9 @@ ss::future<bool> disk_log_impl::sliding_window_compact(
         const bool is_clean_compacted = seg->offsets().get_base_offset()
                                         >= idx_start_offset;
 
-        const bool segment_needs_rewrite
-          = internal::may_have_removable_tombstones(seg, cfg)
-            || co_await segment_needs_rewrite_with_offset_map(cfg, seg, map);
-        if (!segment_needs_rewrite) {
+        const bool needs_rewrite = co_await segment_needs_rewrite(
+          seg, cfg, map);
+        if (!needs_rewrite) {
             vlog(
               gclog.trace,
               "[{}] segment does not require rewrite with provided offset map: "
@@ -1339,7 +1338,8 @@ ss::future<> disk_log_impl::housekeeping(housekeeping_config cfg) {
     if (config().is_compacted() && !_segs.empty()) {
         scoped_file_tracker::set_t leftovers;
         cfg.compact.files_to_cleanup = &leftovers;
-        auto src = std::make_unique<storage_compaction_source>(
+        using source_t = storage_compaction_source<storage_compaction_sink>;
+        auto src = std::make_unique<source_t>(
           this, new_start_offset, cfg.compact);
         auto sink = std::make_unique<storage_compaction_sink>(
           this, cfg.compact);
@@ -1477,10 +1477,9 @@ ss::future<bool> disk_log_impl::chunked_sliding_window_compact(
                 continue;
             }
 
-            const bool segment_needs_rewrite
-              = internal::may_have_removable_tombstones(s, cfg)
-                || co_await segment_needs_rewrite_with_offset_map(cfg, s, map);
-            if (!segment_needs_rewrite) {
+            const bool needs_rewrite = co_await segment_needs_rewrite(
+              s, cfg, map);
+            if (!needs_rewrite) {
                 vlog(
                   gclog.trace,
                   "[{}] segment does not require rewrite with provided offset "
@@ -4710,12 +4709,98 @@ ss::future<bool> disk_log_impl::index_segment_in_offset_map(
     co_return co_await build_offset_map_for_segment(cfg, *seg, m);
 }
 
-ss::future<> disk_log_impl::erase_segment(ss::lw_shared_ptr<segment> seg) {
-    auto it = std::find(_segs.begin(), _segs.end(), seg);
+ss::future<> disk_log_impl::erase_segment(ss::lw_shared_ptr<segment> s) {
+    auto it = std::find(_segs.begin(), _segs.end(), s);
     if (it != _segs.end()) {
         _segs.erase(it, std::next(it));
-        co_await remove_segment_permanently(seg, "erase_segment");
+        co_await remove_segment_permanently(s, "erase_segment");
     }
+}
+
+std::optional<chunked_vector<ss::lw_shared_ptr<segment>>>
+disk_log_impl::segments_in_range(model::offset s, model::offset e) const {
+    auto s_it = _segs.lower_bound(s);
+    if (s_it == _segs.end()) {
+        return std::nullopt;
+    }
+
+    auto e_it = _segs.lower_bound(e);
+    if (e_it == _segs.end()) {
+        return std::nullopt;
+    }
+
+    return chunked_vector<ss::lw_shared_ptr<segment>>(s_it, e_it);
+}
+
+ss::future<> disk_log_impl::replace_with_segment(
+  ss::lw_shared_ptr<segment> replacement,
+  chunked_vector<segment::generation_id> expected_ids) {
+    auto o = s->offsets();
+    auto segs_to_replace_opt = segments_in_range(
+      o.get_base_offset(), model::next_offset(o.get_dirty_offset()));
+    if (!segs_to_replace_opt.has_value()) {
+        throw std::runtime_error(
+          "Couldn't replace segment range, didn't find segments in range.");
+    }
+
+    auto& segs_to_replace = segs_to_replace_opt.value();
+
+    if (!segs_to_replace.size() == expected_ids.size()) {
+        throw std::runtime_error(
+          "Couldn't replace segment range, size of segment range found does "
+          "not equal size of expected generation ids.");
+    }
+
+    // Evict segment readers and prevent new ones from being added to the cache.
+    chunked_vector<ss::future<readers_cache::range_lock_holder>> holder_futs;
+    holder_futs.reserve(segs_to_replace.size());
+    for (auto& s : segs_to_replace) {
+        holder_futs.push_back(readers_cache.evict_segment_readers(s));
+    }
+
+    auto holders = co_await ss::when_all_succeed(
+      holder_futs.begin(), holder_futs.end());
+
+    // lock the range. only metadata (e.g. open/rename/delete) i/o occurs with
+    // these locks held so it is a relatively short duration. all of the data
+    // copying and compaction i/o occurred above with no locks held. 5 retries
+    // with a max lock timeout of 1 second. if we don't get the locks there is
+    // probably a reader. compaction will revisit.
+    static constexpr auto write_lock_timeout = std::chrono::seconds(1);
+    static constexpr auto write_lock_retries = 5;
+    auto locks = co_await internal::write_lock_segments(
+      segs_to_replace, write_lock_timeout, write_lock_retries);
+
+    auto any_segments_closed = std::ranges::any_of(
+      segs_to_replace, &segment::is_closed);
+    if (any_segments_closed) {
+        throw segment_closed_exception(
+          "Couldn't replace segment range, one or more segments in found range "
+          "were closed");
+    }
+
+    for (const auto& [s, gen_id] :
+         std::views::zip(segs_to_replace, expected_ids)) {
+        if (s->get_generation_id() != gen_id) {
+            throw generation_id_mismatch_exception(fmt::format(
+              "Couldn't replace segment range, segment {} was mutated.",
+              s->filename()));
+        }
+    }
+
+    auto target = segs_to_replace.front();
+    // transfer segment state from replacement to target.
+    locks = co_await internal::transfer_segment(
+      target, replacement, cfg, pb, std::move(locks));
+
+    // Remove old segments
+    for (auto s_it = std::next(segs_to_replace.begin());
+         s_it != segs_to_replace.end();
+         ++s_it) {
+        co_await _log->erase_segment(*s_it);
+    }
+
+    co_return;
 }
 
 } // namespace storage

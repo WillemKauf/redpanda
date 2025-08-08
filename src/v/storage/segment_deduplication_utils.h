@@ -13,6 +13,7 @@
 #include "model/fundamental.h"
 #include "storage/index_state.h"
 #include "storage/segment_set.h"
+#include "storage/segment_utils.h"
 
 namespace storage {
 using segment_list_t = fragmented_vector<segment_set::type>;
@@ -87,8 +88,13 @@ ss::future<bool> index_chunk_of_segment_for_map(
 // Otherwise, there would be no point to rewriting the segment and its index
 // files.
 ss::future<bool> segment_needs_rewrite_with_offset_map(
-  const compaction::compaction_config& cfg,
   ss::lw_shared_ptr<segment> seg,
+  const compaction::compaction_config& cfg,
+  const compaction::key_offset_map& map);
+
+ss::future<bool> segment_needs_rewrite(
+  ss::lw_shared_ptr<segment> s,
+  const compaction::compaction_config& cfg,
   const compaction::key_offset_map& map);
 
 } // namespace storage

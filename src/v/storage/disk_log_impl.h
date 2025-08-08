@@ -13,6 +13,7 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "compaction/fwd.h"
+#include "container/interval_set.h"
 #include "features/feature_table.h"
 #include "model/fundamental.h"
 #include "storage/disk_log_appender.h"
@@ -357,6 +358,17 @@ public:
     mutex& segment_rewrite_lock() { return _segment_rewrite_lock; }
 
     ss::future<> erase_segment(ss::lw_shared_ptr<segment> seg);
+
+    void add_clean_range(model::offset s, model::offset e);
+
+    std::optional<model::offset>
+    max_dirty_offset_for_segment(ss::lw_shared_ptr<segment> s) const;
+
+    std::optional<chunked_vector<ss::lw_shared_ptr<segment>>>
+    segments_in_range(model::offset s, model::offset e) const;
+
+    ss::future<> replace_with_segment(
+      ss::lw_shared_ptr<segment> s, chunked_vector<segment::generation_id> ids);
 
 private:
     friend class disk_log_appender; // for multi-term appends

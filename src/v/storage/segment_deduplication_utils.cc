@@ -317,8 +317,8 @@ ss::future<bool> index_chunk_of_segment_for_map(
 }
 
 ss::future<bool> segment_needs_rewrite_with_offset_map(
-  const compaction::compaction_config& cfg,
   ss::lw_shared_ptr<segment> seg,
+  const compaction::compaction_config& cfg,
   const compaction::key_offset_map& map) {
     auto compaction_idx_path = seg->path().to_compacted_index();
     // If the file doesn't exist for whatever reason, return true.
@@ -360,6 +360,14 @@ ss::future<bool> segment_needs_rewrite_with_offset_map(
       },
       model::no_timeout);
     co_return segment_needs_rewrite;
+}
+
+ss::future<bool> segment_needs_rewrite(
+  ss::lw_shared_ptr<segment> s,
+  const compaction::compaction_config& cfg,
+  const compaction::key_offset_map& map) {
+    co_return internal::may_have_removable_tombstones(s, cfg)
+      || co_await segment_needs_rewrite_with_offset_map(s, cfg, map);
 }
 
 } // namespace storage

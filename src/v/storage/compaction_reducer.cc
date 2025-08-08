@@ -20,6 +20,7 @@
 #include "storage/segment.h"
 #include "storage/segment_deduplication_utils.h"
 #include "storage/segment_utils.h"
+#include "utils/file_io.h"
 
 #include <seastar/core/seastar.hh>
 #include <seastar/coroutine/as_future.hh>
@@ -28,7 +29,9 @@
 #include <optional>
 
 namespace storage {
-storage_compaction_source::storage_compaction_source(
+
+template<typename Sink_T>
+storage_compaction_source<Sink_T>::storage_compaction_source(
   storage::disk_log_impl* log,
   std::optional<model::offset> new_start_offset,
   const compaction::compaction_config& cfg)
@@ -37,7 +40,8 @@ storage_compaction_source::storage_compaction_source(
   , _cfg(cfg)
   , _probe(log->get_probe()) {}
 
-ss::future<> storage_compaction_source::initialize() {
+template<typename Sink_T>
+ss::future<> storage_compaction_source<Sink_T>::initialize_source() {
     _segs = _log->find_sliding_range(_cfg, _new_start_offset);
     auto& segs = *_segs;
     for (auto& s : segs) {
@@ -80,7 +84,20 @@ ss::future<> storage_compaction_source::initialize() {
     _f_it = segs.begin();
 }
 
-bool storage_compaction_source::is_end_of_stream() const {
+template<typename Sink_T>
+ss::future<>
+storage_compaction_source<Sink_T>::initialize_sink(compaction::reducer::sink&) {
+    if constexpr (std::is_same_v<Sink_T, storage_compaction_sink>) {
+        // auto& casted_sink = static_cast<storage_compaction_sink&>(sink);
+        // co_await casted_sink.filter_segments(_segs.value());
+    } else {
+        static_assert(false);
+    }
+    co_return;
+}
+
+template<typename Sink_T>
+bool storage_compaction_source<Sink_T>::is_end_of_stream() const {
     auto& segs = *_segs;
     if (segs.empty()) {
         vlog(
@@ -93,13 +110,14 @@ bool storage_compaction_source::is_end_of_stream() const {
     return segs.empty();
 }
 
-ss::future<bool> storage_compaction_source::end_of_stream() const {
+template<typename Sink_T>
+ss::future<bool> storage_compaction_source<Sink_T>::end_of_stream() const {
     auto& segs = *_segs;
     if (segs.empty()) {
         // Nothing to compact.
         co_return false;
     }
-    if (!_min_offset_fully_indexed.has_value()) {
+    if (!_cfg.min_offset_fully_indexed.has_value()) {
         // We're going to perform all of the chunked window compaction routine
         // now.
         // TODO: Unfortunately this totally goes against the spirit of the local
@@ -116,7 +134,8 @@ ss::future<bool> storage_compaction_source::end_of_stream() const {
         // We don't need to perform the forward pass now.
         co_return false;
     }
-    std::optional<model::offset> new_start_offset = _min_offset_fully_indexed;
+    std::optional<model::offset> new_start_offset
+      = _cfg.min_offset_fully_indexed;
     if (new_start_offset == segs.front()->offsets().get_base_offset()) {
         // We have indexed up to the first segment in the sliding
         // range (not necessarily equivalent to the first segment in the log-
@@ -127,15 +146,13 @@ ss::future<bool> storage_compaction_source::end_of_stream() const {
     }
 
     _log->set_last_compaction_window_start_offset(new_start_offset);
-    for (auto& s : segs) {
-        ++_segments_per_term[s->offsets().get_term()];
-    }
 
     co_return true;
 }
 
+template<typename Sink_T>
 ss::future<ss::stop_iteration>
-storage_compaction_source::backward_pass_iteration() {
+storage_compaction_source<Sink_T>::backward_pass_iteration() {
     if (_b_it == _segs->rend()) {
         co_return ss::stop_iteration::yes;
     }
@@ -147,7 +164,7 @@ storage_compaction_source::backward_pass_iteration() {
     auto indexed = co_await _log->index_segment_in_offset_map(_cfg, seg, map);
 
     if (indexed) {
-        _min_offset_fully_indexed = seg->offsets().get_base_offset();
+        _cfg.min_offset_fully_indexed = seg->offsets().get_base_offset();
     } else {
         // The offset map is full. Note that we may have only partially
         // indexed a segment, but it's safe to use this index. If no new
@@ -161,8 +178,9 @@ storage_compaction_source::backward_pass_iteration() {
     co_return ss::stop_iteration::no;
 }
 
+template<typename Sink_T>
 ss::future<ss::stop_iteration>
-storage_compaction_source::forward_pass_iteration(
+storage_compaction_source<Sink_T>::forward_pass_iteration(
   compaction::reducer::sink& sink) {
     if (_f_it == _segs->end()) {
         co_return ss::stop_iteration::yes;
@@ -181,21 +199,6 @@ storage_compaction_source::forward_pass_iteration(
           "Aborting compaction, segment {} was closed while waiting for read "
           "lock.",
           s->filename()));
-    }
-
-    // We only need to process the `segment` if it contains removable data, or
-    // if we can concatenate adjacent `segment`s in this Raft term.
-    const bool should_process_segment
-      = _segments_per_term.at(s->offsets().get_term()) > 1
-        || internal::may_have_removable_tombstones(s, _cfg)
-        || co_await segment_needs_rewrite_with_offset_map(_cfg, s, map);
-    if (!should_process_segment) {
-        vlog(
-          gclog.trace,
-          "[{}] segment does not require rewrite with provided offset map: {}",
-          s->filename());
-        ++_f_it;
-        co_return ss::stop_iteration::no;
     }
 
     auto rdr = internal::create_segment_full_reader(
@@ -246,14 +249,6 @@ storage_compaction_source::forward_pass_iteration(
           max_removed_offset);
     };
 
-    if (auto ssink = dynamic_cast<storage_compaction_sink*>(&sink)) {
-        // TODO: This sucks and is a terrible anti-pattern, but it has to be
-        // done. One day, when we don't have some of the per-`segment`
-        // restrictions we currently do in local storage, the sink should be
-        // entirely data agnostic.
-        co_await ssink->maybe_initialize(s, _min_offset_fully_indexed);
-    }
-
     auto filter = compaction::filter(
       std::move(record_filter),
       sink,
@@ -276,6 +271,8 @@ storage_compaction_source::forward_pass_iteration(
           stats);
     }
 
+    // TODO: max removed offset
+
     ++_f_it;
     co_return ss::stop_iteration::no;
 }
@@ -286,34 +283,189 @@ storage_compaction_sink::storage_compaction_sink(
   , _cfg(cfg)
   , _probe(log->get_probe()) {}
 
-ss::future<> storage_compaction_sink::initialize(
-  ss::lw_shared_ptr<segment> seg,
-  std::optional<model::offset> min_offset_fully_indexed) {
+// ss::future<> storage_compaction_sink::filter_segments(segment_set& src_segs)
+// {
+//     // Filter src_segs by performing a pass over it.
+//     segment_set::underlying_t filtered_src_segs;
+//
+//     auto it = src_segs.begin();
+//     size_t current_size{0};
+//     model::term_id current_term{(*it)->offsets().get_term()};
+//
+//     // Ensure that the adjacent segments do not span an offset space greater
+//     // than the maximum value that can be represented by a uint32_t. This
+//     must
+//     // be enforced due to use of roaring::bitmap in the
+//     compacted_offset_list,
+//     // which is used to deduplicate records during self compaction and
+//     sliding
+//     // window compaction. Overflows in this area could lead to incorrect
+//     // compaction.
+//     auto valid_offset_range = [](
+//                                 ss::lw_shared_ptr<segment>& first,
+//                                 ss::lw_shared_ptr<segment>& last) -> bool {
+//         auto base_offset_first_seg = first->offsets().get_base_offset();
+//         auto dirty_offset_last_seg = last->offsets().get_dirty_offset();
+//         int64_t offset_delta = dirty_offset_last_seg()
+//                                - base_offset_first_seg();
+//         static constexpr int64_t u32_max = static_cast<int64_t>(
+//           std::numeric_limits<uint32_t>::max());
+//         return offset_delta <= u32_max;
+//     };
+//
+//     std::pair<segment_set::iterator, segment_set::iterator> current_range = {
+//       it, it};
+//
+//     while (it != src_segs.end()) {
+//         auto& seg = *it;
+//         auto seg_size = seg->size_bytes();
+//         auto seg_term = seg->offsets().get_term();
+//
+//         current_size += seg_size;
+//
+//         bool term_boundary = seg_term != current_term;
+//         bool size_boundary
+//           = current_size
+//             > config::shard_local_cfg().max_compacted_log_segment_size();
+//         bool is_valid_offset_range = valid_offset_range(
+//           *current_range.first, seg);
+//
+//         if (term_boundary || size_boundary || !is_valid_offset_range) {
+//             auto num_segments_in_range = std::distance(
+//               current_range.first, current_range.second);
+//             auto needs_rewrite = num_segments_in_range > 1
+//                                  || co_await segment_needs_rewrite(
+//                                    *current_range.first,
+//                                    _cfg,
+//                                    *_cfg.hash_key_map);
+//             if (needs_rewrite) {
+//                 filtered_src_segs.insert(
+//                   filtered_src_segs.end(),
+//                   current_range.first,
+//                   current_range.second);
+//             }
+//
+//             current_range = {it, std::next(it)};
+//             current_size = seg_size;
+//             current_term = seg_term;
+//
+//         } else {
+//             ++current_range.second;
+//         }
+//         ++it;
+//     }
+//
+//     auto num_segments_in_range = std::distance(
+//       current_range.first, current_range.second);
+//     auto needs_rewrite = num_segments_in_range > 1
+//                          || co_await segment_needs_rewrite(
+//                            *current_range.first, _cfg, *_cfg.hash_key_map);
+//     if (needs_rewrite) {
+//         filtered_src_segs.insert(
+//           filtered_src_segs.end(), current_range.first,
+//           current_range.second);
+//     }
+//
+//     vlog(
+//       gclog.info,
+//       "Filtered segment set of size {} to {}",
+//       src_segs.size(),
+//       filtered_src_segs.size());
+//     // src_segs = segment_set(std::move(filtered_src_segs));
+// }
+
+ss::future<> storage_compaction_sink::finalize() {
+    if (!_appender) {
+        co_return;
+    }
+    co_await roll();
+}
+
+ss::future<> storage_compaction_sink::maybe_initialize_writers(
+  ss::lw_shared_ptr<segment> seg) {
+    // Sink needs (re)-initialization if:
+    // 1. `!_appender` (i.e initializing for the first time)
+    // 2. current `_appender->file_byte_offset() + seg->size_bytes() >=
+    // max_compacted_log_segment_size`
+    // 3. `seg->term()` differs from `_raft_term`.
+    // 4. `seg->dirty_offset() - _base_offset` exceeds the maximum value
+    // that can be represented by a `uint32_t`. For cases (2-4), writers
+    // must be flushed before re-initialization.
+
+    if (!_appender) {
+        // Initializing for the first time. Checking just one of the
+        // contained member variables for existence is valid for checking
+        // all of them.
+        co_await initialize_writers(seg);
+    } else {
+        // Book-keep removed dirty bytes. We need to know both the number of
+        // bytes removed from dirty segments as well as the total size of
+        // `segment`s which _may_ be part of a totally clean segment operation.
+        auto prev_seg = _accumulated_segments.back();
+        if (!prev_seg->has_clean_compact_timestamp()) {
+            auto size_before = prev_seg->size_bytes();
+            auto size_after = _appender->file_byte_offset()
+                              - _acc.prev_appender_size;
+            _acc.removed_dirty_bytes += size_before - size_after;
+            if (
+              prev_seg->offsets().get_base_offset()
+              >= _cfg.min_offset_fully_indexed) {
+                _acc.dirty_turning_clean_bytes += prev_seg->size_bytes();
+            }
+        }
+
+        bool size_boundary
+          = _appender->file_byte_offset() + seg->size_bytes()
+            >= config::shard_local_cfg().max_compacted_log_segment_size;
+        bool term_boundary = seg->offsets().get_term()
+                             != prev_seg->offsets().get_term();
+        static constexpr int64_t u32_max = static_cast<int64_t>(
+          std::numeric_limits<uint32_t>::max());
+        bool offset_boundary = seg->offsets().get_dirty_offset()
+                                 - _replace_segment->offsets().get_base_offset()
+                               >= u32_max;
+        bool needs_roll = size_boundary || term_boundary || offset_boundary;
+        if (needs_roll) {
+            co_await roll();
+            co_await initialize_writers(seg);
+        }
+    }
+
+    _acc.total_bytes += seg->size_bytes();
+    _acc.prev_appender_size = _appender->file_byte_offset();
+    _accumulated_segments.push_back(seg);
+    _generations.push_back(seg->get_generation_id());
+}
+
+ss::future<>
+storage_compaction_sink::initialize_writers(ss::lw_shared_ptr<segment> seg) {
     auto tmpname = seg->path().to_compaction_staging();
+    auto idx_tmpname = tmpname.to_index();
     auto cidx_tmpname = tmpname.to_compacted_index();
     auto idx_base_offset = seg->offsets().get_base_offset();
     auto apply_offset = internal::should_apply_delta_time_offset(
       _log->feature_table());
 
+    // Open the `segment_appender` and `compacted_index` writers with truncation
+    // (as a safety precaution)
+    static constexpr bool truncate = true;
     _tmpname = tmpname;
     _appender = co_await internal::make_segment_appender(
       tmpname,
       segment_appender::write_behind_memory / internal::chunks().chunk_size(),
       std::nullopt,
       _log->resources(),
-      _cfg.sanitizer_config);
+      _cfg.sanitizer_config,
+      truncate);
     _idx = std::make_unique<index_state>(
       index_state::make_empty_index(idx_base_offset, apply_offset));
-    _compacted_idx = make_file_backed_compacted_index(
-      cidx_tmpname, true, _log->resources(), _cfg.sanitizer_config);
+    _cidx = make_file_backed_compacted_index(
+      cidx_tmpname, truncate, _log->resources(), _cfg.sanitizer_config);
     _replace_segment = seg;
 
     _tmp_file_tracker.emplace(
       _cfg.files_to_cleanup,
       std::vector<std::filesystem::path>{tmpname, cidx_tmpname});
-    if (min_offset_fully_indexed.has_value()) {
-        _min_offset_fully_indexed = min_offset_fully_indexed.value();
-    }
 }
 
 ss::future<> storage_compaction_sink::roll() {
@@ -395,27 +547,30 @@ ss::future<> storage_compaction_sink::roll() {
     // Perform IO _after_ all the appropriate early return checks.
     auto appender = std::exchange(_appender, nullptr);
     auto idx = std::exchange(_idx, nullptr);
-    auto cidx = std::exchange(_compacted_idx, nullptr);
+    auto cidx = std::exchange(_cidx, nullptr);
 
     co_await cidx->close();
     co_await appender->close();
 
-    // Clear our indexes before swapping the data files (note, the new
-    // compaction index was opened with the truncate option above).
+    // Truncate the existing `segment_index` on disk.
     co_await _replace_segment->index().drop_all_data();
 
-    // Rename the data file.
+    // Rename the underlying `segment` data file.
     co_await internal::do_swap_data_file_handles(
       _tmpname.value(), _replace_segment, _cfg, _probe, cidx->size_bytes());
 
-    // Persist the state of our indexes in their new names.
+    // Flush new `segment_index` to disk.
     _replace_segment->index().swap_index_state(std::move(*idx));
     _replace_segment->force_set_commit_offset_from_index();
-    co_await _replace_segment->reset_batch_cache_index();
+    co_await _replace_segment->index().flush();
 
-    const auto size_after = appender->size_bytes();
-    const ssize_t removed_bytes = ssize_t(_acc.total_bytes)
-                                  - ssize_t(size_after);
+    // Replace the `.compaction_index` on disk.
+    auto cidx_tmpname = _tmpname->to_compacted_index();
+    auto cidx_name = _replace_segment->path().to_compacted_index();
+    co_await ss::rename_file(cidx_tmpname.string(), cidx_name.string());
+
+    // Reset the batch cache index
+    co_await _replace_segment->reset_batch_cache_index();
 
     // We can only mark the replacement segment as cleanly compacted if every
     // accumulated segment was already cleanly compacted OR if the accumulated
@@ -423,8 +578,34 @@ ss::future<> storage_compaction_sink::roll() {
     auto is_clean_compacted = std::ranges::all_of(
       _accumulated_segments, [this](const auto& s) {
           return s->has_clean_compact_timestamp()
-                 || s->offsets().get_base_offset() >= _min_offset_fully_indexed;
+                 || s->offsets().get_base_offset()
+                      >= _cfg.min_offset_fully_indexed;
       });
+
+    // Remove old segments
+    for (auto seg_it = std::next(_accumulated_segments.begin());
+         seg_it != _accumulated_segments.end();
+         ++seg_it) {
+        co_await _log->erase_segment(*seg_it);
+    }
+
+    _replace_segment->advance_generation();
+
+    vlog(
+      gclog.info,
+      "[{}] Compaction produced segment {} from {} segments ([{}-{}], {} "
+      "bytes)",
+      _log->config().ntp(),
+      _replace_segment,
+      _accumulated_segments.size(),
+      _accumulated_segments.front()->filename(),
+      _accumulated_segments.back()->filename(),
+      _acc.total_bytes);
+
+    // `_log` book-keeping
+    const auto size_after = appender->size_bytes();
+    const ssize_t removed_bytes = ssize_t(_acc.total_bytes)
+                                  - ssize_t(size_after);
 
     // We must deduct the entirety of accumulated dirty bytes (i.e all of
     // the bytes in previously dirty `segment`s that are now considered clean)
@@ -442,94 +623,17 @@ ss::future<> storage_compaction_sink::roll() {
     _log->subtract_dirty_segment_bytes(dirty_removed_bytes);
     _log->subtract_closed_segment_bytes(removed_bytes);
 
-    co_await _replace_segment->index().flush();
-    auto cidx_tmpname = _tmpname->to_compacted_index();
-    auto cidx_name = _replace_segment->path().to_compacted_index();
-    co_await ss::rename_file(cidx_tmpname.string(), cidx_name.string());
-
     _probe.segment_compacted();
     _probe.add_compaction_removed_bytes(removed_bytes);
 
     compaction_result res(_acc.total_bytes, size_after);
     _log->compaction_ratio().update(res.compaction_ratio());
-    _replace_segment->advance_generation();
-    vlog(
-      gclog.info,
-      "[{}] Compaction produced segment {} from {} segments ([{}-{}], {} "
-      "bytes)",
-      _log->config().ntp(),
-      _replace_segment,
-      _accumulated_segments.size(),
-      _accumulated_segments.front()->filename(),
-      _accumulated_segments.back()->filename(),
-      _acc.total_bytes);
-    for (auto seg_it = std::next(_accumulated_segments.begin());
-         seg_it != _accumulated_segments.end();
-         ++seg_it) {
-        co_await _log->erase_segment(*seg_it);
-    }
 
+    // Reset `sink` local state.
     _acc.reset();
     _accumulated_segments.clear();
     _generations.clear();
     _tmp_file_tracker->clear();
-}
-
-ss::future<> storage_compaction_sink::maybe_initialize(
-  ss::lw_shared_ptr<segment> seg,
-  std::optional<model::offset> min_offset_fully_indexed) {
-    // Sink needs (re)-initialization if:
-    // 1. `!_appender` (i.e initializing for the first time)
-    // 2. current `_appender->file_byte_offset() + seg->size_bytes() >=
-    // max_compacted_log_segment_size`
-    // 3. `seg->term()` differs from `_raft_term`.
-    // 4. `seg->dirty_offset() - _base_offset` exceeds the maximum value
-    // that can be represented by a `uint32_t`. For cases (2-4), writers
-    // must be flushed before re-initialization.
-
-    if (!_appender) {
-        // Initializing for the first time. Checking just one of the
-        // contained member variables for existence is valid for checking
-        // all of them.
-        co_await initialize(seg, min_offset_fully_indexed);
-    } else {
-        // Book-keep removed dirty bytes. We need to know both the number of
-        // bytes removed from dirty segments as well as the total size of
-        // `segment`s which _may_ be part of a totally clean segment operation.
-        auto prev_seg = _accumulated_segments.back();
-        if (!prev_seg->has_clean_compact_timestamp()) {
-            auto size_before = prev_seg->size_bytes();
-            auto size_after = _appender->file_byte_offset()
-                              - _acc.prev_appender_size;
-            _acc.removed_dirty_bytes += size_before - size_after;
-            if (
-              prev_seg->offsets().get_base_offset()
-              >= _min_offset_fully_indexed) {
-                _acc.dirty_turning_clean_bytes += prev_seg->size_bytes();
-            }
-        }
-
-        bool size_boundary
-          = _appender->file_byte_offset() + seg->size_bytes()
-            >= config::shard_local_cfg().max_compacted_log_segment_size;
-        bool term_boundary = seg->offsets().get_term()
-                             != prev_seg->offsets().get_term();
-        static constexpr int64_t u32_max = static_cast<int64_t>(
-          std::numeric_limits<uint32_t>::max());
-        bool offset_boundary = seg->offsets().get_dirty_offset()
-                                 - _replace_segment->offsets().get_base_offset()
-                               >= u32_max;
-        bool needs_roll = size_boundary || term_boundary || offset_boundary;
-        if (needs_roll) {
-            co_await roll();
-            co_await initialize(seg, std::nullopt);
-        }
-    }
-
-    _acc.total_bytes += seg->size_bytes();
-    _acc.prev_appender_size = _appender->file_byte_offset();
-    _accumulated_segments.push_back(seg);
-    _generations.push_back(seg->get_generation_id());
 }
 
 ss::future<ss::stop_iteration> storage_compaction_sink::operator()(
@@ -546,7 +650,7 @@ ss::future<> storage_compaction_sink::write_batch(
         co_await model::for_each_record(
           b, [&batch = b, this](const model::record& r) {
               auto& hdr = batch.header();
-              return _compacted_idx->index(
+              return _cidx->index(
                 hdr.type,
                 hdr.attrs.is_control(),
                 r.key(),
@@ -583,11 +687,6 @@ ss::future<> storage_compaction_sink::write_batch(
       start_pos + header_size);
 }
 
-ss::future<> storage_compaction_sink::finalize() {
-    if (!_appender) {
-        co_return;
-    }
-    co_await roll();
-}
+template class storage_compaction_source<storage_compaction_sink>;
 
 } // namespace storage

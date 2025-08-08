@@ -10,6 +10,7 @@
  */
 
 #pragma once
+#include "compaction/key_offset_map.h"
 #include "compaction/utils.h"
 #include "model/record_batch_reader.h"
 #include "model/record_batch_types.h"
@@ -164,7 +165,8 @@ ss::future<segment_appender_ptr> make_segment_appender(
   size_t number_of_chunks,
   std::optional<uint64_t> segment_size,
   storage_resources& resources,
-  std::optional<ntp_sanitizer_config> ntp_sanitizer_config);
+  std::optional<ntp_sanitizer_config> ntp_sanitizer_config,
+  bool truncate = false);
 
 size_t number_of_chunks_from_config(const storage::ntp_config&);
 uint64_t segment_size_from_config(const storage::ntp_config&);

@@ -159,8 +159,9 @@ ss::future<segment_appender_ptr> make_segment_appender(
   size_t number_of_chunks,
   std::optional<uint64_t> segment_size,
   storage_resources& resources,
-  std::optional<ntp_sanitizer_config> ntp_sanitizer_config) {
-    return internal::make_writer_handle(path, std::nullopt)
+  std::optional<ntp_sanitizer_config> ntp_sanitizer_config,
+  bool truncate) {
+    return internal::make_writer_handle(path, std::nullopt, truncate)
       .then([number_of_chunks,
              path,
              segment_size,
@@ -1151,6 +1152,16 @@ ss::future<chunked_vector<ss::rwlock::holder>> transfer_segment(
   probe& probe,
   chunked_vector<ss::rwlock::holder> locks,
   std::optional<size_t> new_cmp_idx_size) {
+    /*
+     * remove index files (ignoring failures if they do not exist). they will be
+     * rebuilt by the single segment compaction operation, and also ensures we
+     * examine segments correctly on recovery.
+     */
+    co_await ss::when_all_succeed(
+      maybe_remove_file(target->index().path().string()),
+      maybe_remove_file(target->reader().path().to_compacted_index().string()));
+
+    target->clear_cached_disk_usage();
     co_await from->close();
 
     co_await to->index().drop_all_data();
@@ -1160,7 +1171,7 @@ ss::future<chunked_vector<ss::rwlock::holder>> transfer_segment(
     co_await do_swap_data_file_handles(
       from_path, to, cfg, probe, new_cmp_idx_size);
 
-    // offset index
+    // segment index
     to->index().swap_index_state(
       std::move(from->index()).release_index_state());
     to->force_set_commit_offset_from_index();

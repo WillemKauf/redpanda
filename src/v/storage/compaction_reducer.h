@@ -25,13 +25,15 @@
 
 namespace storage {
 
+template<typename Sink_T>
 class storage_compaction_source final : public compaction::reducer::source {
 public:
     storage_compaction_source(
       disk_log_impl* log,
       std::optional<model::offset> new_start_offset,
       const compaction::compaction_config& cfg);
-    ss::future<> initialize() final;
+    ss::future<> initialize_source() final;
+    ss::future<> initialize_sink(compaction::reducer::sink&) final;
     bool is_end_of_stream() const final;
     ss::future<bool> end_of_stream() const final;
     ss::future<ss::stop_iteration> backward_pass_iteration() final;
@@ -57,15 +59,15 @@ private:
     probe& _probe;
 
     // The set of `segment`s for this compaction operation. Guaranteed to have a
-    // value after calling initalize().
+    // value after calling initialize().
     std::optional<storage_t> _segs;
 
     // Reverse iterator over _segs for backward pass. Guaranteed to have a value
-    // after calling initalize().
+    // after calling initialize().
     storage_t::reverse_iterator _b_it;
 
     // Iterator over _segs for forward pass. Guaranteed to have a value after
-    // calling initalize().
+    // calling initialize().
     storage_t::iterator _f_it;
 
     // Minimum offset fully indexed in the backwards pass. This is aligned to
@@ -73,13 +75,6 @@ private:
     // `std::nullopt`), no `segment` could be fully indexed during the backwards
     // pass.
     std::optional<model::offset> _min_offset_fully_indexed;
-
-    // Maintains a counter of accumulated `segment`s per Raft term, in helping
-    // to decide whether compaction should occur for a given `segment` (i.e we
-    // shouldn't rewrite single `segment`s if no data is to be removed and there
-    // aren't any other `segment`s in that term to concatenate with).
-    // TODO: get rid of this once raft term is decoupled from segment.
-    mutable chunked_hash_map<model::term_id, size_t> _segments_per_term;
 };
 
 class storage_compaction_sink final : public compaction::reducer::sink {
@@ -89,7 +84,15 @@ public:
 
     ss::future<ss::stop_iteration>
     operator()(model::record_batch b, model::compression c) final;
-    // Initializes the `_appender`, `_idx`, and `_compacted_idx` writers.
+
+    ss::future<> filter_segments(segment_set& src_segs);
+
+    ss::future<> finalize() final;
+
+private:
+    ss::future<> maybe_initialize_writers(ss::lw_shared_ptr<segment> seg);
+
+    // Initializes the `_appender`, `_idx`, and `_c{ompacted}idx` writers.
     // Unfortunately this (currently) requires knowledge of the underlying
     // storage type due to limitations of local storage, namely:
     // 1. We cannot merge adjacent `segment`s with differing Raft terms.
@@ -98,18 +101,7 @@ public:
     // and the potential for overflow).
     // 3. It may be desirable to maintain the compaction status-quo of
     // preserving `segment` start offsets during compaction.
-    ss::future<> maybe_initialize(
-      ss::lw_shared_ptr<segment> seg,
-      std::optional<model::offset> min_offset_fully_indexed);
-
-    ss::future<> finalize() final;
-
-private:
-    // Initializes writers and other state using `seg`'s base offset and raft
-    // term.
-    ss::future<> initialize(
-      ss::lw_shared_ptr<segment> seg,
-      std::optional<model::offset> min_offset_fully_indexed);
+    ss::future<> initialize_writers(ss::lw_shared_ptr<segment> seg);
 
     // Rolls existing writers & resets them to `nullptr`, with other state
     // reset/cleared as well. A call to `initialize()` should follow if more
@@ -135,7 +127,7 @@ private:
     // `maybe_initialize()` is called.
     std::unique_ptr<segment_appender> _appender;
     std::unique_ptr<index_state> _idx;
-    std::unique_ptr<compacted_index_writer> _compacted_idx;
+    std::unique_ptr<compacted_index_writer> _cidx;
 
     // The minimum offset fully indexed during the forward pass, mapped to a
     // `segment`'s base offset boundary.

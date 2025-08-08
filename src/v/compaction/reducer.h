@@ -100,7 +100,8 @@ public:
         virtual ~source() noexcept = default;
 
     public:
-        virtual ss::future<> initialize() = 0;
+        virtual ss::future<> initialize_source() = 0;
+        virtual ss::future<> initialize_sink(sink&) = 0;
         virtual bool is_end_of_stream() const = 0;
         virtual ss::future<bool> end_of_stream() const = 0;
         virtual ss::future<ss::stop_iteration> backward_pass_iteration() = 0;

@@ -13,7 +13,7 @@ namespace compaction {
 
 ss::future<> compaction::reducer::run() && {
     // Step 0: Initialize source
-    co_await _src->initialize();
+    co_await _src->initialize_source();
 
     // Step 0.1: Check if we have anything from the source to compact. If not,
     // early return.
@@ -21,6 +21,8 @@ ss::future<> compaction::reducer::run() && {
         co_await _src->end_of_stream();
         co_return;
     }
+
+    co_await _src->initialize_sink(*_sink);
 
     // Step 1: Perform backward pass
     co_await ss::repeat([this]() { return _src->backward_pass_iteration(); });
