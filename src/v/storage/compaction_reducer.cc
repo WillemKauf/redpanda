@@ -193,6 +193,17 @@ storage_compaction_source<Sink_T>::forward_pass_iteration(
     auto s = *_f_it;
     auto& map = *_cfg.hash_key_map;
 
+    if constexpr (std::is_same_v<Sink_T, storage_compaction_sink>) {
+        // Unfortunately, local storage still needs to roll based on `segment`s,
+        // not just batches.
+        auto seg_opt
+          = co_await static_cast<storage_compaction_sink&>(_sink).maybe_roll(s);
+        if (seg_opt.has_value()) {
+            co_await _log->replace_with_segment(seg_opt.value(), _ids);
+            _ids.clear();
+        }
+    }
+
     auto read_holder = co_await s->read_lock();
     if (s->is_closed()) {
         throw segment_closed_exception(fmt::format(
@@ -381,8 +392,8 @@ ss::future<> storage_compaction_sink::finalize() {
     co_await roll();
 }
 
-ss::future<> storage_compaction_sink::maybe_initialize_writers(
-  ss::lw_shared_ptr<segment> seg) {
+ss::future<>
+storage_compaction_sink::maybe_roll(ss::lw_shared_ptr<segment> seg) {
     // Sink needs (re)-initialization if:
     // 1. `!_appender` (i.e initializing for the first time)
     // 2. current `_appender->file_byte_offset() + seg->size_bytes() >=
@@ -392,11 +403,11 @@ ss::future<> storage_compaction_sink::maybe_initialize_writers(
     // that can be represented by a `uint32_t`. For cases (2-4), writers
     // must be flushed before re-initialization.
 
-    if (!_appender) {
+    if (!_segment) {
         // Initializing for the first time. Checking just one of the
         // contained member variables for existence is valid for checking
         // all of them.
-        co_await initialize_writers(seg);
+        co_await initialize_segment(seg);
     } else {
         // Book-keep removed dirty bytes. We need to know both the number of
         // bytes removed from dirty segments as well as the total size of
@@ -427,18 +438,16 @@ ss::future<> storage_compaction_sink::maybe_initialize_writers(
         bool needs_roll = size_boundary || term_boundary || offset_boundary;
         if (needs_roll) {
             co_await roll();
-            co_await initialize_writers(seg);
+            co_await initialize_segment(seg);
         }
     }
 
     _acc.total_bytes += seg->size_bytes();
     _acc.prev_appender_size = _appender->file_byte_offset();
-    _accumulated_segments.push_back(seg);
-    _generations.push_back(seg->get_generation_id());
 }
 
 ss::future<>
-storage_compaction_sink::initialize_writers(ss::lw_shared_ptr<segment> seg) {
+storage_compaction_sink::initialize_segment(ss::lw_shared_ptr<segment> seg) {
     auto tmpname = seg->path().to_compaction_staging();
     auto idx_tmpname = tmpname.to_index();
     auto cidx_tmpname = tmpname.to_compacted_index();

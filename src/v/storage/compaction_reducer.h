@@ -89,9 +89,10 @@ public:
 
     ss::future<> finalize() final;
 
-private:
-    ss::future<> maybe_initialize_writers(ss::lw_shared_ptr<segment> seg);
+    ss::future<std::optional<ss::lw_shared_ptr<segment>>>
+    maybe_roll(ss::lw_shared_ptr<segment> seg);
 
+private:
     // Initializes the `_appender`, `_idx`, and `_c{ompacted}idx` writers.
     // Unfortunately this (currently) requires knowledge of the underlying
     // storage type due to limitations of local storage, namely:
@@ -123,11 +124,9 @@ private:
     // The `_log`'s probe.
     probe& _probe;
 
-    // In-progress `segment` writers. Guaranteed to have a value after
+    // In-progress `segment`. Guaranteed to have a value after
     // `maybe_initialize()` is called.
-    std::unique_ptr<segment_appender> _appender;
-    std::unique_ptr<index_state> _idx;
-    std::unique_ptr<compacted_index_writer> _cidx;
+    ss::lw_shared_ptr<segment> _segment;
 
     // The minimum offset fully indexed during the forward pass, mapped to a
     // `segment`'s base offset boundary.
@@ -136,27 +135,12 @@ private:
     // The temporary path for the currently in-progress `segment`.
     std::optional<segment_full_path> _tmpname;
 
-    // The `segment` which will be replaced by the currently in-progress
-    // `segment` produced by the writers above.
-    ss::lw_shared_ptr<segment> _replace_segment;
-
-    // The container of `segment`s accumulated in the currently in-progress
-    // `segment`. It would be a lot nicer if we didn't have this here.
-    chunked_vector<ss::lw_shared_ptr<segment>> _accumulated_segments;
-
-    // The container of `generation_id`s for the `segment`s pre-compaction.
-    // We must check these _before_ issuing rewrites over the accumulated
-    // `segment`s, _after_ obtaining the appropriate locks to ensure we do not
-    // race with e.g. a truncation or other `segment` mutation.
-    chunked_vector<segment::generation_id> _generations;
-
     struct {
         void reset() {
             removed_dirty_bytes = 0;
             dirty_turning_clean_bytes = 0;
             total_bytes = 0;
             prev_appender_size = 0;
-            index_acc = 0;
         }
         // The number of bytes from dirty `segment`s accumulated in the
         // currently in-progress `segment` which will be removed by the
@@ -175,9 +159,6 @@ private:
         // moment, tell us how many bytes were preserved from a given `segment`
         // during compaction.
         size_t prev_appender_size{0};
-        // Accumulator used for book keeping entries within the `segment_index`
-        // being written.
-        size_t index_acc{0};
     } _acc;
 
     // Scoped file tracker for temporary files that may require clean-up in case
