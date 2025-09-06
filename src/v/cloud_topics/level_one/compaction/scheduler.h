@@ -29,12 +29,30 @@ namespace cloud_topics::l1 {
 class compaction_scheduler {
 public:
     compaction_scheduler(
-      std::unique_ptr<log_collector>, std::unique_ptr<scheduling_policy>);
-    // Stops backgounded scheduling loop.
+      log_collector_cluster_state, std::unique_ptr<scheduling_policy>);
+
+    // Starts the contained `_log_collector`, `_executor`, and the backgrounded
+    // scheduling loop.
+    ss::future<> start();
+
+    // Shuts down concurrency primitives, thereby stopping the backgrounded
+    // scheduling loop, stops the `_log_collector`, requests inflight compaction
+    // jobs in the `_executor` be stopped, drains the managed partition log
+    // list, and finally shuts down the `_executor` once it is safe to do so.
     ss::future<> stop();
 
+    // Returns `true` iff the provided `ntp` is managed by this scheduler.
     bool is_managed(const model::ntp&) const;
+
+    // Pushes a new `ntp` to be managed by this scheduler to the list of `ntp`s.
+    // It is the caller's responsibility to ensure the partition is not already
+    // managed by this scheduler.
     void manage_partition(const model::ntp&);
+
+    // Removes the `ntp` from the list of managed partitions. No-ops if the
+    // provided `ntp` is not managed by this scheduler. Because the `ntp` may be
+    // undergoing an inflight compaction, this function will block until it is
+    // complete (an early stop is requested by this function).
     ss::future<> unmanage_partition(const model::ntp&);
 
 private:
@@ -74,5 +92,8 @@ private:
     // compaction jobs for.
     log_list_t _logs_list;
 };
+
+std::unique_ptr<compaction_scheduler>
+  make_default_compaction_scheduler(log_collector_cluster_state);
 
 } // namespace cloud_topics::l1

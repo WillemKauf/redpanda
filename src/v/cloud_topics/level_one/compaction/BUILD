@@ -78,9 +78,9 @@ redpanda_cc_library(
 
 redpanda_cc_library(
     name = "worker",
-    #srcs = [
-    #    "worker.cc",
-    #],
+    srcs = [
+        "worker.cc",
+    ],
     hdrs = [
         "worker.h",
     ],
@@ -88,6 +88,7 @@ redpanda_cc_library(
         "//src/v/cloud_topics/level_one:__subpackages__",
     ],
     deps = [
+        ":logger",
         ":sink",
         ":source",
         "//src/v/compaction:reducer",
@@ -99,9 +100,9 @@ redpanda_cc_library(
 
 redpanda_cc_library(
     name = "executor",
-    #srcs = [
-    #    "executor.cc",
-    #],
+    srcs = [
+        "executor.cc",
+    ],
     hdrs = [
         "executor.h",
     ],
@@ -110,8 +111,11 @@ redpanda_cc_library(
     ],
     deps = [
         ":logger",
+        ":meta",
         ":worker",
         "//src/v/container:chunked_circular_buffer",
+        "//src/v/container:chunked_hash_map",
+        "//src/v/model",
         "//src/v/ssx:future_util",
         "@seastar",
     ],
@@ -160,16 +164,16 @@ redpanda_cc_library(
     name = "scheduler",
     srcs = [
         "scheduler.cc",
+        "log_collector_impl.cc",
     ],
     hdrs = [
         "scheduler.h",
+        "log_collector_impl.h",
     ],
     implementation_deps = [
         "//src/v/ssx:future_util",
     ],
-    visibility = [
-        "//src/v/cloud_topics/level_one:__subpackages__",
-    ],
+    visibility = ["//visibility:public"],
     deps = [
         ":executor",
         ":log_collector",
@@ -194,33 +198,8 @@ redpanda_cc_library(
     implementation_deps = [
         "//src/v/ssx:future_util",
     ],
-    visibility = [
-        "//src/v/cloud_topics/level_one:__subpackages__",
-    ],
+    visibility = ["//visibility:public"],
     deps = [
-        "@seastar",
-    ],
-)
-
-redpanda_cc_library(
-    name = "log_collector_impl",
-    srcs = [
-        "log_collector_impl.cc",
-    ],
-    hdrs = [
-        "log_collector_impl.h",
-    ],
-    implementation_deps = [
-        "//src/v/ssx:future_util",
-    ],
-    visibility = [
-        "//src/v/cloud_topics/level_one:__subpackages__",
-    ],
-    deps = [
-        ":log_collector",
-        ":scheduler",
-        "//src/v/cluster",
-        "//src/v/model",
         "@seastar",
     ],
 )

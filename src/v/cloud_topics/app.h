@@ -11,6 +11,7 @@
 #pragma once
 
 #include "cloud_topics/level_one/common/file_io.h"
+#include "cloud_topics/level_one/compaction/scheduler.h"
 #include "cloud_topics/level_one/domain/domain_supervisor.h"
 #include "cloud_topics/level_one/metastore/frontend.h"
 #include "cloud_topics/reconciler/reconciler.h"
@@ -78,6 +79,7 @@ private:
     ss::sharded<l1::domain_supervisor> domain_supervisor;
     ss::sharded<l1::frontend> l1_metastore_fe;
     ss::sharded<cloud_topics_manager> manager;
+    std::unique_ptr<l1::compaction_scheduler> compaction_scheduler;
 };
 
 } // namespace cloud_topics

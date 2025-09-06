@@ -19,20 +19,22 @@
 namespace cloud_topics::l1 {
 
 ss::future<> scheduling_policy::schedule_compactions(
-  compaction_executor& executor, chunked_vector<log_info> log_infos) const {
+  compaction_executor& executor,
+  chunked_vector<log_info_and_meta> log_infos) const {
     auto logs = sort_log_infos(std::move(log_infos));
 
-    while (!logs.empty()) {
+    while (!logs.empty() && !_stopped) {
         auto next = std::move(logs.front());
         logs.pop_front();
-        co_await executor.compact_one(std::move(next.ntp));
+        co_await executor.compact_one(std::move(next.meta));
     }
 }
 
-chunked_circular_buffer<log_info> dirty_ratio_scheduling_policy::sort_log_infos(
-  chunked_vector<log_info>&& log_infos) const {
+chunked_circular_buffer<log_info_and_meta>
+dirty_ratio_scheduling_policy::sort_log_infos(
+  chunked_vector<log_info_and_meta>&& log_infos) const {
     std::sort(log_infos.begin(), log_infos.end(), sort_policy{});
-    chunked_circular_buffer<log_info> logs;
+    chunked_circular_buffer<log_info_and_meta> logs;
     logs.insert(
       logs.end(),
       std::make_move_iterator(log_infos.begin()),
@@ -40,11 +42,11 @@ chunked_circular_buffer<log_info> dirty_ratio_scheduling_policy::sort_log_infos(
     return logs;
 }
 
-chunked_circular_buffer<log_info>
+chunked_circular_buffer<log_info_and_meta>
 compaction_lag_scheduling_policy::sort_log_infos(
-  chunked_vector<log_info>&& log_infos) const {
+  chunked_vector<log_info_and_meta>&& log_infos) const {
     std::sort(log_infos.begin(), log_infos.end(), sort_policy{});
-    chunked_circular_buffer<log_info> logs;
+    chunked_circular_buffer<log_info_and_meta> logs;
     logs.insert(
       logs.end(),
       std::make_move_iterator(log_infos.begin()),
@@ -52,17 +54,22 @@ compaction_lag_scheduling_policy::sort_log_infos(
     return logs;
 }
 
-chunked_circular_buffer<log_info> random_scheduling_policy::sort_log_infos(
-  chunked_vector<log_info>&& log_infos) const {
+chunked_circular_buffer<log_info_and_meta>
+random_scheduling_policy::sort_log_infos(
+  chunked_vector<log_info_and_meta>&& log_infos) const {
     std::shuffle(
       log_infos.begin(), log_infos.end(), random_generators::internal::gen);
 
-    chunked_circular_buffer<log_info> logs;
+    chunked_circular_buffer<log_info_and_meta> logs;
     logs.insert(
       logs.end(),
       std::make_move_iterator(log_infos.begin()),
       std::make_move_iterator(log_infos.end()));
     return logs;
+}
+
+std::unique_ptr<scheduling_policy> make_default_scheduling_policy() {
+    return std::make_unique<dirty_ratio_scheduling_policy>();
 }
 
 } // namespace cloud_topics::l1

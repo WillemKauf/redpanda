@@ -67,4 +67,12 @@ ss::future<> partition_leader_log_collector::on_leadership_change(
     }
 }
 
+std::unique_ptr<log_collector> make_default_log_collector(
+  compaction_scheduler* scheduler,
+  ss::gate& gate,
+  log_collector_cluster_state state) {
+    return std::make_unique<partition_leader_log_collector>(
+      scheduler, gate, state.self, state.leaders, state.topic_table);
+}
+
 } // namespace cloud_topics::l1

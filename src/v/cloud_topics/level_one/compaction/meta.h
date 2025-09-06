@@ -20,7 +20,12 @@
 
 namespace cloud_topics::l1 {
 
-enum class compaction_state { idle, running, stopped };
+struct log_info {
+    model::ntp ntp;
+    bool must_compact;
+    double dirty_ratio;
+    model::timestamp earliest_dirty_ts;
+};
 
 struct log_compaction_meta {
     log_compaction_meta(model::ntp ntp)
@@ -28,7 +33,6 @@ struct log_compaction_meta {
 
     model::ntp ntp;
     ss::gate gate;
-    compaction_state state;
     intrusive_list_hook link;
 };
 
@@ -67,13 +71,6 @@ struct log_compaction_meta_eq {
       const cloud_topics::l1::log_compaction_meta_ptr& rhs) const {
         return lhs == rhs->ntp;
     }
-};
-
-struct log_info {
-    model::ntp ntp;
-    bool must_compact;
-    double dirty_ratio;
-    model::timestamp earliest_dirty_ts;
 };
 
 struct log_info_and_meta {

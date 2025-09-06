@@ -30,12 +30,16 @@ public:
     scheduling_policy& operator=(scheduling_policy&&) noexcept = default;
     virtual ~scheduling_policy() = default;
 
-    ss::future<>
-    schedule_compactions(compaction_executor&, chunked_vector<log_info>) const;
+    ss::future<> schedule_compactions(
+      compaction_executor&, chunked_vector<log_info_and_meta>) const;
+
+    void stop() { _stopped = true; }
 
 private:
-    virtual chunked_circular_buffer<log_info>
-    sort_log_infos(chunked_vector<log_info>&&) const = 0;
+    virtual chunked_circular_buffer<log_info_and_meta>
+    sort_log_infos(chunked_vector<log_info_and_meta>&&) const = 0;
+
+    bool _stopped;
 };
 
 // Compacts partitions from highest dirty ratio (the ratio of unclean bytes in
@@ -43,17 +47,18 @@ private:
 class dirty_ratio_scheduling_policy : public scheduling_policy {
 private:
     struct sort_policy {
-        bool operator()(const log_info& a, const log_info& b) const {
-            if (a.must_compact != b.must_compact) {
+        bool operator()(
+          const log_info_and_meta& a, const log_info_and_meta& b) const {
+            if (a.info.must_compact != b.info.must_compact) {
                 // Make a stable partition of logs that must be compacted first.
-                return a.must_compact > b.must_compact;
+                return a.info.must_compact > b.info.must_compact;
             }
-            return a.dirty_ratio > b.dirty_ratio;
+            return a.info.dirty_ratio > b.info.dirty_ratio;
         }
     };
 
-    chunked_circular_buffer<log_info>
-    sort_log_infos(chunked_vector<log_info>&&) const final;
+    chunked_circular_buffer<log_info_and_meta>
+    sort_log_infos(chunked_vector<log_info_and_meta>&&) const final;
 };
 
 // Compacts partitions from highest compaction lag (the oldest timestamp of
@@ -61,25 +66,28 @@ private:
 class compaction_lag_scheduling_policy : public scheduling_policy {
 private:
     struct sort_policy {
-        bool operator()(const log_info& a, const log_info& b) const {
-            if (a.must_compact != b.must_compact) {
+        bool operator()(
+          const log_info_and_meta& a, const log_info_and_meta& b) const {
+            if (a.info.must_compact != b.info.must_compact) {
                 // Make a stable partition of logs that must be compacted first.
-                return a.must_compact > b.must_compact;
+                return a.info.must_compact > b.info.must_compact;
             }
 
-            return a.earliest_dirty_ts < b.earliest_dirty_ts;
+            return a.info.earliest_dirty_ts < b.info.earliest_dirty_ts;
         }
     };
 
-    chunked_circular_buffer<log_info>
-    sort_log_infos(chunked_vector<log_info>&&) const final;
+    chunked_circular_buffer<log_info_and_meta>
+    sort_log_infos(chunked_vector<log_info_and_meta>&&) const final;
 };
 
 // Shuffles all partitions eligible for compaction.
 class random_scheduling_policy : public scheduling_policy {
 private:
-    chunked_circular_buffer<log_info>
-    sort_log_infos(chunked_vector<log_info>&&) const final;
+    chunked_circular_buffer<log_info_and_meta>
+    sort_log_infos(chunked_vector<log_info_and_meta>&&) const final;
 };
+
+std::unique_ptr<scheduling_policy> make_default_scheduling_policy();
 
 } // namespace cloud_topics::l1

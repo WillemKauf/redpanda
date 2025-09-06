@@ -13,6 +13,8 @@
 #include "cloud_topics/cluster_services.h"
 #include "cloud_topics/data_plane_api.h"
 #include "cloud_topics/data_plane_impl.h"
+#include "cloud_topics/level_one/compaction/log_collector.h"
+#include "cloud_topics/level_one/compaction/scheduler.h"
 #include "cloud_topics/manager/manager.h"
 #include "cluster/cluster_epoch_service.h"
 #include "cluster/controller.h"
@@ -89,6 +91,13 @@ ss::future<> app::construct(
         [&] { return &controller->get_partition_manager().local(); }),
       ss::sharded_parameter(
         [&] { return &controller->get_raft_manager().local(); }));
+
+    auto log_collector_state = l1::log_collector_cluster_state{
+      .self = self,
+      .leaders = leaders_table,
+      .topic_table = &controller->get_topics_state()};
+    compaction_scheduler = l1::make_default_compaction_scheduler(
+      std::move(log_collector_state));
 }
 
 ss::future<> app::start() {
@@ -97,11 +106,13 @@ ss::future<> app::start() {
     co_await domain_supervisor.invoke_on_all(
       [](auto& ds) { return ds.start(); });
     co_await manager.invoke_on_all([](auto& r) { return r.start(); });
+    co_await compaction_scheduler->start();
 }
 
 ss::future<> app::stop() {
     ssx::sharded_service_container::shutdown();
     co_await data_plane->stop();
+    co_await compaction_scheduler->stop();
 }
 
 ss::sharded<l1::frontend>* app::get_sharded_l1_metastore_fe() {

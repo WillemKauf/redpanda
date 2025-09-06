@@ -11,8 +11,11 @@
 #pragma once
 
 #include "cloud_topics/level_one/compaction/logger.h"
+#include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/compaction/worker.h"
 #include "container/chunked_circular_buffer.h"
+#include "container/chunked_hash_map.h"
+#include "model/fundamental.h"
 #include "model/timeout_clock.h"
 #include "ssx/future-util.h"
 
@@ -23,81 +26,66 @@ namespace cloud_topics::l1 {
 
 class compaction_executor {
 public:
-    compaction_executor(ss::abort_source& as, ss::gate& gate)
-      : _as(as)
-      , _gate(gate) {
-        for (worker_shard i = 0; i < ss::smp::count; ++i) {
-            _avail_workers.emplace_back(i);
-        }
-    }
+    compaction_executor(ss::abort_source&, ss::gate&);
 
-    ss::future<> compact_one(model::ntp ntp) {
-        auto worker_fut = co_await ss::coroutine::as_future(
-          get_available_worker());
-        if (worker_fut.failed()) {
-            auto eptr = worker_fut.get_exception();
-            auto log_lvl = ssx::is_shutdown_exception(eptr)
-                             ? ss::log_level::warn
-                             : ss::log_level::debug;
-            vlogl(
-              compact_log,
-              log_lvl,
-              "Caught exception {} while waiting for compaction worker.",
-              eptr);
-            co_return;
-        }
+    // Starts the pool of workers, making them available for compaction jobs.
+    ss::future<> start();
 
-        auto worker = worker_fut.get();
-        do_compact(worker, std::move(ntp));
-    }
+    // Breaks condition variable and destructs workers.
+    // Should only be called after all inflight compactions have been stopped
+    // (`request_stop_inflight_compactions()` is a _request_ to stop inflight
+    // compactions, but does not upon return guarantee all inflight jobs have
+    // yet been stopped)
+    ss::future<> stop();
 
-    ss::future<> start() { co_await _workers.start(); }
+    // Waits for an available worker from the pool and then issues a
+    // backgrounded compaction job for the provided `log` on that worker's
+    // shard.
+    ss::future<> compact_one(log_compaction_meta*);
 
-    ss::future<> stop() {
-        _cvar.broken();
-        co_await _workers.stop();
-    }
+    // If an inflight compaction job for the provided `ntp` exists, a signal is
+    // sent to the shard on which the job is occurring to request an early
+    // abort. The returned future from this function does not, upon resolving,
+    // guarantee that the inflight compaction (if underway) has been stopped,
+    // only that a request has been made to stop it promptly.
+    ss::future<> request_stop_compaction(model::ntp ntp);
+
+    // Requests that all inflight compaction jobs be stopped promptly. The
+    // returned future from this function does not, upon resolving, guarantee
+    // that the inflight compactions (if underway) have been stopped, only that
+    // requests have been made to stop them promptly.
+    ss::future<> request_stop_inflight_compactions();
 
 private:
     using worker_shard = ss::shard_id;
 
-    void do_compact(worker_shard shard, model::ntp ntp) {
-        ssx::spawn_with_gate(
-          log_meta_gate, [shard, ntp = std::move(ntp), this] {
-              return _workers
-                .invoke_on(
-                  shard,
-                  [this, ntp = std::move(ntp)](compaction_worker& worker) {
-                      return worker.compact(std::move(ntp), _as);
-                  })
-                .finally([shard, this] {
-                    _avail_workers.emplace_back(shard);
-                    _cvar.signal();
-                });
-          });
-    }
+    // Dispatches a background compaction job for the provided `log` on the
+    // provided `worker_shard`.
+    void do_compact(worker_shard, log_compaction_meta*);
 
-    ss::future<worker_shard> get_available_worker() {
-        while (!_gate.is_closed() && !_as.abort_requested()) {
-            if (!_avail_workers.empty()) {
-                auto worker = _avail_workers.front();
-                _avail_workers.pop_front();
-                co_return worker;
-            }
+    // Returns a shard for which a compaction job can be immediately scheduled
+    // on the local worker. If no worker is immediatel available, one is waited
+    // upon.
+    ss::future<worker_shard> get_available_worker();
 
-            co_await ssx::with_timeout_abortable(
-              _cvar.wait(), model::no_timeout, _as);
-        }
-
-        __builtin_unreachable();
-    }
-
+    // A reference to the owning `compaction_scheduler's` abort source.
     ss::abort_source& _as;
+
+    // A reference to the owning `compaction_scheduler's` gate.
     ss::gate& _gate;
 
+    // Used to alert worker waiters that a shard has become available.
     ss::condition_variable _cvar;
 
+    // Tracks available workers and is used as a pool from which new compaction
+    // jobs can be issued.
     chunked_circular_buffer<worker_shard> _avail_workers;
+
+    // Tracks inflight compaction jobs by mapping `ntp`s being compacted to the
+    // `shard` on which they are being compacted.
+    chunked_hash_map<model::ntp, worker_shard> _inflight;
+
+    // A sharded pool of compaction workers.
     ss::sharded<compaction_worker> _workers;
 };
 

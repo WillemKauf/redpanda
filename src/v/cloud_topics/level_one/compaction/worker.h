@@ -10,41 +10,23 @@
 
 #pragma once
 
-#include "cloud_topics/level_one/compaction/logger.h"
-#include "cloud_topics/level_one/compaction/sink.h"
 #include "cloud_topics/level_one/compaction/source.h"
-#include "compaction/reducer.h"
-#include "model/fundamental.h"
-#include "ssx/future-util.h"
-
-#include <seastar/coroutine/as_future.hh>
 
 namespace cloud_topics::l1 {
 
 class compaction_worker {
 public:
-    ss::future<> compact(model::ntp ntp, ss::abort_source& as) {
-        auto src = std::make_unique<compaction_source>(ntp, as);
-        auto sink = std::make_unique<compaction_sink>(ntp);
-        auto reducer = compaction::sliding_window_reducer(
-          std::move(src), std::move(sink));
+    // Requests a compaction of the provided `ntp`.
+    ss::future<> compact(model::ntp ntp, ss::abort_source& as);
 
-        auto compact_fut = co_await ss::coroutine::as_future(
-          std::move(reducer).run());
+    // Sets `_state = compaction_job_state::stopped` iff `expected_ntp == _ntp`.
+    // It is up to users to respect this flag.
+    void request_stop_compact(model::ntp expected_ntp);
 
-        if (compact_fut.failed()) {
-            auto eptr = compact_fut.get_exception();
-            auto log_lvl = ssx::is_shutdown_exception(eptr)
-                             ? ss::log_level::warn
-                             : ss::log_level::debug;
-            vlogl(
-              compact_log,
-              log_lvl,
-              "Caught exception {} while compacting ntp {}.",
-              eptr,
-              ntp);
-        }
-    }
+    // Specifies which `ntp` is currently undergoing compaction on this
+    // worker. Set iff `_state == compaction_job_state::running`.
+    std::optional<model::ntp> _ntp;
+    compaction_job_state _state;
 };
 
 } // namespace cloud_topics::l1

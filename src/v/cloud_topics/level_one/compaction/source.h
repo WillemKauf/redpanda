@@ -14,17 +14,21 @@
 
 namespace cloud_topics::l1 {
 
+enum class compaction_job_state { idle, running, stopped };
+
 class compaction_source : public compaction::sliding_window_reducer::source {
 public:
-    compaction_source(model::ntp ntp, ss::abort_source& as);
+    compaction_source(
+      model::ntp ntp, ss::abort_source& as, compaction_job_state& state);
     ss::future<> initialize() final;
     ss::future<ss::stop_iteration> map_building_iteration() final;
     ss::future<ss::stop_iteration>
     deduplication_iteration(compaction::sliding_window_reducer::sink&) final;
 
 private:
-    model::ntp _ntp;
-    ss::abort_source& _as;
+    [[maybe_unused]] model::ntp _ntp;
+    [[maybe_unused]] ss::abort_source& _as;
+    [[maybe_unused]] compaction_job_state& _state;
 };
 
 } // namespace cloud_topics::l1

@@ -39,6 +39,7 @@ public:
 private:
     ss::future<> on_leadership_change(model::ntp ntp, model::node_id leader);
 
+    // A reference to the `_scheduler`'s `_gate`.
     ss::gate& _gate;
     model::node_id _self;
     cluster::notification_id_type _leader_notify_handle;

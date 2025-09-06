@@ -10,6 +10,7 @@
 
 #include "cloud_topics/level_one/compaction/scheduler.h"
 
+#include "cloud_topics/level_one/compaction/log_collector.h"
 #include "cloud_topics/level_one/compaction/logger.h"
 #include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/compaction/scheduling_policies.h"
@@ -19,28 +20,13 @@
 namespace cloud_topics::l1 {
 
 compaction_scheduler::compaction_scheduler(
-  std::unique_ptr<log_collector> log_collector,
-  std::unique_ptr<scheduling_policy> policy)
-  : _log_collector(std::move(log_collector))
+  log_collector_cluster_state state, std::unique_ptr<scheduling_policy> policy)
+  : _log_collector(make_default_log_collector(this, _gate, state))
   , _scheduling_policy(std::move(policy))
   , _executor(_as, _gate)
   , _compaction_interval(
       config::shard_local_cfg().log_compaction_interval_ms.bind()) {
     _compaction_interval.watch([this]() { _scheduling_loop_sem.signal(); });
-
-    ssx::repeat_until_gate_closed_or_aborted(_gate, _as, [this] {
-        return scheduling_loop().handle_exception(
-          [](const std::exception_ptr& e) {
-              auto log_level = ssx::is_shutdown_exception(e)
-                                 ? ss::log_level::debug
-                                 : ss::log_level::warn;
-              vlogl(
-                compact_log,
-                log_level,
-                "Encountered exception in main loop: {}",
-                e);
-          });
-    });
 }
 
 bool compaction_scheduler::is_managed(const model::ntp& ntp) const {
@@ -66,7 +52,9 @@ ss::future<> compaction_scheduler::unmanage_partition(const model::ntp& ntp) {
     auto handle = std::move(handle_opt).value();
 
     auto close_fut = handle->gate.close();
-    handle->state = compaction_state::stopped;
+
+    // Request that compaction of this ntp be stopped, if in flight.
+    co_await _executor.request_stop_compaction(ntp);
 
     co_await std::move(close_fut);
 }
@@ -74,7 +62,7 @@ ss::future<> compaction_scheduler::unmanage_partition(const model::ntp& ntp) {
 ss::future<> compaction_scheduler::scheduling_loop() {
     vlog(compact_log.debug, "Starting compaction scheduling loop");
     auto holder = _gate.hold();
-    while (!_gate.is_closed && !_as.abort_requested()) {
+    while (!_gate.is_closed() && !_as.abort_requested()) {
         auto compaction_interval = _compaction_interval();
         try {
             co_await _scheduling_loop_sem.wait(
@@ -110,29 +98,67 @@ ss::future<> compaction_scheduler::schedule_some() {
     //     return needs_compact;
     // };
 
-    auto log_infos = []() { return chunked_vector<log_info>{}; }();
+    auto log_infos = []() { return chunked_vector<log_info_and_meta>{}; }();
     // auto log_infos = co_await sample_logs();
     co_await _scheduling_policy->schedule_compactions(
       _executor, std::move(log_infos));
+}
+
+ss::future<> compaction_scheduler::start() {
+    co_await _log_collector->start();
+    co_await _executor.start();
+    ssx::repeat_until_gate_closed_or_aborted(_gate, _as, [this] {
+        return scheduling_loop().handle_exception(
+          [](const std::exception_ptr& e) {
+              auto log_level = ssx::is_shutdown_exception(e)
+                                 ? ss::log_level::debug
+                                 : ss::log_level::warn;
+              vlogl(
+                compact_log,
+                log_level,
+                "Encountered exception in main loop: {}",
+                e);
+          });
+    });
 }
 
 ss::future<> compaction_scheduler::stop() {
     vlog(compact_log.debug, "Stopping compaction scheduling loop");
     _as.request_abort();
     _scheduling_loop_sem.broken();
-    auto close_fut = _gate.close();
+
+    // Stop pushing created jobs to the executor.
+    _scheduling_policy->stop();
+
+    chunked_vector<ss::future<>> futs;
+    futs.reserve(3);
+    // Stop making new jobs.
+    futs.push_back(_gate.close());
+    // Stop collecting logs.
+    futs.push_back(_log_collector->stop());
+    // Request to stop inflight compactions.
+    futs.push_back(_executor.request_stop_inflight_compactions());
+
     static constexpr size_t max_concurrent_close = 1024;
 
+    // Empty list of logs.
     co_await ss::max_concurrent_for_each(
       _logs.begin(), _logs.end(), max_concurrent_close, [](auto& log) {
-          log->state = compaction_state::stopped;
           return log->gate.close();
       });
 
     _logs.clear();
 
-    co_await std::move(close_fut);
+    co_await ss::when_all_succeed(futs.begin(), futs.end());
+
+    // It is only safe to stop the executor once all gates have been closed.
     co_await _executor.stop();
+}
+
+std::unique_ptr<compaction_scheduler>
+make_default_compaction_scheduler(log_collector_cluster_state state) {
+    return std::make_unique<compaction_scheduler>(
+      state, make_default_scheduling_policy());
 }
 
 } // namespace cloud_topics::l1
