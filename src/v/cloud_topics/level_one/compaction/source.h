@@ -16,12 +16,15 @@ namespace cloud_topics::l1 {
 
 class compaction_source : public compaction::sliding_window_reducer::source {
 public:
+    compaction_source(model::ntp ntp, ss::abort_source& as);
     ss::future<> initialize() final;
     ss::future<ss::stop_iteration> map_building_iteration() final;
     ss::future<ss::stop_iteration>
     deduplication_iteration(compaction::sliding_window_reducer::sink&) final;
 
 private:
+    model::ntp _ntp;
+    ss::abort_source& _as;
 };
 
 } // namespace cloud_topics::l1
