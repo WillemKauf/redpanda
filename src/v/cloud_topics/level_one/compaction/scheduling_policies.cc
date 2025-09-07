@@ -16,11 +16,13 @@
 
 #include <seastar/core/coroutine.hh>
 
+#include <iterator>
+
 namespace cloud_topics::l1 {
 
 ss::future<> scheduling_policy::schedule_compactions(
   compaction_executor& executor,
-  chunked_vector<log_info_and_meta> log_infos) const {
+  chunked_vector<log_info_and_meta> log_infos) const noexcept {
     auto logs = sort_log_infos(std::move(log_infos));
 
     while (!logs.empty() && !_stopped) {
@@ -32,39 +34,29 @@ ss::future<> scheduling_policy::schedule_compactions(
 
 chunked_circular_buffer<log_info_and_meta>
 dirty_ratio_scheduling_policy::sort_log_infos(
-  chunked_vector<log_info_and_meta>&& log_infos) const {
+  chunked_vector<log_info_and_meta>&& log_infos) const noexcept {
     std::sort(log_infos.begin(), log_infos.end(), sort_policy{});
     chunked_circular_buffer<log_info_and_meta> logs;
-    logs.insert(
-      logs.end(),
-      std::make_move_iterator(log_infos.begin()),
-      std::make_move_iterator(log_infos.end()));
+    std::move(log_infos.begin(), log_infos.end(), std::back_inserter(logs));
     return logs;
 }
 
 chunked_circular_buffer<log_info_and_meta>
 compaction_lag_scheduling_policy::sort_log_infos(
-  chunked_vector<log_info_and_meta>&& log_infos) const {
+  chunked_vector<log_info_and_meta>&& log_infos) const noexcept {
     std::sort(log_infos.begin(), log_infos.end(), sort_policy{});
     chunked_circular_buffer<log_info_and_meta> logs;
-    logs.insert(
-      logs.end(),
-      std::make_move_iterator(log_infos.begin()),
-      std::make_move_iterator(log_infos.end()));
+    std::move(log_infos.begin(), log_infos.end(), std::back_inserter(logs));
     return logs;
 }
 
 chunked_circular_buffer<log_info_and_meta>
 random_scheduling_policy::sort_log_infos(
-  chunked_vector<log_info_and_meta>&& log_infos) const {
+  chunked_vector<log_info_and_meta>&& log_infos) const noexcept {
     std::shuffle(
       log_infos.begin(), log_infos.end(), random_generators::internal::gen);
-
     chunked_circular_buffer<log_info_and_meta> logs;
-    logs.insert(
-      logs.end(),
-      std::make_move_iterator(log_infos.begin()),
-      std::make_move_iterator(log_infos.end()));
+    std::move(log_infos.begin(), log_infos.end(), std::back_inserter(logs));
     return logs;
 }
 

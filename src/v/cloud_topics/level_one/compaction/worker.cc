@@ -22,6 +22,11 @@
 namespace cloud_topics::l1 {
 
 ss::future<> compaction_worker::compact(model::ntp ntp, ss::abort_source& as) {
+    vlog(compact_log.info, "Compacting ntp {}", ntp);
+    if (_stopped) {
+        co_return;
+    }
+
     _state = compaction_job_state::running;
     _ntp = ntp;
 

@@ -33,15 +33,51 @@ public:
       , _leaders(leaders)
       , _topic_table(topic_table) {}
 
+    // Sets up `*_notify_handles` using pointers to `cluster` utilities.
     ss::future<> start() final;
+
+    // Tears down `*_notify_handles` using pointers to `cluster` utilities.
     ss::future<> stop() final;
 
 private:
-    ss::future<> on_leadership_change(model::ntp ntp, model::node_id leader);
+    // Registers/unregisters `ntp`s with the `compaction_scheduler` using
+    // `ntp_delta` notifications from the `topic_table`. The following cases are
+    // handled:
+    // 1. A cloud-topic enabled `ntp` becomes `compact`-enabled (register)
+    // 2. A cloud-topic enabled `ntp` is no longer `compact`-enabled
+    // (unregister)
+    // 3. A currently managed `ntp` is removed (unregister)
+    //
+    // Register operations can be performed synchronously while unregister
+    // operations are performed in a backgrounded fiber (see
+    // `compaction_scheduler::unmanage_partition()`).
+    void on_ntp_change(cluster::topic_table::ntp_delta);
+
+    // Registers/unregisters `ntp`s with the `compaction_scheduler` using
+    // leadership notifications from the `partition_leaders_table`. The
+    // following cases are handled:
+    // 1. A cloud-topic, `compact`-enabled `ntp` becomes the leader on a shard
+    // on this node (register)
+    // 2. A cloud-topic, `compact`-enabled `ntp` steps down from being the
+    // leader on a shard on this node (unregister)
+    //
+    // Register operations can be performed synchronously while unregister
+    // operations are performed in a backgrounded fiber (see
+    // `compaction_scheduler::unmanage_partition()`).
+    void on_leadership_change(model::ntp, model::node_id);
 
     // A reference to the `_scheduler`'s `_gate`.
     ss::gate& _gate;
+
+    // The `node_id` of the current broker.
     model::node_id _self;
+
+    // A notification handle that tracks `ntp_delta` notifications from the
+    // `topic_table` (notably property updates & removals).
+    cluster::notification_id_type _ntp_notify_handle;
+
+    // A notification handle that tracks leadership notifications from the
+    // `partition_leaders_table`.
     cluster::notification_id_type _leader_notify_handle;
 
     ss::sharded<cluster::partition_leaders_table>* _leaders;

@@ -22,6 +22,8 @@ ss::future<> compaction_executor::start() {
     for (worker_shard i = 0; i < ss::smp::count; ++i) {
         _avail_workers.emplace_back(i);
     }
+
+    // Awake any waiters that may already exist.
     _cvar.broadcast();
 }
 
@@ -61,16 +63,9 @@ ss::future<> compaction_executor::request_stop_compaction(model::ntp ntp) {
       });
 }
 
-ss::future<> compaction_executor::request_stop_inflight_compactions() {
-    chunked_vector<ss::future<>> futs;
-    for (const auto& [ntp, shard] : _inflight) {
-        futs.push_back(
-          _workers.invoke_on(shard, [ntp = ntp](compaction_worker& worker) {
-              return worker.request_stop_compact(std::move(ntp));
-          }));
-    }
-
-    co_await ss::when_all_succeed(futs.begin(), futs.end());
+ss::future<> compaction_executor::request_stop_workers() {
+    co_await _workers.invoke_on_all(
+      [](compaction_worker& worker) { worker.set_stopped(); });
 }
 
 void compaction_executor::do_compact(

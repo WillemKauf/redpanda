@@ -12,9 +12,9 @@
 
 #include "cloud_topics/level_one/compaction/executor.h"
 #include "cloud_topics/level_one/compaction/log_collector.h"
+#include "cloud_topics/level_one/compaction/log_sampler.h"
 #include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/compaction/scheduling_policies.h"
-#include "cluster/partition.h"
 #include "config/property.h"
 #include "container/chunked_hash_map.h"
 #include "container/intrusive_list_helpers.h"
@@ -29,7 +29,9 @@ namespace cloud_topics::l1 {
 class compaction_scheduler {
 public:
     compaction_scheduler(
-      log_collector_cluster_state, std::unique_ptr<scheduling_policy>);
+      log_collector_cluster_state,
+      std::unique_ptr<log_sampler>,
+      std::unique_ptr<scheduling_policy>);
 
     // Starts the contained `_log_collector`, `_executor`, and the backgrounded
     // scheduling loop.
@@ -41,35 +43,44 @@ public:
     // list, and finally shuts down the `_executor` once it is safe to do so.
     ss::future<> stop();
 
-    // Returns `true` iff the provided `ntp` is managed by this scheduler.
-    bool is_managed(const model::ntp&) const;
+    // Returns `true` iff the provided `tid_p` is managed by this scheduler.
+    bool is_managed(const model::topic_id_partition&) const noexcept;
 
-    // Pushes a new `ntp` to be managed by this scheduler to the list of `ntp`s.
-    // It is the caller's responsibility to ensure the partition is not already
-    // managed by this scheduler.
-    void manage_partition(const model::ntp&);
+    // Pushes a new `tid_p` to be managed by this scheduler to the list of
+    // `tid_p`s. It is the caller's responsibility to ensure the partition is
+    // not already managed by this scheduler.
+    void manage_partition(const model::topic_id_partition&, std::string_view);
 
-    // Removes the `ntp` from the list of managed partitions. No-ops if the
-    // provided `ntp` is not managed by this scheduler. Because the `ntp` may be
-    // undergoing an inflight compaction, this function will block until it is
-    // complete (an early stop is requested by this function).
-    ss::future<> unmanage_partition(const model::ntp&);
+    // Removes the `tid_p` from the list of managed partitions. No-ops if the
+    // provided `tid_p` is not managed by this scheduler. Because the `tid_p`
+    // may be undergoing an inflight compaction, this function will block until
+    // it is complete (an early stop is requested by this function).
+    ss::future<>
+    unmanage_partition(const model::topic_id_partition&, std::string_view);
 
 private:
-    using logs_type_t = chunked_hash_set<
-      log_compaction_meta_ptr,
-      log_compaction_meta_hash,
-      log_compaction_meta_eq>;
-    using log_list_t
-      = intrusive_list<log_compaction_meta, &log_compaction_meta::link>;
-
+    // The main compaction loop. Invoked in a background fiber until `_as` has
+    // an abort requested or the `_gate` is closed.
     ss::future<> scheduling_loop();
+
+    // Samples managed logs and schedules compactions.
     ss::future<> schedule_some();
 
+    // Responsible for pushing logs to manage/unmanage to this scheduler.
     std::unique_ptr<log_collector> _log_collector;
+
+    // Responsible for collecting compaction metadata (see: `log_info` in
+    // `meta.h`) for managed logs during a scheduling loop.
+    std::unique_ptr<log_sampler> _log_sampler;
+
+    // Responsible for scheduling logs collected by sampler for compaction with
+    // the `executor`.
     std::unique_ptr<scheduling_policy> _scheduling_policy;
+
+    // Responsible for dispatching compaction jobs to per-shard workers.
     compaction_executor _executor;
 
+    // The interval on which compaction loop is executed.
     config::binding<std::chrono::milliseconds> _compaction_interval;
 
     // This semaphore is used as a way to signal a change to
@@ -78,10 +89,7 @@ private:
     ssx::semaphore _scheduling_loop_sem{
       0, "cloud_topics::compaction::scheduling_loop"};
 
-    // Abort source held and passed to executor.
     ss::abort_source _as;
-
-    // Main gate held and passed to executor.
     ss::gate _gate;
 
     // Set of logs this scheduler is responsible for issuing compaction jobs

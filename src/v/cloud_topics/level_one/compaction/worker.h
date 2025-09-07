@@ -17,16 +17,36 @@ namespace cloud_topics::l1 {
 class compaction_worker {
 public:
     // Requests a compaction of the provided `ntp`.
-    ss::future<> compact(model::ntp ntp, ss::abort_source& as);
+    ss::future<> compact(model::ntp, ss::abort_source&);
 
-    // Sets `_state = compaction_job_state::stopped` iff `expected_ntp == _ntp`.
-    // It is up to users to respect this flag.
-    void request_stop_compact(model::ntp expected_ntp);
+    // Sets `_state = compaction_job_state::stopped` if the passed
+    // `expected_ntp == _ntp`. It is up to users/currently running compaction
+    // jobs to respect this flag.
+    void request_stop_compact(model::ntp);
+
+    // Sets `_stopped` flag to indicate the `worker` will not perform any more
+    // compaction jobs, as well as `_state = compaction_job_state::stopped` to
+    // indicate to a potential inflight compaction job that it should exit
+    // early.
+    void set_stopped() {
+        _stopped = true;
+        _state = compaction_job_state::stopped;
+    }
 
     // Specifies which `ntp` is currently undergoing compaction on this
-    // worker. Set iff `_state == compaction_job_state::running`.
-    std::optional<model::ntp> _ntp;
-    compaction_job_state _state;
+    // worker. Set if `_state == compaction_job_state::running`.
+    std::optional<model::ntp> _ntp{std::nullopt};
+
+    // The state of the worker (`idle`, `running`, or `stopped`). `stopped`
+    // means that the inflight compaction job running on this worker has been
+    // pre-empted to return early- it does not mean that the worker itself is
+    // stopped from running future compaction jobs (`_stopped` is used as a flag
+    // to indicate this state instead).
+    compaction_job_state _state{compaction_job_state::idle};
+
+    // If `true`, new compaction jobs are automatically rejected (shutdown has
+    // likely been requested).
+    bool _stopped{false};
 };
 
 } // namespace cloud_topics::l1

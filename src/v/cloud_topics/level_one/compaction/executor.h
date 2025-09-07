@@ -44,17 +44,18 @@ public:
     ss::future<> compact_one(log_compaction_meta*);
 
     // If an inflight compaction job for the provided `ntp` exists, a signal is
-    // sent to the shard on which the job is occurring to request an early
-    // abort. The returned future from this function does not, upon resolving,
-    // guarantee that the inflight compaction (if underway) has been stopped,
-    // only that a request has been made to stop it promptly.
+    // sent to the worker shard on which the job is occurring to request an
+    // early abort. The returned future from this function does not, upon
+    // resolving, guarantee that the inflight compaction (if underway) has been
+    // stopped, only that a pre-emption request has been made.
     ss::future<> request_stop_compaction(model::ntp ntp);
 
-    // Requests that all inflight compaction jobs be stopped promptly. The
-    // returned future from this function does not, upon resolving, guarantee
-    // that the inflight compactions (if underway) have been stopped, only that
-    // requests have been made to stop them promptly.
-    ss::future<> request_stop_inflight_compactions();
+    // Requests that all workers (and inflight compaction jobs) be stopped
+    // promptly. Workers will no longer accept compaction jobs after this
+    // function has been called. The returned future from this function does
+    // not, upon resolving, guarantee that inflight compactions (if any) have
+    // been stopped, only that pre-emption requests have been made.
+    ss::future<> request_stop_workers();
 
 private:
     using worker_shard = ss::shard_id;

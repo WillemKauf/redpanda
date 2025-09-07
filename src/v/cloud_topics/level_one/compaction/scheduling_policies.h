@@ -30,14 +30,20 @@ public:
     scheduling_policy& operator=(scheduling_policy&&) noexcept = default;
     virtual ~scheduling_policy() = default;
 
+    // Sorts the input `chunked_vector` per the implementation of
+    // `sort_log_infos()` and then iterates over the compaction jobs, passing
+    // them serially to the `executor`.
     ss::future<> schedule_compactions(
-      compaction_executor&, chunked_vector<log_info_and_meta>) const;
+      compaction_executor&, chunked_vector<log_info_and_meta>) const noexcept;
 
-    void stop() { _stopped = true; }
+    void stop() noexcept { _stopped = true; }
 
 private:
+    // Sorts the input `chunked_vector` of compaction jobs per a desired
+    // heuristic and returns a `chunked_circular_buffer` for easy iteration
+    // within `schedule_compactions()`.
     virtual chunked_circular_buffer<log_info_and_meta>
-    sort_log_infos(chunked_vector<log_info_and_meta>&&) const = 0;
+    sort_log_infos(chunked_vector<log_info_and_meta>&&) const noexcept = 0;
 
     bool _stopped;
 };
@@ -47,8 +53,8 @@ private:
 class dirty_ratio_scheduling_policy : public scheduling_policy {
 private:
     struct sort_policy {
-        bool operator()(
-          const log_info_and_meta& a, const log_info_and_meta& b) const {
+        bool operator()(const log_info_and_meta& a, const log_info_and_meta& b)
+          const noexcept {
             if (a.info.must_compact != b.info.must_compact) {
                 // Make a stable partition of logs that must be compacted first.
                 return a.info.must_compact > b.info.must_compact;
@@ -58,7 +64,7 @@ private:
     };
 
     chunked_circular_buffer<log_info_and_meta>
-    sort_log_infos(chunked_vector<log_info_and_meta>&&) const final;
+    sort_log_infos(chunked_vector<log_info_and_meta>&&) const noexcept final;
 };
 
 // Compacts partitions from highest compaction lag (the oldest timestamp of
@@ -66,8 +72,8 @@ private:
 class compaction_lag_scheduling_policy : public scheduling_policy {
 private:
     struct sort_policy {
-        bool operator()(
-          const log_info_and_meta& a, const log_info_and_meta& b) const {
+        bool operator()(const log_info_and_meta& a, const log_info_and_meta& b)
+          const noexcept {
             if (a.info.must_compact != b.info.must_compact) {
                 // Make a stable partition of logs that must be compacted first.
                 return a.info.must_compact > b.info.must_compact;
@@ -78,14 +84,14 @@ private:
     };
 
     chunked_circular_buffer<log_info_and_meta>
-    sort_log_infos(chunked_vector<log_info_and_meta>&&) const final;
+    sort_log_infos(chunked_vector<log_info_and_meta>&&) const noexcept final;
 };
 
 // Shuffles all partitions eligible for compaction.
 class random_scheduling_policy : public scheduling_policy {
 private:
     chunked_circular_buffer<log_info_and_meta>
-    sort_log_infos(chunked_vector<log_info_and_meta>&&) const final;
+    sort_log_infos(chunked_vector<log_info_and_meta>&&) const noexcept final;
 };
 
 std::unique_ptr<scheduling_policy> make_default_scheduling_policy();

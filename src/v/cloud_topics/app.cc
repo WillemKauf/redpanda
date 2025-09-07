@@ -111,8 +111,8 @@ ss::future<> app::start() {
 
 ss::future<> app::stop() {
     ssx::sharded_service_container::shutdown();
-    co_await data_plane->stop();
     co_await compaction_scheduler->stop();
+    co_await data_plane->stop();
 }
 
 ss::sharded<l1::frontend>* app::get_sharded_l1_metastore_fe() {
@@ -124,5 +124,9 @@ ss::sharded<l1::domain_supervisor>* app::get_sharded_l1_domain_supervisor() {
 }
 
 ss::sharded<state_accessors>* app::get_state() { return &state; }
+
+l1::compaction_scheduler* app::get_compaction_scheduler() {
+    return compaction_scheduler.get();
+}
 
 } // namespace cloud_topics

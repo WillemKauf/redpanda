@@ -21,17 +21,17 @@
 namespace cloud_topics::l1 {
 
 struct log_info {
-    model::ntp ntp;
+    model::topic_id_partition tid_p;
     bool must_compact;
     double dirty_ratio;
     model::timestamp earliest_dirty_ts;
 };
 
 struct log_compaction_meta {
-    log_compaction_meta(model::ntp ntp)
-      : ntp(std::move(ntp)) {}
+    log_compaction_meta(model::topic_id_partition tid_p)
+      : tid_p(std::move(tid_p)) {}
 
-    model::ntp ntp;
+    model::topic_id_partition tid_p;
     ss::gate gate;
     intrusive_list_hook link;
 };
@@ -43,11 +43,11 @@ struct log_compaction_meta_hash {
 
     size_t
     operator()(const cloud_topics::l1::log_compaction_meta_ptr& m) const {
-        return std::hash<model::ntp>{}(m->ntp);
+        return std::hash<model::topic_id_partition>{}(m->tid_p);
     }
 
-    size_t operator()(const model::ntp& ntp) const {
-        return std::hash<model::ntp>{}(ntp);
+    size_t operator()(const model::topic_id_partition& tid_p) const {
+        return std::hash<model::topic_id_partition>{}(tid_p);
     }
 };
 
@@ -57,19 +57,19 @@ struct log_compaction_meta_eq {
     bool operator()(
       const cloud_topics::l1::log_compaction_meta_ptr& lhs,
       const cloud_topics::l1::log_compaction_meta_ptr& rhs) const {
-        return lhs->ntp == rhs->ntp;
+        return lhs->tid_p == rhs->tid_p;
     }
 
     bool operator()(
       const cloud_topics::l1::log_compaction_meta_ptr& lhs,
-      const model::ntp& rhs) const {
-        return lhs->ntp == rhs;
+      const model::topic_id_partition& rhs) const noexcept {
+        return lhs->tid_p == rhs;
     }
 
     bool operator()(
-      const model::ntp& lhs,
+      const model::topic_id_partition& lhs,
       const cloud_topics::l1::log_compaction_meta_ptr& rhs) const {
-        return lhs == rhs->ntp;
+        return lhs == rhs->tid_p;
     }
 };
 
@@ -77,5 +77,13 @@ struct log_info_and_meta {
     log_info info;
     log_compaction_meta* meta;
 };
+
+using logs_type_t = chunked_hash_set<
+  log_compaction_meta_ptr,
+  log_compaction_meta_hash,
+  log_compaction_meta_eq>;
+
+using log_list_t
+  = intrusive_list<log_compaction_meta, &log_compaction_meta::link>;
 
 } // namespace cloud_topics::l1

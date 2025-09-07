@@ -177,6 +177,7 @@ redpanda_cc_library(
     deps = [
         ":executor",
         ":log_collector",
+        ":log_sampler",
         ":logger",
         ":meta",
         ":scheduling_policies",
@@ -200,6 +201,26 @@ redpanda_cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "@seastar",
+    ],
+)
+
+redpanda_cc_library(
+    name = "log_sampler",
+    srcs = [
+        "log_sampler.cc",
+    ],
+    hdrs = [
+        "log_sampler.h",
+    ],
+    implementation_deps = [
+        "//src/v/ssx:future_util",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":meta",
+        "//src/v/cloud_topics/level_one/metastore:metastore",
+        "//src/v/container:chunked_vector",
         "@seastar",
     ],
 )

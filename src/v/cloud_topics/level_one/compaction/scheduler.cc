@@ -11,6 +11,7 @@
 #include "cloud_topics/level_one/compaction/scheduler.h"
 
 #include "cloud_topics/level_one/compaction/log_collector.h"
+#include "cloud_topics/level_one/compaction/log_sampler.h"
 #include "cloud_topics/level_one/compaction/logger.h"
 #include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/compaction/scheduling_policies.h"
@@ -20,8 +21,11 @@
 namespace cloud_topics::l1 {
 
 compaction_scheduler::compaction_scheduler(
-  log_collector_cluster_state state, std::unique_ptr<scheduling_policy> policy)
+  log_collector_cluster_state state,
+  std::unique_ptr<log_sampler> log_sampler,
+  std::unique_ptr<scheduling_policy> policy)
   : _log_collector(make_default_log_collector(this, _gate, state))
+  , _log_sampler(std::move(log_sampler))
   , _scheduling_policy(std::move(policy))
   , _executor(_as, _gate)
   , _compaction_interval(
@@ -29,22 +33,27 @@ compaction_scheduler::compaction_scheduler(
     _compaction_interval.watch([this]() { _scheduling_loop_sem.signal(); });
 }
 
-bool compaction_scheduler::is_managed(const model::ntp& ntp) const {
-    return _logs.contains(ntp);
+bool compaction_scheduler::is_managed(
+  const model::topic_id_partition& tid_p) const noexcept {
+    return _logs.contains(tid_p);
 }
 
-void compaction_scheduler::manage_partition(const model::ntp& ntp) {
-    vlog(compact_log.info, "Asked to manage compacted log: {}", ntp);
+void compaction_scheduler::manage_partition(
+  const model::topic_id_partition& tid_p, std::string_view ctx) {
+    vlog(
+      compact_log.info, "Asked to manage compacted log: {} ({})", tid_p, ctx);
     auto [it, success] = _logs.insert(
-      std::make_unique<log_compaction_meta>(ntp));
+      std::make_unique<log_compaction_meta>(tid_p));
     _logs_list.push_back(*(*it));
     vassert(
-      success, "Could not manage compacted log {} (concurrency issue?)", ntp);
+      success, "Could not manage compacted log {} (concurrency issue?)", tid_p);
 }
 
-ss::future<> compaction_scheduler::unmanage_partition(const model::ntp& ntp) {
-    vlog(compact_log.info, "Asked to unmanage compacted log: {}", ntp);
-    auto handle_opt = _logs.extract(ntp);
+ss::future<> compaction_scheduler::unmanage_partition(
+  const model::topic_id_partition& tid_p, std::string_view ctx) {
+    vlog(
+      compact_log.info, "Asked to unmanage compacted log: {} ({})", tid_p, ctx);
+    auto handle_opt = _logs.extract(tid_p);
     if (!handle_opt) {
         co_return;
     }
@@ -53,8 +62,8 @@ ss::future<> compaction_scheduler::unmanage_partition(const model::ntp& ntp) {
 
     auto close_fut = handle->gate.close();
 
-    // Request that compaction of this ntp be stopped, if in flight.
-    co_await _executor.request_stop_compaction(ntp);
+    // Request that compaction of this tid_p be stopped, if in flight.
+    co_await _executor.request_stop_compaction(tid_p);
 
     co_await std::move(close_fut);
 }
@@ -98,8 +107,12 @@ ss::future<> compaction_scheduler::schedule_some() {
     //     return needs_compact;
     // };
 
-    auto log_infos = []() { return chunked_vector<log_info_and_meta>{}; }();
-    // auto log_infos = co_await sample_logs();
+    auto log_infos = co_await _log_sampler->sample_logs();
+
+    if (log_infos.empty()) {
+        co_return;
+    }
+
     co_await _scheduling_policy->schedule_compactions(
       _executor, std::move(log_infos));
 }
@@ -137,7 +150,7 @@ ss::future<> compaction_scheduler::stop() {
     // Stop collecting logs.
     futs.push_back(_log_collector->stop());
     // Request to stop inflight compactions.
-    futs.push_back(_executor.request_stop_inflight_compactions());
+    futs.push_back(_executor.request_stop_workers());
 
     static constexpr size_t max_concurrent_close = 1024;
 
@@ -158,7 +171,7 @@ ss::future<> compaction_scheduler::stop() {
 std::unique_ptr<compaction_scheduler>
 make_default_compaction_scheduler(log_collector_cluster_state state) {
     return std::make_unique<compaction_scheduler>(
-      state, make_default_scheduling_policy());
+      state, make_log_sampler(nullptr), make_default_scheduling_policy());
 }
 
 } // namespace cloud_topics::l1
