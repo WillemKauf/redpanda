@@ -15,7 +15,9 @@
 #include "cloud_topics/level_one/compaction/logger.h"
 #include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/compaction/scheduling_policies.h"
+#include "compaction/utils.h"
 #include "config/configuration.h"
+#include "model/fundamental.h"
 #include "ssx/future-util.h"
 
 namespace cloud_topics::l1 {
@@ -33,27 +35,31 @@ compaction_scheduler::compaction_scheduler(
     _compaction_interval.watch([this]() { _scheduling_loop_sem.signal(); });
 }
 
-bool compaction_scheduler::is_managed(
-  const model::topic_id_partition& tid_p) const noexcept {
-    return _logs.contains(tid_p);
+bool compaction_scheduler::is_managed(const model::ntp& ntp) const noexcept {
+    return _logs.contains(ntp);
 }
 
 void compaction_scheduler::manage_partition(
-  const model::topic_id_partition& tid_p, std::string_view ctx) {
+  const model::ntp& ntp,
+  const model::topic_id_partition& tid_p,
+  std::string_view ctx) {
     vlog(
-      compact_log.info, "Asked to manage compacted log: {} ({})", tid_p, ctx);
+      compaction_log.info, "Asked to manage compacted log: {} ({})", ntp, ctx);
     auto [it, success] = _logs.insert(
-      std::make_unique<log_compaction_meta>(tid_p));
+      std::make_unique<log_compaction_meta>(tid_p, ntp));
     _logs_list.push_back(*(*it));
     vassert(
-      success, "Could not manage compacted log {} (concurrency issue?)", tid_p);
+      success, "Could not manage compacted log {} (concurrency issue?)", ntp);
 }
 
 ss::future<> compaction_scheduler::unmanage_partition(
-  const model::topic_id_partition& tid_p, std::string_view ctx) {
+  const model::ntp& ntp, std::string_view ctx) {
     vlog(
-      compact_log.info, "Asked to unmanage compacted log: {} ({})", tid_p, ctx);
-    auto handle_opt = _logs.extract(tid_p);
+      compaction_log.info,
+      "Asked to unmanage compacted log: {} ({})",
+      ntp,
+      ctx);
+    auto handle_opt = _logs.extract(ntp);
     if (!handle_opt) {
         co_return;
     }
@@ -62,14 +68,14 @@ ss::future<> compaction_scheduler::unmanage_partition(
 
     auto close_fut = handle->gate.close();
 
-    // Request that compaction of this tid_p be stopped, if in flight.
-    co_await _executor.request_stop_compaction(tid_p);
+    // Request that compaction of this ntp be stopped, if in flight.
+    co_await _executor.request_stop_compaction(ntp);
 
     co_await std::move(close_fut);
 }
 
 ss::future<> compaction_scheduler::scheduling_loop() {
-    vlog(compact_log.debug, "Starting compaction scheduling loop");
+    vlog(compaction_log.debug, "Starting compaction scheduling loop");
     auto holder = _gate.hold();
     while (!_gate.is_closed() && !_as.abort_requested()) {
         auto compaction_interval = _compaction_interval();
@@ -91,27 +97,13 @@ ss::future<> compaction_scheduler::scheduling_loop() {
 }
 
 ss::future<> compaction_scheduler::schedule_some() {
-    // auto should_compact_log = [](auto&& ntp) {
-    //     auto needs_compact = ntp->needs_compaction();
-    //     if (!needs_compact) {
-    //         vlog(
-    //           compact_log.trace,
-    //           "{}: dirty ratio ({}) < min.cleanable.dirty.ratio ({}) and "
-    //           "time since earliest dirty timestamp does not exceed "
-    //           "max.compaction.lag.ms ({}), skipping compaction.",
-    //           ntp->config().ntp(),
-    //           ntp->dirty_ratio(),
-    //           ntp->config().min_cleanable_dirty_ratio(),
-    //           ntp->config().max_compaction_lag_ms());
-    //     }
-    //     return needs_compact;
-    // };
-
-    auto log_infos = co_await _log_sampler->sample_logs();
+    auto log_infos = co_await _log_sampler->sample_logs(_logs_list);
 
     if (log_infos.empty()) {
         co_return;
     }
+
+    filter_log_infos(log_infos);
 
     co_await _scheduling_policy->schedule_compactions(
       _executor, std::move(log_infos));
@@ -127,7 +119,7 @@ ss::future<> compaction_scheduler::start() {
                                  ? ss::log_level::debug
                                  : ss::log_level::warn;
               vlogl(
-                compact_log,
+                compaction_log,
                 log_level,
                 "Encountered exception in main loop: {}",
                 e);
@@ -136,7 +128,7 @@ ss::future<> compaction_scheduler::start() {
 }
 
 ss::future<> compaction_scheduler::stop() {
-    vlog(compact_log.debug, "Stopping compaction scheduling loop");
+    vlog(compaction_log.debug, "Stopping compaction scheduling loop");
     _as.request_abort();
     _scheduling_loop_sem.broken();
 
@@ -168,10 +160,33 @@ ss::future<> compaction_scheduler::stop() {
     co_await _executor.stop();
 }
 
+void compaction_scheduler::filter_log_infos(
+  chunked_vector<log_info_and_meta>& logs) const {
+    auto needs_compaction = [](const log_info_and_meta& log) {
+        auto min_cleanable_dirty_ratio = 0.5;
+        auto max_compaction_lag_ms = std::chrono::milliseconds(
+          std::numeric_limits<uint32_t>::max());
+        return compaction::log_needs_compaction(
+          log.info.dirty_ratio,
+          min_cleanable_dirty_ratio,
+          log.info.earliest_dirty_ts,
+          max_compaction_lag_ms);
+    };
+    chunked_vector<log_info_and_meta> filtered_logs;
+    std::copy_if(
+      std::make_move_iterator(logs.begin()),
+      std::make_move_iterator(logs.end()),
+      std::back_inserter(filtered_logs),
+      needs_compaction);
+    logs = std::move(filtered_logs);
+}
+
 std::unique_ptr<compaction_scheduler>
 make_default_compaction_scheduler(log_collector_cluster_state state) {
     return std::make_unique<compaction_scheduler>(
-      state, make_log_sampler(nullptr), make_default_scheduling_policy());
+      state,
+      make_log_sampler(nullptr, state.topic_table),
+      make_default_scheduling_policy());
 }
 
 } // namespace cloud_topics::l1

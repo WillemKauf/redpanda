@@ -12,21 +12,27 @@
 
 #include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/metastore/metastore.h"
+#include "cluster/topic_table.h"
 #include "container/chunked_vector.h"
 
 namespace cloud_topics::l1 {
 
 class log_sampler {
 public:
-    log_sampler(metastore* metastore)
-      : _metastore(metastore) {}
+    log_sampler(
+      metastore* metastore, ss::sharded<cluster::topic_table>* topic_table)
+      : _metastore(metastore)
+      , _topic_table(topic_table) {}
 
-    ss::future<chunked_vector<log_info_and_meta>> sample_logs() const;
+    ss::future<chunked_vector<log_info_and_meta>>
+    sample_logs(log_list_t& logs) const;
 
 private:
-    [[maybe_unused]] metastore* _metastore;
+    metastore* _metastore;
+    ss::sharded<cluster::topic_table>* _topic_table;
 };
 
-std::unique_ptr<log_sampler> make_log_sampler(metastore* metastore);
+std::unique_ptr<log_sampler> make_log_sampler(
+  metastore* metastore, ss::sharded<cluster::topic_table>* topic_table);
 
 } // namespace cloud_topics::l1

@@ -32,14 +32,14 @@ ss::future<> compaction_executor::stop() {
     co_await _workers.stop();
 }
 
-ss::future<> compaction_executor::compact_one(log_compaction_meta* meta) {
+ss::future<> compaction_executor::compact_log(log_info_and_meta log) {
     auto worker_fut = co_await ss::coroutine::as_future(get_available_worker());
     if (worker_fut.failed()) {
         auto eptr = worker_fut.get_exception();
         auto log_lvl = ssx::is_shutdown_exception(eptr) ? ss::log_level::warn
                                                         : ss::log_level::debug;
         vlogl(
-          compact_log,
+          compaction_log,
           log_lvl,
           "Caught exception {} while waiting for compaction worker.",
           eptr);
@@ -47,7 +47,7 @@ ss::future<> compaction_executor::compact_one(log_compaction_meta* meta) {
     }
 
     auto worker = worker_fut.get();
-    do_compact(worker, meta);
+    do_compact_log(worker, std::move(log));
 }
 
 ss::future<> compaction_executor::request_stop_compaction(model::ntp ntp) {
@@ -68,22 +68,23 @@ ss::future<> compaction_executor::request_stop_workers() {
       [](compaction_worker& worker) { worker.set_stopped(); });
 }
 
-void compaction_executor::do_compact(
-  compaction_executor::worker_shard shard, log_compaction_meta* log_meta) {
-    if (!log_meta->link.is_linked()) {
+void compaction_executor::do_compact_log(
+  compaction_executor::worker_shard shard, log_info_and_meta log) {
+    if (!log.meta->link.is_linked()) {
         return;
     }
 
-    ssx::spawn_with_gate(log_meta->gate, [shard, log_meta, this] {
-        _inflight.emplace(log_meta->ntp, shard);
+    ssx::spawn_with_gate(log.meta->gate, [shard, log = std::move(log), this] {
+        auto ntp = log.meta->ntp;
+        _inflight.emplace(ntp, shard);
         return _workers
           .invoke_on(
             shard,
-            [this, ntp = log_meta->ntp](compaction_worker& worker) {
-                return worker.compact(std::move(ntp), _as);
+            [this, log = std::move(log)](compaction_worker& worker) {
+                return worker.compact(std::move(log), _as);
             })
-          .finally([shard, log_meta, this] {
-              _inflight.erase(log_meta->ntp);
+          .finally([shard, ntp = std::move(ntp), this] {
+              _inflight.erase(ntp);
               _avail_workers.emplace_back(shard);
               _cvar.signal();
           });

@@ -28,7 +28,7 @@ ss::future<> scheduling_policy::schedule_compactions(
     while (!logs.empty() && !_stopped) {
         auto next = std::move(logs.front());
         logs.pop_front();
-        co_await executor.compact_one(std::move(next.meta));
+        co_await executor.compact_log(std::move(next));
     }
 }
 

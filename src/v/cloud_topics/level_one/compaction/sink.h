@@ -24,10 +24,7 @@ public:
         iobuf obj;
     };
 
-    compaction_sink(
-      model::topic_id_partition tidp, object_builder::options opts = {})
-      : _tidp(tidp)
-      , _opts(opts) {}
+    compaction_sink(model::topic_id_partition, object_builder::options = {});
 
     ss::future<ss::stop_iteration>
     operator()(model::record_batch b, model::compression c) final;
@@ -44,7 +41,8 @@ private:
 
     ss::future<> maybe_roll();
 
-    model::topic_id_partition _tidp;
+private:
+    model::topic_id_partition _tp;
     const object_builder::options _opts;
 
     std::optional<iobuf> _active_output_buf{std::nullopt};

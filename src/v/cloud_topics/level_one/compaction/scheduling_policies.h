@@ -55,10 +55,6 @@ private:
     struct sort_policy {
         bool operator()(const log_info_and_meta& a, const log_info_and_meta& b)
           const noexcept {
-            if (a.info.must_compact != b.info.must_compact) {
-                // Make a stable partition of logs that must be compacted first.
-                return a.info.must_compact > b.info.must_compact;
-            }
             return a.info.dirty_ratio > b.info.dirty_ratio;
         }
     };
@@ -74,11 +70,6 @@ private:
     struct sort_policy {
         bool operator()(const log_info_and_meta& a, const log_info_and_meta& b)
           const noexcept {
-            if (a.info.must_compact != b.info.must_compact) {
-                // Make a stable partition of logs that must be compacted first.
-                return a.info.must_compact > b.info.must_compact;
-            }
-
             return a.info.earliest_dirty_ts < b.info.earliest_dirty_ts;
         }
     };

@@ -16,8 +16,6 @@
 #include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/compaction/scheduling_policies.h"
 #include "config/property.h"
-#include "container/chunked_hash_map.h"
-#include "container/intrusive_list_helpers.h"
 #include "model/fundamental.h"
 #include "ssx/semaphore.h"
 
@@ -44,19 +42,19 @@ public:
     ss::future<> stop();
 
     // Returns `true` iff the provided `tid_p` is managed by this scheduler.
-    bool is_managed(const model::topic_id_partition&) const noexcept;
+    bool is_managed(const model::ntp&) const noexcept;
 
     // Pushes a new `tid_p` to be managed by this scheduler to the list of
     // `tid_p`s. It is the caller's responsibility to ensure the partition is
     // not already managed by this scheduler.
-    void manage_partition(const model::topic_id_partition&, std::string_view);
+    void manage_partition(
+      const model::ntp&, const model::topic_id_partition&, std::string_view);
 
     // Removes the `tid_p` from the list of managed partitions. No-ops if the
     // provided `tid_p` is not managed by this scheduler. Because the `tid_p`
     // may be undergoing an inflight compaction, this function will block until
     // it is complete (an early stop is requested by this function).
-    ss::future<>
-    unmanage_partition(const model::topic_id_partition&, std::string_view);
+    ss::future<> unmanage_partition(const model::ntp&, std::string_view);
 
 private:
     // The main compaction loop. Invoked in a background fiber until `_as` has
@@ -66,6 +64,11 @@ private:
     // Samples managed logs and schedules compactions.
     ss::future<> schedule_some();
 
+    // Filters provided vector of log information, leaving only logs that
+    // require compaction in the container.
+    void filter_log_infos(chunked_vector<log_info_and_meta>&) const;
+
+private:
     // Responsible for pushing logs to manage/unmanage to this scheduler.
     std::unique_ptr<log_collector> _log_collector;
 

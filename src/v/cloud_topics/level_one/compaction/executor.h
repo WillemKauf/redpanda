@@ -41,7 +41,7 @@ public:
     // Waits for an available worker from the pool and then issues a
     // backgrounded compaction job for the provided `log` on that worker's
     // shard.
-    ss::future<> compact_one(log_compaction_meta*);
+    ss::future<> compact_log(log_info_and_meta);
 
     // If an inflight compaction job for the provided `ntp` exists, a signal is
     // sent to the worker shard on which the job is occurring to request an
@@ -62,7 +62,7 @@ private:
 
     // Dispatches a background compaction job for the provided `log` on the
     // provided `worker_shard`.
-    void do_compact(worker_shard, log_compaction_meta*);
+    void do_compact_log(worker_shard, log_info_and_meta);
 
     // Returns a shard for which a compaction job can be immediately scheduled
     // on the local worker. If no worker is immediatel available, one is waited

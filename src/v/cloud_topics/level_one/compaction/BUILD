@@ -89,6 +89,7 @@ redpanda_cc_library(
     ],
     deps = [
         ":logger",
+        ":meta",
         ":sink",
         ":source",
         "//src/v/compaction:reducer",
@@ -154,6 +155,8 @@ redpanda_cc_library(
         "//src/v/cloud_topics/level_one:__subpackages__",
     ],
     deps = [
+        "//src/v/cloud_topics/level_one/metastore",
+        "//src/v/container:chunked_hash_map",
         "//src/v/container:intrusive",
         "//src/v/model",
         "@seastar",
@@ -163,12 +166,12 @@ redpanda_cc_library(
 redpanda_cc_library(
     name = "scheduler",
     srcs = [
-        "scheduler.cc",
         "log_collector_impl.cc",
+        "scheduler.cc",
     ],
     hdrs = [
-        "scheduler.h",
         "log_collector_impl.h",
+        "scheduler.h",
     ],
     implementation_deps = [
         "//src/v/ssx:future_util",
@@ -182,8 +185,8 @@ redpanda_cc_library(
         ":meta",
         ":scheduling_policies",
         "//src/v/cluster",
+        "//src/v/compaction:utils",
         "//src/v/config",
-        "//src/v/container:chunked_hash_map",
         "//src/v/container:intrusive",
         "//src/v/model",
         "//src/v/ssx:semaphore",
@@ -218,9 +221,13 @@ redpanda_cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":logger",
         ":meta",
-        "//src/v/cloud_topics/level_one/metastore:metastore",
+        "//src/v/cloud_topics/level_one/metastore",
+        "//src/v/cluster",
+        "//src/v/config",
         "//src/v/container:chunked_vector",
+        "//src/v/model",
         "@seastar",
     ],
 )

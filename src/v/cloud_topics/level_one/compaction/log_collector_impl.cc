@@ -75,7 +75,10 @@ void partition_leader_log_collector::on_ntp_change(
         if (is_compacted_cloud_topic && !is_managed) {
             // This is likely an existing cloud topic which is now `compact`
             // enabled.
-            _scheduler->manage_partition(ntp, "Enabled compaction");
+            auto tid_p = model::topic_id_partition(
+              topic_cfg.tp_id.value_or(model::create_topic_id()),
+              ntp.tp.partition);
+            _scheduler->manage_partition(ntp, tid_p, "Enabled compaction");
         }
 
         if (!is_compacted_cloud_topic && is_managed) {
@@ -118,7 +121,9 @@ void partition_leader_log_collector::on_leadership_change(
     auto is_leader = leader == _self;
 
     if (is_leader && !is_managed) {
-        _scheduler->manage_partition(ntp, "Became the leader");
+        auto tid_p = model::topic_id_partition(
+          topic_cfg.tp_id.value_or(model::create_topic_id()), ntp.tp.partition);
+        _scheduler->manage_partition(ntp, tid_p, "Became the leader");
     }
 
     if (!is_leader && is_managed) {

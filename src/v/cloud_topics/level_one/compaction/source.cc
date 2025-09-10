@@ -17,8 +17,10 @@
 namespace cloud_topics::l1 {
 
 compaction_source::compaction_source(
-  model::ntp ntp, ss::abort_source& as, compaction_job_state& state)
-  : _ntp(ntp)
+  model::topic_id_partition tp,
+  ss::abort_source& as,
+  compaction_job_state& state)
+  : _tp(tp)
   , _as(as)
   , _state(state) {}
 

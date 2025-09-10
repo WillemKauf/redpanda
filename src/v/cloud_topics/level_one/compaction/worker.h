@@ -10,14 +10,15 @@
 
 #pragma once
 
+#include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/compaction/source.h"
 
 namespace cloud_topics::l1 {
 
 class compaction_worker {
 public:
-    // Requests a compaction of the provided `ntp`.
-    ss::future<> compact(model::ntp, ss::abort_source&);
+    // Requests a compaction of the provided `log`.
+    ss::future<> compact(log_info_and_meta, ss::abort_source&);
 
     // Sets `_state = compaction_job_state::stopped` if the passed
     // `expected_ntp == _ntp`. It is up to users/currently running compaction

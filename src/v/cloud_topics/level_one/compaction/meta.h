@@ -10,6 +10,9 @@
 
 #pragma once
 
+#include "cloud_topics/level_one/metastore/metastore.h"
+#include "cloud_topics/level_one/metastore/offset_interval_set.h"
+#include "container/chunked_hash_map.h"
 #include "container/intrusive_list_helpers.h"
 #include "model/fundamental.h"
 #include "model/timestamp.h"
@@ -20,18 +23,13 @@
 
 namespace cloud_topics::l1 {
 
-struct log_info {
-    model::topic_id_partition tid_p;
-    bool must_compact;
-    double dirty_ratio;
-    model::timestamp earliest_dirty_ts;
-};
-
 struct log_compaction_meta {
-    log_compaction_meta(model::topic_id_partition tid_p)
-      : tid_p(std::move(tid_p)) {}
+    log_compaction_meta(model::topic_id_partition tid_p, model::ntp ntp)
+      : tid_p(std::move(tid_p))
+      , ntp(std::move(ntp)) {}
 
     model::topic_id_partition tid_p;
+    model::ntp ntp;
     ss::gate gate;
     intrusive_list_hook link;
 };
@@ -43,11 +41,11 @@ struct log_compaction_meta_hash {
 
     size_t
     operator()(const cloud_topics::l1::log_compaction_meta_ptr& m) const {
-        return std::hash<model::topic_id_partition>{}(m->tid_p);
+        return std::hash<model::ntp>{}(m->ntp);
     }
 
-    size_t operator()(const model::topic_id_partition& tid_p) const {
-        return std::hash<model::topic_id_partition>{}(tid_p);
+    size_t operator()(const model::ntp& ntp) const {
+        return std::hash<model::ntp>{}(ntp);
     }
 };
 
@@ -57,25 +55,20 @@ struct log_compaction_meta_eq {
     bool operator()(
       const cloud_topics::l1::log_compaction_meta_ptr& lhs,
       const cloud_topics::l1::log_compaction_meta_ptr& rhs) const {
-        return lhs->tid_p == rhs->tid_p;
+        return lhs->ntp == rhs->ntp;
     }
 
     bool operator()(
       const cloud_topics::l1::log_compaction_meta_ptr& lhs,
-      const model::topic_id_partition& rhs) const noexcept {
-        return lhs->tid_p == rhs;
+      const model::ntp& rhs) const noexcept {
+        return lhs->ntp == rhs;
     }
 
     bool operator()(
-      const model::topic_id_partition& lhs,
+      const model::ntp& lhs,
       const cloud_topics::l1::log_compaction_meta_ptr& rhs) const {
-        return lhs == rhs->tid_p;
+        return lhs == rhs->ntp;
     }
-};
-
-struct log_info_and_meta {
-    log_info info;
-    log_compaction_meta* meta;
 };
 
 using logs_type_t = chunked_hash_set<
@@ -85,5 +78,10 @@ using logs_type_t = chunked_hash_set<
 
 using log_list_t
   = intrusive_list<log_compaction_meta, &log_compaction_meta::link>;
+
+struct log_info_and_meta {
+    metastore::compaction_info_response info;
+    log_compaction_meta* meta;
+};
 
 } // namespace cloud_topics::l1

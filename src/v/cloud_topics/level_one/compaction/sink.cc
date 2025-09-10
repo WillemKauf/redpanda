@@ -18,6 +18,11 @@
 
 namespace cloud_topics::l1 {
 
+compaction_sink::compaction_sink(
+  model::topic_id_partition tp, object_builder::options opts)
+  : _tp(tp)
+  , _opts(opts) {}
+
 bool compaction_sink::needs_roll() const {
     // TODO: This needs to consider L1 object size and what-not eventually.
     return !_active_output_buf;
@@ -47,7 +52,7 @@ ss::future<> compaction_sink::maybe_roll() {
     _builder = object_builder::create(
       make_iobuf_ref_output_stream(_active_output_buf.value()), _opts);
 
-    co_await _builder->start_partition(_tidp);
+    co_await _builder->start_partition(_tp);
 
     co_return;
 }

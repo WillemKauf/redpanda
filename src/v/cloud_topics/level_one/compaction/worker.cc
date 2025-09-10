@@ -11,6 +11,7 @@
 #include "cloud_topics/level_one/compaction/worker.h"
 
 #include "cloud_topics/level_one/compaction/logger.h"
+#include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/compaction/sink.h"
 #include "cloud_topics/level_one/compaction/source.h"
 #include "compaction/reducer.h"
@@ -21,17 +22,19 @@
 
 namespace cloud_topics::l1 {
 
-ss::future<> compaction_worker::compact(model::ntp ntp, ss::abort_source& as) {
-    vlog(compact_log.info, "Compacting ntp {}", ntp);
+ss::future<>
+compaction_worker::compact(log_info_and_meta log, ss::abort_source& as) {
+    const auto& tp = log.meta->tid_p;
+    vlog(compaction_log.info, "Compacting ntp {}", log.meta->ntp);
     if (_stopped) {
         co_return;
     }
 
     _state = compaction_job_state::running;
-    _ntp = ntp;
+    _ntp = log.meta->ntp;
 
-    auto src = std::make_unique<compaction_source>(ntp, as, _state);
-    auto sink = std::make_unique<compaction_sink>(ntp);
+    auto src = std::make_unique<compaction_source>(tp, as, _state);
+    auto sink = std::make_unique<compaction_sink>(tp);
     auto reducer = compaction::sliding_window_reducer(
       std::move(src), std::move(sink));
 
@@ -43,11 +46,11 @@ ss::future<> compaction_worker::compact(model::ntp ntp, ss::abort_source& as) {
         auto log_lvl = ssx::is_shutdown_exception(eptr) ? ss::log_level::warn
                                                         : ss::log_level::debug;
         vlogl(
-          compact_log,
+          compaction_log,
           log_lvl,
           "Caught exception {} while compacting ntp {}.",
           eptr,
-          ntp);
+          log.meta->ntp);
     }
 
     _state = compaction_job_state::idle;

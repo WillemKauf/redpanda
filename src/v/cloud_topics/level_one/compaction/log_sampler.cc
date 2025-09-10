@@ -10,29 +10,89 @@
 
 #include "cloud_topics/level_one/compaction/log_sampler.h"
 
+#include "cloud_topics/level_one/compaction/logger.h"
+#include "config/configuration.h"
 #include "container/chunked_vector.h"
 #include "model/fundamental.h"
+#include "model/metadata.h"
+#include "model/timestamp.h"
 
 #include <seastar/core/coroutine.hh>
 
+#include <chrono>
+
 namespace cloud_topics::l1 {
+
+using namespace std::chrono_literals;
 
 ss::future<chunked_vector<log_info_and_meta>>
 log_sampler::sample_logs(log_list_t& logs) const {
-    chunked_vector<model::topic_id_partition> to_sample;
-    for (const auto& log_meta : logs) {
-        if (!log_meta.link.is_linked()) {
+    chunked_vector<metastore::to_sample_info> to_sample;
+    for (const auto& log : logs) {
+        if (!log.link.is_linked()) {
             continue;
         }
-        to_sample.emplace_back(log_meta.ntp.tp);
+
+        // TODO: replace with `ntp_config`? Don't override default
+        // `delete_retention_ms` here (user could describe topic and see empty)
+        auto topic_cfg_opt = _topic_table->local().get_topic_cfg(
+          model::topic_namespace_view(log.ntp.ns, log.ntp.tp.topic));
+
+        if (!topic_cfg_opt.has_value()) {
+            continue;
+        }
+
+        auto& topic_cfg = topic_cfg_opt.value();
+        auto delete_retention_ms = [&topic_cfg]() {
+            if (topic_cfg.properties.delete_retention_ms.has_optional_value()) {
+                return topic_cfg.properties.delete_retention_ms.value();
+            } else {
+                static constexpr std::chrono::milliseconds
+                  default_delete_retention_ms
+                  = 86400000ms;
+                return config::shard_local_cfg()
+                  .tombstone_retention_ms()
+                  .value_or(default_delete_retention_ms);
+            }
+        }();
+        auto tombstone_removal_ts = model::timestamp::now()
+                                    - model::timestamp(
+                                      delete_retention_ms.count());
+        to_sample.emplace_back(log.tid_p, tombstone_removal_ts);
     }
 
+    auto samples = co_await _metastore->get_compaction_infos(to_sample);
+
+    vassert(
+      samples.size() == logs.size(),
+      "Sizes of collected samples and container of logs differ");
+
     chunked_vector<log_info_and_meta> ret;
+    ret.reserve(samples.size());
+    for (auto&& [log, sample] : std::views::zip(logs, samples)) {
+        if (!log.link.is_linked()) {
+            continue;
+        }
+
+        if (!sample.has_value()) {
+            vlog(
+              compaction_log.debug,
+              "Failed to collect sample for ntp {} during compaction: {}",
+              log.ntp,
+              sample.error());
+            continue;
+        }
+
+        ret.emplace_back(std::move(sample).value(), &log);
+    }
+
+    ret.shrink_to_fit();
     co_return ret;
 }
 
-std::unique_ptr<log_sampler> make_log_sampler(metastore* metastore) {
-    return std::make_unique<log_sampler>(metastore);
+std::unique_ptr<log_sampler> make_log_sampler(
+  metastore* metastore, ss::sharded<cluster::topic_table>* topic_table) {
+    return std::make_unique<log_sampler>(metastore, topic_table);
 }
 
 } // namespace cloud_topics::l1
