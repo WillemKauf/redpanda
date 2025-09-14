@@ -21,9 +21,14 @@
 
 #include <chrono>
 
+using namespace std::chrono_literals;
+
 namespace cloud_topics::l1 {
 
-using namespace std::chrono_literals;
+log_sampler::log_sampler(
+  metastore* metastore, ss::sharded<cluster::topic_table>* topic_table)
+  : _metastore(metastore)
+  , _topic_table(topic_table) {}
 
 ss::future<chunked_vector<log_info_and_meta>>
 log_sampler::sample_logs(log_list_t& logs) const {
@@ -88,11 +93,6 @@ log_sampler::sample_logs(log_list_t& logs) const {
 
     ret.shrink_to_fit();
     co_return ret;
-}
-
-std::unique_ptr<log_sampler> make_log_sampler(
-  metastore* metastore, ss::sharded<cluster::topic_table>* topic_table) {
-    return std::make_unique<log_sampler>(metastore, topic_table);
 }
 
 } // namespace cloud_topics::l1

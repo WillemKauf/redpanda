@@ -38,8 +38,8 @@ public:
         wait_for_controller_leadership().get();
     }
 
-    ss::future<> create_cloud_topic(
-      model::ntp ntp, cluster::topic_properties props = compact_topic_props) {
+    ss::future<>
+    create_cloud_topic(model::ntp ntp, cluster::topic_properties props) {
         props.cloud_topic_enabled = true;
         props.shadow_indexing = model::shadow_indexing_mode::disabled;
 
@@ -53,7 +53,7 @@ TEST_F(CompactionFixture, ManageCompactedTopic) {
     // in the scheduler.
     const model::topic topic_name("tapioca");
     model::ntp ntp(model::kafka_namespace, topic_name, 0);
-    create_cloud_topic(ntp).get();
+    create_cloud_topic(ntp, compact_topic_props).get();
 
     auto* ct_app = app.cloud_topics_app.get();
     auto* compaction_scheduler = ct_app->get_compaction_scheduler();
@@ -74,7 +74,7 @@ TEST_F(CompactionFixture, ManageAndDeleteCompactedTopic) {
     // in the scheduler.
     const model::topic topic_name("tapioca");
     model::ntp ntp(model::kafka_namespace, topic_name, 0);
-    create_cloud_topic(ntp).get();
+    create_cloud_topic(ntp, compact_topic_props).get();
 
     auto* ct_app = app.cloud_topics_app.get();
     auto* compaction_scheduler = ct_app->get_compaction_scheduler();
@@ -90,7 +90,7 @@ TEST_F(CompactionFixture, ManageAndDeleteCompactedTopic) {
       10s, [&] { return !compaction_scheduler->is_managed(ntp); });
 }
 
-TEST_F(CompactionFixture, ManageAndAlterUncompactedTopic) {
+TEST_F(CompactionFixture, AlterAndManageUncompactedTopic) {
     // Enabling `compact` cleanup policy on an existing cloud topic should make
     // it managed in the scheduler.
     const model::topic topic_name("tapioca");
@@ -120,4 +120,36 @@ TEST_F(CompactionFixture, ManageAndAlterUncompactedTopic) {
 
     RPTEST_REQUIRE_EVENTUALLY(
       10s, [&] { return compaction_scheduler->is_managed(ntp); });
+}
+
+TEST_F(CompactionFixture, ManageAndAlterCompactedTopic) {
+    // Disabling `compact` cleanup policy on a managed cloud topic should make
+    // it unmanaged in the scheduler.
+    const model::topic topic_name("tapioca");
+    model::ntp ntp(model::kafka_namespace, topic_name, 0);
+    create_cloud_topic(ntp, compact_topic_props).get();
+
+    auto* ct_app = app.cloud_topics_app.get();
+    auto* compaction_scheduler = ct_app->get_compaction_scheduler();
+    ASSERT_TRUE(compaction_scheduler->is_managed(ntp));
+
+    auto property_update = cluster::incremental_topic_updates{};
+    property_update.cleanup_policy_bitflags.op
+      = cluster::incremental_update_operation::set;
+    property_update.cleanup_policy_bitflags.value
+      = model::cleanup_policy_bitflags::deletion;
+    auto custom_update = cluster::incremental_topic_custom_updates{};
+    auto update = cluster::topic_properties_update_vector{
+      cluster::topic_properties_update{
+        model::topic_namespace(ntp.ns, ntp.tp.topic),
+        std::move(property_update),
+        std::move(custom_update)}};
+
+    app.controller->get_topics_frontend()
+      .local()
+      .update_topic_properties(std::move(update), model::no_timeout)
+      .get();
+
+    RPTEST_REQUIRE_EVENTUALLY(
+      10s, [&] { return !compaction_scheduler->is_managed(ntp); });
 }

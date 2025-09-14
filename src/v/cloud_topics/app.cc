@@ -92,12 +92,12 @@ ss::future<> app::construct(
       ss::sharded_parameter(
         [&] { return &controller->get_raft_manager().local(); }));
 
-    auto log_collector_state = l1::log_collector_cluster_state{
+    auto compaction_cluster_state = l1::compaction_cluster_state{
       .self = self,
       .leaders = leaders_table,
       .topic_table = &controller->get_topics_state()};
     compaction_scheduler = l1::make_default_compaction_scheduler(
-      std::move(log_collector_state));
+      std::move(compaction_cluster_state), &l1_io);
 }
 
 ss::future<> app::start() {

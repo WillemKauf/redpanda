@@ -22,6 +22,10 @@
 
 namespace cloud_topics::l1 {
 
+compaction_worker::compaction_worker(io* io, compaction_committer* committer)
+  : _io(io)
+  , _committer(committer) {}
+
 ss::future<>
 compaction_worker::compact(log_info_and_meta log, ss::abort_source& as) {
     const auto& tp = log.meta->tid_p;
@@ -34,7 +38,7 @@ compaction_worker::compact(log_info_and_meta log, ss::abort_source& as) {
     _ntp = log.meta->ntp;
 
     auto src = std::make_unique<compaction_source>(tp, as, _state);
-    auto sink = std::make_unique<compaction_sink>(tp);
+    auto sink = std::make_unique<compaction_sink>(_io, _committer, tp);
     auto reducer = compaction::sliding_window_reducer(
       std::move(src), std::move(sink));
 
@@ -61,6 +65,11 @@ void compaction_worker::request_stop_compact(model::ntp expected_ntp) {
     if (_ntp == expected_ntp && _state == compaction_job_state::running) {
         _state = compaction_job_state::stopped;
     }
+}
+
+void compaction_worker::set_stopped() {
+    _stopped = true;
+    _state = compaction_job_state::stopped;
 }
 
 } // namespace cloud_topics::l1

@@ -10,51 +10,43 @@
 
 #pragma once
 
-#include "cloud_topics/level_one/common/abstract_io.h"
 #include "cloud_topics/level_one/common/object.h"
-#include "cloud_topics/level_one/compaction/committer.h"
 #include "compaction/reducer.h"
 #include "container/chunked_vector.h"
 #include "model/fundamental.h"
 
 namespace cloud_topics::l1 {
 
-class compaction_sink : public compaction::sliding_window_reducer::sink {
+class in_memory_sink : public compaction::sliding_window_reducer::sink {
 public:
-    compaction_sink(
-      l1::io*,
-      compaction_committer*,
+    struct object_output_t {
+        object_builder::object_info info;
+        iobuf obj;
+    };
+
+    in_memory_sink(
       model::topic_id_partition,
+      chunked_vector<object_output_t>*,
       object_builder::options = {});
 
     ss::future<ss::stop_iteration>
     operator()(model::record_batch, model::compression) final;
-
     ss::future<> finalize() final;
 
 private:
-    // Returns `true` if the current object represented by
-    // `_active_staging_file` and `_builder` should be rolled.
     bool needs_roll() const;
 
-    // Pushes the current object represented by `_active_staging_file` and
-    // `_builder` to the `_committer`. Leaves `_active_staging_file` and
-    // `_builder` as `nullptr`.
-    ss::future<> commit_update();
+    ss::future<> maybe_flush_object_builder();
 
-    // May commit the current object if `needs_roll()`. Leaves
-    // `_active_staging_file` and `_builder` in a set state.
     ss::future<> maybe_roll();
 
 private:
-    io* _io;
-    compaction_committer* _committer;
-
     model::topic_id_partition _tp;
+    chunked_vector<object_output_t>* _obj_sink{nullptr};
     const object_builder::options _opts;
 
-    std::unique_ptr<staging_file> _active_staging_file{nullptr};
-    // Guaranteed to have a value iff _active_staging_file.
+    std::optional<iobuf> _active_output_buf{std::nullopt};
+    // Guaranteed to have a value iff _output_buf.has_value().
     std::unique_ptr<object_builder> _builder{nullptr};
 };
 

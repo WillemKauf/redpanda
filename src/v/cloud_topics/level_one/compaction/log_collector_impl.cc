@@ -23,6 +23,16 @@
 
 namespace cloud_topics::l1 {
 
+partition_leader_log_collector::partition_leader_log_collector(
+  compaction_scheduler* scheduler,
+  model::node_id self,
+  ss::sharded<cluster::partition_leaders_table>* leaders,
+  ss::sharded<cluster::topic_table>* topic_table)
+  : log_collector(scheduler)
+  , _self(self)
+  , _leaders(leaders)
+  , _topic_table(topic_table) {}
+
 ss::future<> partition_leader_log_collector::start() {
     _ntp_notify_handle = _topic_table->local().register_ntp_delta_notification(
       [this](cluster::topic_table::ntp_delta_range_t deltas) {
@@ -39,9 +49,11 @@ ss::future<> partition_leader_log_collector::start() {
 }
 
 ss::future<> partition_leader_log_collector::stop() {
+    auto close_fut = _gate.close();
     _topic_table->local().unregister_ntp_delta_notification(_ntp_notify_handle);
     _leaders->local().unregister_leadership_change_notification(
       _leader_notify_handle);
+    co_await std::move(close_fut);
     co_return;
 }
 
@@ -135,11 +147,9 @@ void partition_leader_log_collector::on_leadership_change(
 }
 
 std::unique_ptr<log_collector> make_default_log_collector(
-  compaction_scheduler* scheduler,
-  ss::gate& gate,
-  log_collector_cluster_state state) {
+  compaction_scheduler* scheduler, compaction_cluster_state state) {
     return std::make_unique<partition_leader_log_collector>(
-      scheduler, gate, state.self, state.leaders, state.topic_table);
+      scheduler, state.self, state.leaders, state.topic_table);
 }
 
 } // namespace cloud_topics::l1

@@ -12,12 +12,15 @@
 
 namespace cloud_topics::l1 {
 
-compaction_executor::compaction_executor(ss::abort_source& as, ss::gate& gate)
-  : _as(as)
-  , _gate(gate) {}
+compaction_executor::compaction_executor(
+  ss::sharded<file_io>* io, ss::sharded<compaction_committer>* committer)
+  : _io(io)
+  , _committer(committer) {}
 
 ss::future<> compaction_executor::start() {
-    co_await _workers.start();
+    co_await _workers.start(
+      ss::sharded_parameter([this] { return &_io->local(); }),
+      ss::sharded_parameter([this] { return &_committer->local(); }));
 
     for (worker_shard i = 0; i < ss::smp::count; ++i) {
         _avail_workers.emplace_back(i);
@@ -27,10 +30,7 @@ ss::future<> compaction_executor::start() {
     _cvar.broadcast();
 }
 
-ss::future<> compaction_executor::stop() {
-    _cvar.broken();
-    co_await _workers.stop();
-}
+ss::future<> compaction_executor::stop() { co_await _workers.stop(); }
 
 ss::future<> compaction_executor::compact_log(log_info_and_meta log) {
     auto worker_fut = co_await ss::coroutine::as_future(get_available_worker());
@@ -63,7 +63,9 @@ ss::future<> compaction_executor::request_stop_compaction(model::ntp ntp) {
       });
 }
 
-ss::future<> compaction_executor::request_stop_workers() {
+ss::future<> compaction_executor::request_stop_executor() {
+    _as.request_abort();
+    _cvar.broken();
     co_await _workers.invoke_on_all(
       [](compaction_worker& worker) { worker.set_stopped(); });
 }
@@ -93,7 +95,7 @@ void compaction_executor::do_compact_log(
 
 ss::future<compaction_executor::worker_shard>
 compaction_executor::get_available_worker() {
-    while (!_gate.is_closed() && !_as.abort_requested()) {
+    while (!_as.abort_requested()) {
         if (!_avail_workers.empty()) {
             auto worker = _avail_workers.front();
             _avail_workers.pop_front();

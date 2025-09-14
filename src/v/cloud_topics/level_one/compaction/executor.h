@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include "cloud_topics/level_one/common/file_io.h"
+#include "cloud_topics/level_one/compaction/committer.h"
 #include "cloud_topics/level_one/compaction/logger.h"
 #include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/compaction/worker.h"
@@ -26,12 +28,13 @@ namespace cloud_topics::l1 {
 
 class compaction_executor {
 public:
-    compaction_executor(ss::abort_source&, ss::gate&);
+    compaction_executor(
+      ss::sharded<file_io>*, ss::sharded<compaction_committer>*);
 
     // Starts the pool of workers, making them available for compaction jobs.
     ss::future<> start();
 
-    // Breaks condition variable and destructs workers.
+    // Destructs workers.
     // Should only be called after all inflight compactions have been stopped
     // (`request_stop_inflight_compactions()` is a _request_ to stop inflight
     // compactions, but does not upon return guarantee all inflight jobs have
@@ -48,14 +51,15 @@ public:
     // early abort. The returned future from this function does not, upon
     // resolving, guarantee that the inflight compaction (if underway) has been
     // stopped, only that a pre-emption request has been made.
-    ss::future<> request_stop_compaction(model::ntp ntp);
+    ss::future<> request_stop_compaction(model::ntp);
 
     // Requests that all workers (and inflight compaction jobs) be stopped
-    // promptly. Workers will no longer accept compaction jobs after this
-    // function has been called. The returned future from this function does
+    // promptly, and requests an abort of the local abort source. Workers will
+    // no longer accept compaction jobs after this function has been called, and
+    // waiters will be declined. The returned future from this function does
     // not, upon resolving, guarantee that inflight compactions (if any) have
     // been stopped, only that pre-emption requests have been made.
-    ss::future<> request_stop_workers();
+    ss::future<> request_stop_executor();
 
 private:
     using worker_shard = ss::shard_id;
@@ -69,11 +73,14 @@ private:
     // upon.
     ss::future<worker_shard> get_available_worker();
 
-    // A reference to the owning `compaction_scheduler's` abort source.
-    ss::abort_source& _as;
+private:
+    // Owned by `app`.
+    ss::sharded<file_io>* _io;
 
-    // A reference to the owning `compaction_scheduler's` gate.
-    ss::gate& _gate;
+    // Owned by `scheduler`.
+    ss::sharded<compaction_committer>* _committer;
+
+    ss::abort_source _as;
 
     // Used to alert worker waiters that a shard has become available.
     ss::condition_variable _cvar;

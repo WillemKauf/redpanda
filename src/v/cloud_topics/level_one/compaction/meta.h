@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include "cloud_topics/level_one/common/abstract_io.h"
+#include "cloud_topics/level_one/common/object.h"
 #include "cloud_topics/level_one/metastore/metastore.h"
 #include "cloud_topics/level_one/metastore/offset_interval_set.h"
 #include "container/chunked_hash_map.h"
@@ -82,6 +84,12 @@ using log_list_t
 struct log_info_and_meta {
     metastore::compaction_info_response info;
     log_compaction_meta* meta;
+};
+
+struct object_output_t {
+    model::topic_id_partition tp;
+    object_builder::object_info info;
+    std::unique_ptr<staging_file> staging_file;
 };
 
 } // namespace cloud_topics::l1

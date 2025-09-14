@@ -12,33 +12,47 @@
 
 #include "bytes/iostream.h"
 #include "cloud_topics/level_one/common/object.h"
+#include "cloud_topics/level_one/compaction/logger.h"
+#include "cloud_topics/level_one/compaction/meta.h"
 #include "compaction/reducer.h"
 #include "model/batch_compression.h"
 #include "model/compression.h"
 
+#include <seastar/coroutine/as_future.hh>
+
 namespace cloud_topics::l1 {
 
 compaction_sink::compaction_sink(
-  model::topic_id_partition tp, object_builder::options opts)
-  : _tp(tp)
+  io* io,
+  compaction_committer* committer,
+  model::topic_id_partition tp,
+  object_builder::options opts)
+  : _io(io)
+  , _committer(committer)
+  , _tp(tp)
   , _opts(opts) {}
 
 bool compaction_sink::needs_roll() const {
     // TODO: This needs to consider L1 object size and what-not eventually.
-    return !_active_output_buf;
+    return !_active_staging_file;
 }
 
-ss::future<> compaction_sink::maybe_flush_object_builder() {
-    if (!_builder) {
+ss::future<> compaction_sink::commit_update() {
+    if (!_active_staging_file) {
         co_return;
     }
 
+    auto active_staging_file = std::exchange(_active_staging_file, nullptr);
     auto builder = std::exchange(_builder, nullptr);
+
     auto object_info = co_await builder->finish().finally(
       [&builder] { return builder->close(); });
 
-    auto active_buf = std::exchange(_active_output_buf, std::nullopt).value();
-    _closed_objs.emplace_back(std::move(object_info), std::move(active_buf));
+    auto out = object_output_t{
+      .tp = _tp,
+      .info = std::move(object_info),
+      .staging_file = std::move(active_staging_file)};
+    _committer->push_update(std::move(out));
 }
 
 ss::future<> compaction_sink::maybe_roll() {
@@ -46,11 +60,22 @@ ss::future<> compaction_sink::maybe_roll() {
         co_return;
     }
 
-    co_await maybe_flush_object_builder();
+    co_await commit_update();
 
-    _active_output_buf = iobuf{};
-    _builder = object_builder::create(
-      make_iobuf_ref_output_stream(_active_output_buf.value()), _opts);
+    auto staging_file_fut = co_await ss::coroutine::as_future(
+      _io->create_tmp_file());
+
+    if (staging_file_fut.failed()) {
+        auto ex = staging_file_fut.get_exception();
+        vlog(compaction_log.error, "Exception creating staging file: {}", ex);
+        std::rethrow_exception(ex);
+    }
+    auto staging_file_result = staging_file_fut.get();
+
+    _active_staging_file = std::move(staging_file_result).value();
+    auto output_stream = co_await _active_staging_file->output_stream();
+
+    _builder = object_builder::create(std::move(output_stream), _opts);
 
     co_await _builder->start_partition(_tp);
 
@@ -67,13 +92,6 @@ compaction_sink::operator()(model::record_batch b, model::compression c) {
     co_return ss::stop_iteration::no;
 }
 
-ss::future<> compaction_sink::finalize() {
-    // TODO: This is very temporary.
-    co_await maybe_flush_object_builder();
-    if (_obj_sink) {
-        *_obj_sink = std::move(_closed_objs);
-    }
-    co_return;
-}
+ss::future<> compaction_sink::finalize() { co_await commit_update(); }
 
 } // namespace cloud_topics::l1

@@ -22,16 +22,10 @@ class compaction_scheduler;
 class partition_leader_log_collector : public log_collector {
 public:
     partition_leader_log_collector(
-      compaction_scheduler* scheduler,
-      ss::gate& gate,
-      model::node_id self,
-      ss::sharded<cluster::partition_leaders_table>* leaders,
-      ss::sharded<cluster::topic_table>* topic_table)
-      : log_collector(scheduler)
-      , _gate(gate)
-      , _self(self)
-      , _leaders(leaders)
-      , _topic_table(topic_table) {}
+      compaction_scheduler*,
+      model::node_id,
+      ss::sharded<cluster::partition_leaders_table>*,
+      ss::sharded<cluster::topic_table>*);
 
     // Sets up `*_notify_handles` using pointers to `cluster` utilities.
     ss::future<> start() final;
@@ -66,11 +60,10 @@ private:
     // `compaction_scheduler::unmanage_partition()`).
     void on_leadership_change(model::ntp, model::node_id);
 
-    // A reference to the `_scheduler`'s `_gate`.
-    ss::gate& _gate;
-
     // The `node_id` of the current broker.
     model::node_id _self;
+
+    ss::gate _gate;
 
     // A notification handle that tracks `ntp_delta` notifications from the
     // `topic_table` (notably property updates & removals).

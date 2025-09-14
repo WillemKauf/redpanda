@@ -45,8 +45,12 @@ redpanda_cc_library(
         "//src/v/cloud_topics/level_one:__subpackages__",
     ],
     deps = [
+        ":committer",
+        ":logger",
+        ":meta",
         "//src/v/bytes",
         "//src/v/bytes:iostream",
+        "//src/v/cloud_topics/level_one/common:abstract_io",
         "//src/v/cloud_topics/level_one/common:object",
         "//src/v/compaction:reducer",
         "//src/v/container:chunked_vector",
@@ -88,10 +92,12 @@ redpanda_cc_library(
         "//src/v/cloud_topics/level_one:__subpackages__",
     ],
     deps = [
+        ":committer",
         ":logger",
         ":meta",
         ":sink",
         ":source",
+        "//src/v/cloud_topics/level_one/common:abstract_io",
         "//src/v/compaction:reducer",
         "//src/v/model",
         "//src/v/ssx:future_util",
@@ -111,9 +117,11 @@ redpanda_cc_library(
         "//src/v/cloud_topics/level_one:__subpackages__",
     ],
     deps = [
+        ":committer",
         ":logger",
         ":meta",
         ":worker",
+        "//src/v/cloud_topics/level_one/common:file_io",
         "//src/v/container:chunked_circular_buffer",
         "//src/v/container:chunked_hash_map",
         "//src/v/model",
@@ -155,6 +163,8 @@ redpanda_cc_library(
         "//src/v/cloud_topics/level_one:__subpackages__",
     ],
     deps = [
+        "//src/v/cloud_topics/level_one/common:abstract_io",
+        "//src/v/cloud_topics/level_one/common:object",
         "//src/v/cloud_topics/level_one/metastore",
         "//src/v/container:chunked_hash_map",
         "//src/v/container:intrusive",
@@ -178,12 +188,15 @@ redpanda_cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":committer",
+        ":committing_policy",
         ":executor",
         ":log_collector",
         ":log_sampler",
         ":logger",
         ":meta",
         ":scheduling_policies",
+        "//src/v/cloud_topics/level_one/common:file_io",
         "//src/v/cluster",
         "//src/v/compaction:utils",
         "//src/v/config",
@@ -196,6 +209,9 @@ redpanda_cc_library(
 
 redpanda_cc_library(
     name = "log_collector",
+    srcs = [
+        "log_collector.cc",
+    ],
     hdrs = [
         "log_collector.h",
     ],
@@ -204,6 +220,8 @@ redpanda_cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//src/v/base",
+        "//src/v/model",
         "@seastar",
     ],
 )
@@ -228,6 +246,50 @@ redpanda_cc_library(
         "//src/v/config",
         "//src/v/container:chunked_vector",
         "//src/v/model",
+        "@seastar",
+    ],
+)
+
+redpanda_cc_library(
+    name = "committing_policy",
+    srcs = [
+        "committing_policy.cc",
+    ],
+    hdrs = [
+        "committing_policy.h",
+    ],
+    implementation_deps = [
+        "//src/v/ssx:future_util",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":meta",
+        "//src/v/ssx:semaphore",
+        "@seastar",
+    ],
+)
+
+redpanda_cc_library(
+    name = "committer",
+    srcs = [
+        "committer.cc",
+    ],
+    hdrs = [
+        "committer.h",
+    ],
+    implementation_deps = [
+        "//src/v/ssx:future_util",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":committing_policy",
+        ":logger",
+        ":meta",
+        "//src/v/cloud_topics/level_one/common:abstract_io",
+        "//src/v/cloud_topics/level_one/common:object_id",
+        "//src/v/cloud_topics/level_one/metastore",
+        "//src/v/container:chunked_circular_buffer",
+        "//src/v/ssx:semaphore",
         "@seastar",
     ],
 )

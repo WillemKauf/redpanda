@@ -19,20 +19,14 @@ namespace cloud_topics::l1 {
 
 class log_sampler {
 public:
-    log_sampler(
-      metastore* metastore, ss::sharded<cluster::topic_table>* topic_table)
-      : _metastore(metastore)
-      , _topic_table(topic_table) {}
+    log_sampler(metastore*, ss::sharded<cluster::topic_table>*);
 
     ss::future<chunked_vector<log_info_and_meta>>
-    sample_logs(log_list_t& logs) const;
+    sample_logs(log_list_t&) const;
 
 private:
     metastore* _metastore;
     ss::sharded<cluster::topic_table>* _topic_table;
 };
-
-std::unique_ptr<log_sampler> make_log_sampler(
-  metastore* metastore, ss::sharded<cluster::topic_table>* topic_table);
 
 } // namespace cloud_topics::l1

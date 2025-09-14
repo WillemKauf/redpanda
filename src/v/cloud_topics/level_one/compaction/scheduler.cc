@@ -10,6 +10,8 @@
 
 #include "cloud_topics/level_one/compaction/scheduler.h"
 
+#include "cloud_topics/level_one/compaction/committer.h"
+#include "cloud_topics/level_one/compaction/committing_policy.h"
 #include "cloud_topics/level_one/compaction/log_collector.h"
 #include "cloud_topics/level_one/compaction/log_sampler.h"
 #include "cloud_topics/level_one/compaction/logger.h"
@@ -23,16 +25,18 @@
 namespace cloud_topics::l1 {
 
 compaction_scheduler::compaction_scheduler(
-  log_collector_cluster_state state,
-  std::unique_ptr<log_sampler> log_sampler,
-  std::unique_ptr<scheduling_policy> policy)
-  : _log_collector(make_default_log_collector(this, _gate, state))
-  , _log_sampler(std::move(log_sampler))
+  compaction_cluster_state state,
+  std::unique_ptr<scheduling_policy> policy,
+  ss::sharded<file_io>* io)
+  : _io(io)
+  , _metastore(nullptr)
+  , _log_collector(make_default_log_collector(this, state))
+  , _log_sampler(_metastore, state.topic_table)
   , _scheduling_policy(std::move(policy))
-  , _executor(_as, _gate)
+  , _executor(io, &_committer)
   , _compaction_interval(
       config::shard_local_cfg().log_compaction_interval_ms.bind()) {
-    _compaction_interval.watch([this]() { _scheduling_loop_sem.signal(); });
+    _compaction_interval.watch([this]() { _sem.signal(); });
 }
 
 bool compaction_scheduler::is_managed(const model::ntp& ntp) const noexcept {
@@ -47,7 +51,7 @@ void compaction_scheduler::manage_partition(
       compaction_log.info, "Asked to manage compacted log: {} ({})", ntp, ctx);
     auto [it, success] = _logs.insert(
       std::make_unique<log_compaction_meta>(tid_p, ntp));
-    _logs_list.push_back(*(*it));
+    _logs_list.push_back(*it->get());
     vassert(
       success, "Could not manage compacted log {} (concurrency issue?)", ntp);
 }
@@ -74,44 +78,7 @@ ss::future<> compaction_scheduler::unmanage_partition(
     co_await std::move(close_fut);
 }
 
-ss::future<> compaction_scheduler::scheduling_loop() {
-    vlog(compaction_log.debug, "Starting compaction scheduling loop");
-    auto holder = _gate.hold();
-    while (!_gate.is_closed() && !_as.abort_requested()) {
-        auto compaction_interval = _compaction_interval();
-        try {
-            co_await _scheduling_loop_sem.wait(
-              _compaction_interval(),
-              std::max(_scheduling_loop_sem.current(), size_t(1)));
-        } catch (const ss::semaphore_timed_out&) {
-            // Fall through
-        }
-
-        if (compaction_interval != _compaction_interval()) {
-            // Cluster config was changed while waiting.
-            continue;
-        }
-
-        co_await schedule_some();
-    }
-}
-
-ss::future<> compaction_scheduler::schedule_some() {
-    auto log_infos = co_await _log_sampler->sample_logs(_logs_list);
-
-    if (log_infos.empty()) {
-        co_return;
-    }
-
-    filter_log_infos(log_infos);
-
-    co_await _scheduling_policy->schedule_compactions(
-      _executor, std::move(log_infos));
-}
-
-ss::future<> compaction_scheduler::start() {
-    co_await _log_collector->start();
-    co_await _executor.start();
+void compaction_scheduler::start_bg_loop() {
     ssx::repeat_until_gate_closed_or_aborted(_gate, _as, [this] {
         return scheduling_loop().handle_exception(
           [](const std::exception_ptr& e) {
@@ -127,22 +94,70 @@ ss::future<> compaction_scheduler::start() {
     });
 }
 
+ss::future<> compaction_scheduler::scheduling_loop() {
+    vlog(compaction_log.debug, "Starting compaction scheduling loop");
+    auto holder = _gate.hold();
+    while (!_gate.is_closed() && !_as.abort_requested()) {
+        auto compaction_interval = _compaction_interval();
+        try {
+            co_await _sem.wait(
+              _compaction_interval(), std::max(_sem.current(), size_t(1)));
+        } catch (const ss::semaphore_timed_out&) {
+            // Fall through
+        }
+
+        if (compaction_interval != _compaction_interval()) {
+            // Cluster config was changed while waiting.
+            continue;
+        }
+
+        co_await schedule_some();
+    }
+}
+
+ss::future<> compaction_scheduler::schedule_some() {
+    auto log_infos = co_await _log_sampler.sample_logs(_logs_list);
+
+    if (log_infos.empty()) {
+        co_return;
+    }
+
+    filter_log_infos(log_infos);
+
+    auto logs = _scheduling_policy->sort_log_infos(std::move(log_infos));
+
+    while (!logs.empty() && !_gate.is_closed() && !_as.abort_requested()) {
+        auto next = std::move(logs.front());
+        logs.pop_front();
+        co_await _executor.compact_log(std::move(next));
+    }
+}
+
+ss::future<> compaction_scheduler::start() {
+    co_await _log_collector->start();
+    co_await _committer.start(
+      ss::sharded_parameter([] { return make_default_committing_policy(); }),
+      _metastore,
+      ss::sharded_parameter([this] { return &_io->local(); }));
+    co_await _executor.start();
+    start_bg_loop();
+}
+
 ss::future<> compaction_scheduler::stop() {
     vlog(compaction_log.debug, "Stopping compaction scheduling loop");
     _as.request_abort();
-    _scheduling_loop_sem.broken();
-
-    // Stop pushing created jobs to the executor.
-    _scheduling_policy->stop();
+    _sem.broken();
 
     chunked_vector<ss::future<>> futs;
-    futs.reserve(3);
+    futs.reserve(4);
     // Stop making new jobs.
     futs.push_back(_gate.close());
     // Stop collecting logs.
     futs.push_back(_log_collector->stop());
-    // Request to stop inflight compactions.
-    futs.push_back(_executor.request_stop_workers());
+    // Stop committing data.
+    futs.push_back(_committer.stop());
+    // Request to stop inflight compactions and execution waiters.
+    futs.push_back(_executor.request_stop_executor());
 
     static constexpr size_t max_concurrent_close = 1024;
 
@@ -181,12 +196,10 @@ void compaction_scheduler::filter_log_infos(
     logs = std::move(filtered_logs);
 }
 
-std::unique_ptr<compaction_scheduler>
-make_default_compaction_scheduler(log_collector_cluster_state state) {
+std::unique_ptr<compaction_scheduler> make_default_compaction_scheduler(
+  compaction_cluster_state state, ss::sharded<file_io>* io) {
     return std::make_unique<compaction_scheduler>(
-      state,
-      make_log_sampler(nullptr, state.topic_table),
-      make_default_scheduling_policy());
+      state, make_default_scheduling_policy(), io);
 }
 
 } // namespace cloud_topics::l1

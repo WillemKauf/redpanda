@@ -11,10 +11,17 @@
 #pragma once
 
 #include "base/seastarx.h"
-#include "cluster/partition_leaders_table.h"
-#include "cluster/topic_table.h"
+#include "model/fundamental.h"
 
 #include <seastar/core/future.hh>
+#include <seastar/core/sharded.hh>
+
+namespace cluster {
+
+class partition_leaders_table;
+class topic_table;
+
+} // namespace cluster
 
 namespace cloud_topics::l1 {
 
@@ -22,8 +29,7 @@ class compaction_scheduler;
 
 class log_collector {
 public:
-    log_collector(compaction_scheduler* scheduler)
-      : _scheduler(scheduler) {}
+    log_collector(compaction_scheduler*);
 
     virtual ~log_collector() noexcept = default;
 
@@ -34,15 +40,13 @@ protected:
     compaction_scheduler* _scheduler;
 };
 
-struct log_collector_cluster_state {
+struct compaction_cluster_state {
     model::node_id self;
     ss::sharded<cluster::partition_leaders_table>* leaders;
     ss::sharded<cluster::topic_table>* topic_table;
 };
 
 std::unique_ptr<log_collector> make_default_log_collector(
-  compaction_scheduler* scheduler,
-  ss::gate& gate,
-  log_collector_cluster_state state);
+  compaction_scheduler* scheduler, compaction_cluster_state state);
 
 } // namespace cloud_topics::l1

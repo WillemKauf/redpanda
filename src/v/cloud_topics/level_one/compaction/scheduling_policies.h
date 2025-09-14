@@ -30,27 +30,20 @@ public:
     scheduling_policy& operator=(scheduling_policy&&) noexcept = default;
     virtual ~scheduling_policy() = default;
 
-    // Sorts the input `chunked_vector` per the implementation of
-    // `sort_log_infos()` and then iterates over the compaction jobs, passing
-    // them serially to the `executor`.
-    ss::future<> schedule_compactions(
-      compaction_executor&, chunked_vector<log_info_and_meta>) const noexcept;
-
-    void stop() noexcept { _stopped = true; }
-
-private:
     // Sorts the input `chunked_vector` of compaction jobs per a desired
     // heuristic and returns a `chunked_circular_buffer` for easy iteration
     // within `schedule_compactions()`.
     virtual chunked_circular_buffer<log_info_and_meta>
     sort_log_infos(chunked_vector<log_info_and_meta>&&) const noexcept = 0;
-
-    bool _stopped;
 };
 
 // Compacts partitions from highest dirty ratio (the ratio of unclean bytes in
 // the log to the total log size) to lowest.
 class dirty_ratio_scheduling_policy : public scheduling_policy {
+public:
+    chunked_circular_buffer<log_info_and_meta>
+    sort_log_infos(chunked_vector<log_info_and_meta>&&) const noexcept final;
+
 private:
     struct sort_policy {
         bool operator()(const log_info_and_meta& a, const log_info_and_meta& b)
@@ -58,14 +51,15 @@ private:
             return a.info.dirty_ratio > b.info.dirty_ratio;
         }
     };
-
-    chunked_circular_buffer<log_info_and_meta>
-    sort_log_infos(chunked_vector<log_info_and_meta>&&) const noexcept final;
 };
 
 // Compacts partitions from highest compaction lag (the oldest timestamp of
 // the first uncompacted record) to lowest.
 class compaction_lag_scheduling_policy : public scheduling_policy {
+public:
+    chunked_circular_buffer<log_info_and_meta>
+    sort_log_infos(chunked_vector<log_info_and_meta>&&) const noexcept final;
+
 private:
     struct sort_policy {
         bool operator()(const log_info_and_meta& a, const log_info_and_meta& b)
@@ -73,14 +67,11 @@ private:
             return a.info.earliest_dirty_ts < b.info.earliest_dirty_ts;
         }
     };
-
-    chunked_circular_buffer<log_info_and_meta>
-    sort_log_infos(chunked_vector<log_info_and_meta>&&) const noexcept final;
 };
 
 // Shuffles all partitions eligible for compaction.
 class random_scheduling_policy : public scheduling_policy {
-private:
+public:
     chunked_circular_buffer<log_info_and_meta>
     sort_log_infos(chunked_vector<log_info_and_meta>&&) const noexcept final;
 };

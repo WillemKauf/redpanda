@@ -20,18 +20,6 @@
 
 namespace cloud_topics::l1 {
 
-ss::future<> scheduling_policy::schedule_compactions(
-  compaction_executor& executor,
-  chunked_vector<log_info_and_meta> log_infos) const noexcept {
-    auto logs = sort_log_infos(std::move(log_infos));
-
-    while (!logs.empty() && !_stopped) {
-        auto next = std::move(logs.front());
-        logs.pop_front();
-        co_await executor.compact_log(std::move(next));
-    }
-}
-
 chunked_circular_buffer<log_info_and_meta>
 dirty_ratio_scheduling_policy::sort_log_infos(
   chunked_vector<log_info_and_meta>&& log_infos) const noexcept {
