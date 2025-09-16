@@ -121,6 +121,34 @@ redpanda_cc_library(
 )
 
 redpanda_cc_library(
+    name = "executor",
+    srcs = [
+        "executor.cc",
+    ],
+    hdrs = [
+        "executor.h",
+    ],
+    visibility = [
+        "//src/v/cloud_topics/level_one:__subpackages__",
+    ],
+    deps = [
+        ":committer",
+        ":logger",
+        ":meta",
+        ":worker",
+        "//src/v/cloud_topics/level_one/common:file_io",
+        "//src/v/cloud_topics/level_one/metastore:replicated_metastore",
+        "//src/v/compaction:key_offset_map",
+        "//src/v/container:chunked_circular_buffer",
+        "//src/v/container:chunked_hash_map",
+        "//src/v/container:intrusive",
+        "//src/v/model",
+        "//src/v/ssx:future_util",
+        "@seastar",
+    ],
+)
+
+redpanda_cc_library(
     name = "meta",
     hdrs = [
         "meta.h",
