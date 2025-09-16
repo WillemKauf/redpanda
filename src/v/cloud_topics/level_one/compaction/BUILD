@@ -149,30 +149,6 @@ redpanda_cc_library(
 )
 
 redpanda_cc_library(
-    name = "scheduling_policies",
-    srcs = [
-        "scheduling_policies.cc",
-    ],
-    hdrs = [
-        "scheduling_policies.h",
-    ],
-    implementation_deps = [
-        ":executor",
-        "//src/v/random:generators",
-    ],
-    visibility = [
-        "//src/v/cloud_topics/level_one:__subpackages__",
-    ],
-    deps = [
-        ":meta",
-        "//src/v/container:chunked_circular_buffer",
-        "//src/v/container:chunked_vector",
-        "//src/v/model",
-        "@seastar",
-    ],
-)
-
-redpanda_cc_library(
     name = "meta",
     hdrs = [
         "meta.h",
@@ -205,6 +181,7 @@ redpanda_cc_library(
     visibility = ["//visibility:public"],
     deps = [
         "//src/v/base",
+        "//src/v/cluster",
         "//src/v/model",
         "@seastar",
     ],
@@ -273,6 +250,65 @@ redpanda_cc_library(
         "//src/v/cloud_topics/level_one/common:object_id",
         "//src/v/cloud_topics/level_one/metastore",
         "//src/v/container:chunked_circular_buffer",
+        "//src/v/ssx:semaphore",
+        "@seastar",
+    ],
+)
+
+redpanda_cc_library(
+    name = "scheduling_policies",
+    srcs = [
+        "scheduling_policies.cc",
+    ],
+    hdrs = [
+        "scheduling_policies.h",
+    ],
+    implementation_deps = [
+        ":executor",
+        "//src/v/random:generators",
+    ],
+    visibility = [
+        "//src/v/cloud_topics/level_one:__subpackages__",
+    ],
+    deps = [
+        ":meta",
+        "//src/v/container:chunked_circular_buffer",
+        "//src/v/container:chunked_vector",
+        "//src/v/model",
+        "@seastar",
+    ],
+)
+
+redpanda_cc_library(
+    name = "scheduler",
+    srcs = [
+        "log_collector_impl.cc",
+        "scheduler.cc",
+    ],
+    hdrs = [
+        "log_collector_impl.h",
+        "scheduler.h",
+    ],
+    implementation_deps = [
+        "//src/v/ssx:future_util",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":committer",
+        ":committing_policy",
+        ":executor",
+        ":log_collector",
+        ":log_sampler",
+        ":logger",
+        ":meta",
+        ":scheduling_policies",
+        "//src/v/cloud_topics/level_one/common:file_io",
+        "//src/v/cloud_topics/level_one/metastore:replicated_metastore",
+        "//src/v/cluster",
+        "//src/v/compaction:utils",
+        "//src/v/config",
+        "//src/v/container:intrusive",
+        "//src/v/model",
         "//src/v/ssx:semaphore",
         "@seastar",
     ],
