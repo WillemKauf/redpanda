@@ -11,12 +11,22 @@
 #pragma once
 
 #include "base/seastarx.h"
+#include "cluster/metadata_cache.h"
+#include "cluster/partition_leaders_table.h"
+#include "cluster/topic_table.h"
 #include "model/fundamental.h"
 
 #include <seastar/core/future.hh>
 #include <seastar/core/sharded.hh>
 
 namespace cloud_topics::l1 {
+
+struct compaction_cluster_state {
+    model::node_id self;
+    ss::sharded<cluster::partition_leaders_table>* leaders_table;
+    ss::sharded<cluster::topic_table>* topic_table;
+    ss::sharded<cluster::metadata_cache>* metadata_cache;
+};
 
 class compaction_scheduler;
 
@@ -60,5 +70,8 @@ protected:
     // Owned by `app`.
     compaction_scheduler* _scheduler;
 };
+
+std::unique_ptr<log_collector>
+make_default_log_collector(compaction_scheduler*, compaction_cluster_state);
 
 } // namespace cloud_topics::l1
