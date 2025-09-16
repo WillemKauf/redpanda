@@ -47,6 +47,12 @@ public:
         co_return make_iobuf_input_stream(_data.share(0, _data.size_bytes()));
     }
 
+    std::string_view filepath() const override {
+        vassert(!_removed, "cannot get filepath of a removed file");
+        static const auto path = "fake_file";
+        return path;
+    }
+
 private:
     bool _removed = false;
     iobuf _data;

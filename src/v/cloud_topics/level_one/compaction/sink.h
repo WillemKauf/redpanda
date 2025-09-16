@@ -16,6 +16,7 @@
 #include "compaction/reducer.h"
 #include "container/chunked_vector.h"
 #include "model/fundamental.h"
+#include "model/timestamp.h"
 
 namespace cloud_topics::l1 {
 
@@ -40,11 +41,19 @@ private:
     // Pushes the current object represented by `_active_staging_file` and
     // `_builder` to the `_committer`. Leaves `_active_staging_file` and
     // `_builder` as `nullptr`.
-    ss::future<> commit_update();
+    ss::future<> commit_update_and_roll();
 
     // May commit the current object if `needs_roll()`. Leaves
     // `_active_staging_file` and `_builder` in a set state.
     ss::future<> maybe_roll();
+
+    // Resets metadata (base_offset, max_offset, max_timestamp) to uninitalized
+    // values. Must be called after rolling builder/active_staging_file.
+    void reset_metadata();
+
+    // Updates metadata (base_offset, max_offset, max_timestamp) with data from
+    // batch. Should be called for every batch processed.
+    void update_metadata(const model::record_batch&);
 
 private:
     io* _io;
@@ -52,6 +61,10 @@ private:
 
     model::topic_id_partition _tp;
     const object_builder::options _opts;
+
+    kafka::offset _base_offset{kafka::offset::min()};
+    kafka::offset _last_offset{kafka::offset::min()};
+    model::timestamp _max_timestamp{model::timestamp::min()};
 
     std::unique_ptr<staging_file> _active_staging_file{nullptr};
     // Guaranteed to have a value iff _active_staging_file.

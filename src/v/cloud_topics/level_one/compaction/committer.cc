@@ -73,32 +73,42 @@ void compaction_committer::push_update(object_output_t&& update) {
     _policy->on_update(_updates.back(), _sem);
 }
 
-// Builds objects to be committed from the provided updates.
 ss::future<chunked_vector<compaction_committer::built_object>>
 compaction_committer::build_objects([[maybe_unused]] updates_t&& updates) {
     chunked_vector<built_object> ret;
-    // auto metadata_builder = _metastore->object_builder();
-    //  for (auto& update : updates) {
-    //      // auto object_id =
-    //      // metadata_builder->get_or_create_object_for(update.tp);
-    //      //  auto upload_fut = co_await ss::coroutine::as_future(
-    //      //      _l1_io->put_object(object_id, staging_file.get(), &_as));
-    //      //    co_await staging_file->remove(); // Always.
-    //      //    if (upload_fut.failed()) {
-    //      //        auto ex = upload_fut.get_exception();
-    //      //        vlog(lg.error, "Exception uploading L1 object {}: {}",
-    //      //        object_id, ex); co_return;
-    //      //    }
-    //      //    auto upload_result = upload_fut.get();
-    //      //    if (!upload_result.has_value()) {
-    //      //        vlog(
-    //      //          lg.warn,
-    //      //          "Failed to upload L1 object: {}",
-    //      //          static_cast<int>(upload_result.error()));
-    //      //        co_return;
-    //      //    }
-    //      //
-    //  }
+    // TODO: Here, we may also want to make decisions about how to group
+    // together partitions/updates in L1. We could, for example, do a best
+    // effort isolation of partition data in L1 objects. Building a
+    // metadata_builder per update is silly, but we also may have to implement
+    // new primitives for concatenating together L1 staging files.
+    //
+    // Ultimately this is a similar function to `reconciler::build_object()` and
+    // may be worth abstracting out somehow, though perhaps with a different
+    // heuristic for batching L1 updates here.
+    // for (auto& update : updates) {
+    //    auto metadata_builder = _metastore->object_builder();
+    //    auto object_id = metadata_builder->get_or_create_object_for(
+    //      update.ntp_md.tidp);
+    //    metadata_builder->add(object_id, update.ntp_md);
+    //    auto upload_fut = co_await ss::coroutine::as_future(
+    //      _l1_io->put_object(object_id, staging_file.get(), &_as));
+    //    co_await staging_file->remove(); // Always.
+    //    if (upload_fut.failed()) {
+    //        auto ex = upload_fut.get_exception();
+    //        vlog(
+    //          lg.error, "Exception uploading L1 object {}: {}", object_id,
+    //          ex);
+    //        co_return;
+    //    }
+    //    auto upload_result = upload_fut.get();
+    //    if (!upload_result.has_value()) {
+    //        vlog(
+    //          lg.warn,
+    //          "Failed to upload L1 object: {}",
+    //          static_cast<int>(upload_result.error()));
+    //        co_return;
+    //    }
+    //}
 
     co_return ret;
 }

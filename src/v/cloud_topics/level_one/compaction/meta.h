@@ -87,7 +87,7 @@ struct log_info_and_meta {
 };
 
 struct object_output_t {
-    model::topic_id_partition tp;
+    metastore::object_metadata::ntp_metadata ntp_md;
     object_builder::object_info info;
     std::unique_ptr<staging_file> staging_file;
 };

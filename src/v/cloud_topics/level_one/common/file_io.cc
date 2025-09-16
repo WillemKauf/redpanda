@@ -49,6 +49,8 @@ public:
         co_return ss::make_file_input_stream(std::move(file));
     }
 
+    std::string_view filepath() const override { return _path.c_str(); }
+
 private:
     std::filesystem::path _path;
 };

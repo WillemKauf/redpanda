@@ -57,6 +57,7 @@ private:
 
 private:
     // A queue of updates to be committed.
+    // TODO: add clean-up safety to built staging files.
     updates_t _updates;
 
     // The committing policy. Controls pre-emption and scheduling of commits

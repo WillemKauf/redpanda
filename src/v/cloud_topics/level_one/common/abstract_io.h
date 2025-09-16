@@ -44,6 +44,9 @@ public:
     // This should always be called (outside of unclean shutdown).
     virtual ss::future<> remove() = 0;
 
+    // Returns the file path as a non-owning std::string_view.
+    virtual std::string_view filepath() const = 0;
+
 private:
     friend class io;
     // Return an input stream for reading from this file.
