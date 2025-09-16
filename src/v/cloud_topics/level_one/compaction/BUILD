@@ -230,3 +230,24 @@ redpanda_cc_library(
         "@seastar",
     ],
 )
+
+redpanda_cc_library(
+    name = "scheduling_policies",
+    srcs = [
+        "scheduling_policies.cc",
+    ],
+    hdrs = [
+        "scheduling_policies.h",
+    ],
+    implementation_deps = [
+        "//src/v/random:generators",
+    ],
+    visibility = [
+        "//src/v/cloud_topics/level_one:__subpackages__",
+    ],
+    deps = [
+        ":meta",
+        "//src/v/model",
+        "@seastar",
+    ],
+)
