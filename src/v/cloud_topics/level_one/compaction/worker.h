@@ -14,12 +14,14 @@
 #include "cloud_topics/level_one/compaction/committer.h"
 #include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/compaction/source.h"
+#include "cloud_topics/level_one/metastore/metastore.h"
+#include "compaction/key_offset_map.h"
 
 namespace cloud_topics::l1 {
 
 class compaction_worker {
 public:
-    compaction_worker(io*, compaction_committer*);
+    compaction_worker(io*, metastore*, compaction_committer*);
 
     // Requests a compaction of the provided `log`.
     ss::future<> compact(log_info_and_meta, ss::abort_source&);
@@ -36,6 +38,9 @@ public:
     void set_stopped();
 
 private:
+    ss::future<> initialize_map();
+
+private:
     // Specifies which `ntp` is currently undergoing compaction on this
     // worker. Set if `_state == compaction_job_state::running`.
     std::optional<model::ntp> _ntp{std::nullopt};
@@ -47,11 +52,14 @@ private:
     // to indicate this state instead).
     compaction_job_state _state{compaction_job_state::idle};
 
+    std::unique_ptr<compaction::key_offset_map> _map{nullptr};
+
     // If `true`, new compaction jobs are automatically rejected (shutdown has
     // likely been requested).
     bool _stopped{false};
 
     io* _io;
+    metastore* _metastore;
     compaction_committer* _committer;
 };
 

@@ -10,16 +10,22 @@
 
 #include "cloud_topics/level_one/compaction/executor.h"
 
+#include "cloud_topics/level_one/metastore/replicated_metastore.h"
+
 namespace cloud_topics::l1 {
 
 compaction_executor::compaction_executor(
-  ss::sharded<file_io>* io, ss::sharded<compaction_committer>* committer)
+  ss::sharded<file_io>* io,
+  ss::sharded<replicated_metastore>* metastore,
+  ss::sharded<compaction_committer>* committer)
   : _io(io)
+  , _metastore(metastore)
   , _committer(committer) {}
 
 ss::future<> compaction_executor::start() {
     co_await _workers.start(
       ss::sharded_parameter([this] { return &_io->local(); }),
+      ss::sharded_parameter([this] { return &_metastore->local(); }),
       ss::sharded_parameter([this] { return &_committer->local(); }));
 
     for (worker_shard i = 0; i < ss::smp::count; ++i) {

@@ -15,6 +15,7 @@
 #include "cloud_topics/level_one/compaction/logger.h"
 #include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/compaction/worker.h"
+#include "cloud_topics/level_one/metastore/replicated_metastore.h"
 #include "container/chunked_circular_buffer.h"
 #include "container/chunked_hash_map.h"
 #include "model/fundamental.h"
@@ -29,7 +30,9 @@ namespace cloud_topics::l1 {
 class compaction_executor {
 public:
     compaction_executor(
-      ss::sharded<file_io>*, ss::sharded<compaction_committer>*);
+      ss::sharded<file_io>*,
+      ss::sharded<replicated_metastore>*,
+      ss::sharded<compaction_committer>*);
 
     // Starts the pool of workers, making them available for compaction jobs.
     ss::future<> start();
@@ -76,6 +79,8 @@ private:
 private:
     // Owned by `app`.
     ss::sharded<file_io>* _io;
+
+    ss::sharded<replicated_metastore>* _metastore;
 
     // Owned by `scheduler`.
     ss::sharded<compaction_committer>* _committer;

@@ -18,8 +18,11 @@
 #include "model/batch_compression.h"
 #include "model/compression.h"
 #include "model/timestamp.h"
+#include "ssx/future-util.h"
 
 #include <seastar/coroutine/as_future.hh>
+
+#include <exception>
 
 namespace cloud_topics::l1 {
 
@@ -50,11 +53,14 @@ ss::future<> compaction_sink::commit_update_and_roll() {
     co_await builder->close();
     if (object_info_fut.failed()) {
         auto e = object_info_fut.get_exception();
-        vlog(
-          compaction_log.error,
+        vlogl(
+          compaction_log,
+          ssx::is_shutdown_exception(e) ? ss::log_level::warn
+                                        : ss::log_level::error,
           "Exception creating object_info: {}. Exiting compaction early.",
           e);
         co_await active_staging_file->remove();
+        std::rethrow_exception(e);
     }
     auto object_info = object_info_fut.get();
 
@@ -96,9 +102,14 @@ ss::future<> compaction_sink::maybe_roll() {
       _io->create_tmp_file());
 
     if (staging_file_fut.failed()) {
-        auto ex = staging_file_fut.get_exception();
-        vlog(compaction_log.error, "Exception creating staging file: {}", ex);
-        std::rethrow_exception(ex);
+        auto e = staging_file_fut.get_exception();
+        vlogl(
+          compaction_log,
+          ssx::is_shutdown_exception(e) ? ss::log_level::warn
+                                        : ss::log_level::error,
+          "Exception creating staging file: {}",
+          e);
+        std::rethrow_exception(e);
     }
     auto staging_file_result = staging_file_fut.get();
 

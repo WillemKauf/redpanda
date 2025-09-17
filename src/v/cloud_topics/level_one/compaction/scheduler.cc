@@ -33,7 +33,7 @@ compaction_scheduler::compaction_scheduler(
   , _log_collector(make_default_log_collector(this, state))
   , _log_sampler(_metastore, state.topic_table)
   , _scheduling_policy(std::move(policy))
-  , _executor(io, &_committer)
+  , _executor(io, nullptr, &_committer)
   , _compaction_interval(
       config::shard_local_cfg().log_compaction_interval_ms.bind()) {
     _compaction_interval.watch([this]() { _sem.signal(); });
