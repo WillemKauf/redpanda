@@ -54,3 +54,18 @@ redpanda_cc_gtest(
         "@seastar",
     ],
 )
+
+redpanda_cc_gtest(
+    name = "executor_test",
+    timeout = "short",
+    srcs = [
+        "executor_test.cc",
+    ],
+    deps = [
+        "//src/v/cloud_topics/level_one/compaction:executor",
+        "//src/v/model",
+        "//src/v/test_utils:gtest",
+        "@googletest//:gtest",
+        "@seastar",
+    ],
+)

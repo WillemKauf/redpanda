@@ -202,6 +202,7 @@ private:
     using worker_list = intrusive_list<worker_meta, &worker_meta::link>;
 
 private:
+    friend class ::ExecutorTestFixture;
 
     // Owned by `app`.
     ss::sharded<file_io>* _io;
