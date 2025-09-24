@@ -57,11 +57,11 @@ struct log_compaction_meta_hash {
 
     size_t
     operator()(const cloud_topics::l1::log_compaction_meta_ptr& m) const {
-        return std::hash<model::ntp>{}(m->ntp);
+        return absl::Hash<model::topic_id_partition>{}(m->tidp);
     }
 
-    size_t operator()(const model::ntp& ntp) const {
-        return std::hash<model::ntp>{}(ntp);
+    size_t operator()(const model::topic_id_partition& tidp) const {
+        return absl::Hash<model::topic_id_partition>{}(tidp);
     }
 };
 
@@ -71,19 +71,19 @@ struct log_compaction_meta_eq {
     bool operator()(
       const cloud_topics::l1::log_compaction_meta_ptr& lhs,
       const cloud_topics::l1::log_compaction_meta_ptr& rhs) const {
-        return lhs->ntp == rhs->ntp;
+        return lhs->tidp == rhs->tidp;
     }
 
     bool operator()(
       const cloud_topics::l1::log_compaction_meta_ptr& lhs,
-      const model::ntp& rhs) const noexcept {
-        return lhs->ntp == rhs;
+      const model::topic_id_partition& rhs) const noexcept {
+        return lhs->tidp == rhs;
     }
 
     bool operator()(
-      const model::ntp& lhs,
+      const model::topic_id_partition& lhs,
       const cloud_topics::l1::log_compaction_meta_ptr& rhs) const {
-        return lhs == rhs->ntp;
+        return lhs == rhs->tidp;
     }
 };
 
