@@ -17,6 +17,8 @@
 #include "cloud_topics/level_one/metastore/metastore.h"
 #include "compaction/key_offset_map.h"
 
+class WorkerManagerTestFixture;
+
 namespace cloud_topics::l1 {
 
 class worker_manager;
@@ -116,6 +118,8 @@ private:
     bool is_active() const;
 
 private:
+    friend class ::WorkerManagerTestFixture;
+
     // The state of a potentially inflight compaction job (`idle`, `running`,
     // `cancelled`, or `stopped`) on this worker. `idle` means no compaction job
     // is currently running on this worker. `running` means a compaction job is

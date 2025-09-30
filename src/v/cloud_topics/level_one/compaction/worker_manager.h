@@ -22,6 +22,8 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/sharded.hh>
 
+class WorkerManagerTestFixture;
+
 namespace cloud_topics::l1 {
 
 // A worker_manager which exists as a singleton on shard0, owns a sharded pool
@@ -83,6 +85,8 @@ public:
     ss::future<> resume_worker(ss::shard_id);
 
 private:
+    friend class ::WorkerManagerTestFixture;
+
     // Owned by `scheduler`.
     log_compaction_queue& _work_queue;
 
