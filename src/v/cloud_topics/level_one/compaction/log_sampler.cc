@@ -11,7 +11,10 @@
 #include "cloud_topics/level_one/compaction/log_sampler.h"
 
 #include "cloud_topics/level_one/compaction/logger.h"
+#include "cloud_topics/level_one/compaction/meta.h"
+#include "compaction/utils.h"
 #include "config/configuration.h"
+#include "container/chunked_circular_buffer.h"
 #include "container/chunked_vector.h"
 #include "model/fundamental.h"
 #include "model/metadata.h"
@@ -30,8 +33,10 @@ log_sampler::log_sampler(
   : _metastore(metastore)
   , _metadata_cache(metadata_cache) {}
 
-ss::future<chunked_vector<log_info_and_meta>> log_sampler::sample_logs(
-  log_list_t& logs, std::optional<size_t> size_hint) const {
+ss::future<> log_sampler::sample_logs(
+  log_list_t& logs,
+  pq_t& cached_metadata,
+  std::optional<size_t> size_hint) const {
     chunked_vector<metastore::compaction_sample_spec> to_sample;
 
     if (size_hint.has_value()) {
@@ -44,8 +49,34 @@ ss::future<chunked_vector<log_info_and_meta>> log_sampler::sample_logs(
             continue;
         }
 
+        if (log.inflight) {
+            // No need to sample inflight logs
+            vlog(
+              compaction_log.debug,
+              "Skipping sample collection for CTP {}, compaction is inflight",
+              log.tidp);
+            continue;
+        }
+
+        if (log.info_and_ts.has_value()) {
+            // TODO: maybe configure this some other way.
+            auto sample_interval
+              = config::shard_local_cfg().log_compaction_interval_ms();
+            auto delta = to_time_point(now)
+                         - to_time_point(log.info_and_ts->sampled_at);
+            if (delta <= sample_interval) {
+                vlog(
+                  compaction_log.debug,
+                  "Skipping sample collection for CTP {}, delta is less than "
+                  "sample interval.",
+                  log.tidp);
+
+                continue;
+            }
+        }
+
         auto topic_cfg_opt = _metadata_cache->get_topic_metadata_ref(
-          model::topic_namespace_view(log.ntp.ns, log.ntp.tp.topic));
+          model::topic_namespace_view(log.ntp));
 
         if (!topic_cfg_opt.has_value()) {
             continue;
@@ -71,16 +102,46 @@ ss::future<chunked_vector<log_info_and_meta>> log_sampler::sample_logs(
                      ? now - model::timestamp(delete_retention_ms->count())
                      : model::timestamp::max();
         }();
+        vlog(compaction_log.debug, "Sampling CTP {}", log.tidp);
+
         to_sample.emplace_back(log.tidp, tombstone_removal_ts);
     }
+
+    auto needs_compaction =
+      [](const log_compaction_meta& log, const auto& topic_cfg_opt) {
+          if (!topic_cfg_opt) {
+              return false;
+          }
+          auto& topic_cfg = topic_cfg_opt.value().get().get_configuration();
+          auto& topic_mcdr = topic_cfg.properties.min_cleanable_dirty_ratio;
+          auto min_cleanable_dirty_ratio = topic_mcdr.has_optional_value()
+                                             ? topic_mcdr.value()
+                                             : config::shard_local_cfg()
+                                                 .min_cleanable_dirty_ratio()
+                                                 .value_or(0.0);
+          auto& topic_mcl = topic_cfg.properties.max_compaction_lag_ms;
+          auto max_compaction_lag_ms
+            = topic_mcl.has_value()
+                ? topic_mcl.value()
+                : config::shard_local_cfg().max_compaction_lag_ms();
+          return compaction::log_needs_compaction(
+            log.info_and_ts->info.dirty_ratio,
+            min_cleanable_dirty_ratio,
+            log.info_and_ts->info.earliest_dirty_ts,
+            max_compaction_lag_ms);
+      };
 
     to_sample.shrink_to_fit();
     auto samples = co_await _metastore->get_compaction_infos(to_sample);
 
-    chunked_vector<log_info_and_meta> ret;
-    ret.reserve(samples.size());
     for (auto& log : logs) {
         if (!log.link.is_linked()) {
+            continue;
+        }
+
+        if (!samples.contains(log.tidp)) {
+            // Likely this log was not sampled because the log was sampled less
+            // than `sample_interval` time ago.
             continue;
         }
 
@@ -95,11 +156,15 @@ ss::future<chunked_vector<log_info_and_meta>> log_sampler::sample_logs(
             continue;
         }
 
-        ret.emplace_back(std::move(sample).value(), &log);
-    }
+        log.info_and_ts = compaction_info_and_timestamp{
+          .info = std::move(sample).value(), .sampled_at = now};
 
-    ret.shrink_to_fit();
-    co_return ret;
+        auto topic_cfg_opt = _metadata_cache->get_topic_metadata_ref(
+          model::topic_namespace_view(log.ntp));
+        if (needs_compaction(log, topic_cfg_opt)) {
+            cached_metadata.push(&log);
+        }
+    }
 }
 
 } // namespace cloud_topics::l1

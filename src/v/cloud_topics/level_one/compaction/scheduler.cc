@@ -17,8 +17,8 @@
 #include "cloud_topics/level_one/compaction/logger.h"
 #include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/compaction/scheduling_policies.h"
-#include "compaction/utils.h"
 #include "config/configuration.h"
+#include "container/chunked_circular_buffer.h"
 #include "model/fundamental.h"
 #include "ssx/future-util.h"
 
@@ -31,12 +31,14 @@ compaction_scheduler::compaction_scheduler(
   ss::sharded<l1::replicated_metastore>* metastore)
   : _io(io)
   , _metastore(metastore)
+  , _metadata_cache(state.metadata_cache)
   , _log_collector(make_default_log_collector(this, state))
   , _log_sampler(&_metastore->local(), &state.metadata_cache->local())
   , _scheduling_policy(std::move(policy))
-  , _executor(io, metastore, &_committer)
+  , _worker_manager(_cached_metadata, io, metastore, &_committer)
   , _compaction_interval(
-      config::shard_local_cfg().log_compaction_interval_ms.bind()) {
+      config::shard_local_cfg().log_compaction_interval_ms.bind())
+  , _cached_metadata(_scheduling_policy->get_cmp_t()) {
     _compaction_interval.watch([this]() { _sem.signal(); });
 }
 
@@ -90,7 +92,7 @@ compaction_scheduler::unmanage_partition(model::ntp ntp, std::string_view ctx) {
     auto close_fut = handle->gate.close();
 
     // Request that compaction of this CTP be stopped, if in flight.
-    co_await _executor.request_stop_compaction(tidp);
+    co_await _worker_manager.request_stop_compaction(tidp);
 
     co_await std::move(close_fut);
 }
@@ -113,7 +115,6 @@ void compaction_scheduler::start_bg_loop() {
 
 ss::future<> compaction_scheduler::scheduling_loop() {
     vlog(compaction_log.debug, "Starting compaction scheduling loop");
-    auto holder = _gate.hold();
     while (!_gate.is_closed() && !_as.abort_requested()) {
         auto compaction_interval = _compaction_interval();
         try {
@@ -128,36 +129,21 @@ ss::future<> compaction_scheduler::scheduling_loop() {
             continue;
         }
 
-        co_await schedule_some();
-    }
-}
+        co_await _log_sampler.sample_logs(
+          _logs_list, _cached_metadata, _logs.size());
 
-ss::future<> compaction_scheduler::schedule_some() {
-    auto log_infos = co_await _log_sampler.sample_logs(
-      _logs_list, _logs.size());
-
-    if (log_infos.empty()) {
-        co_return;
-    }
-
-    filter_log_infos(log_infos);
-
-    auto logs = _scheduling_policy->sort_log_infos(std::move(log_infos));
-
-    while (!logs.empty() && !_gate.is_closed() && !_as.abort_requested()) {
-        auto next = std::move(logs.front());
-        logs.pop_front();
-        co_await _executor.compact_log(std::move(next));
+        co_await _worker_manager.alert_workers();
     }
 }
 
 ss::future<> compaction_scheduler::start() {
-    co_await _log_collector->start();
     co_await _committer.start(
       ss::sharded_parameter([] { return make_default_committing_policy(); }),
       ss::sharded_parameter([this] { return &_metastore->local(); }),
       ss::sharded_parameter([this] { return &_io->local(); }));
-    co_await _executor.start();
+    co_await _committer.invoke_on_all(&compaction_committer::start);
+    co_await _worker_manager.start();
+    co_await _log_collector->start();
     start_bg_loop();
 }
 
@@ -166,52 +152,28 @@ ss::future<> compaction_scheduler::stop() {
     _as.request_abort();
     _sem.broken();
 
-    chunked_vector<ss::future<>> futs;
-    futs.reserve(4);
     // Stop making new jobs.
-    futs.push_back(_gate.close());
+    auto close_fut = _gate.close();
+
     // Stop collecting logs.
-    futs.push_back(_log_collector->stop());
-    // Stop committing data.
-    futs.push_back(_committer.stop());
-    // Request to stop inflight compactions and execution waiters.
-    futs.push_back(_executor.request_stop_workers());
+    co_await _log_collector->stop();
 
+    // Close gates for all logs.
     static constexpr size_t max_concurrent_close = 1024;
-
-    // Empty list of logs.
     co_await ss::max_concurrent_for_each(
       _logs.begin(), _logs.end(), max_concurrent_close, [](auto& log) {
           return log->gate.close();
       });
-
     _logs.clear();
 
-    co_await ss::when_all_succeed(futs.begin(), futs.end());
+    // It is only safe to stop the worker_manager once all gates have been
+    // closed.
+    co_await _worker_manager.stop();
 
-    // It is only safe to stop the executor once all gates have been closed.
-    co_await _executor.stop();
-}
+    // Stop committing data.
+    co_await _committer.stop();
 
-void compaction_scheduler::filter_log_infos(
-  chunked_vector<log_info_and_meta>& logs) const {
-    auto needs_compaction = [](const log_info_and_meta& log) {
-        auto min_cleanable_dirty_ratio = 0.5;
-        auto max_compaction_lag_ms = std::chrono::milliseconds(
-          std::numeric_limits<uint32_t>::max());
-        return compaction::log_needs_compaction(
-          log.info.dirty_ratio,
-          min_cleanable_dirty_ratio,
-          log.info.earliest_dirty_ts,
-          max_compaction_lag_ms);
-    };
-    chunked_vector<log_info_and_meta> filtered_logs;
-    std::copy_if(
-      std::make_move_iterator(logs.begin()),
-      std::make_move_iterator(logs.end()),
-      std::back_inserter(filtered_logs),
-      needs_compaction);
-    logs = std::move(filtered_logs);
+    co_await std::move(close_fut);
 }
 
 std::unique_ptr<compaction_scheduler> make_default_compaction_scheduler(

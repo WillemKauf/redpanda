@@ -12,15 +12,19 @@
 
 #include "cloud_topics/level_one/common/file_io.h"
 #include "cloud_topics/level_one/compaction/committer.h"
-#include "cloud_topics/level_one/compaction/executor.h"
 #include "cloud_topics/level_one/compaction/log_collector.h"
 #include "cloud_topics/level_one/compaction/log_sampler.h"
 #include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/compaction/scheduling_policies.h"
+#include "cloud_topics/level_one/compaction/worker_manager.h"
 #include "cloud_topics/level_one/metastore/replicated_metastore.h"
+#include "cluster/metadata_cache.h"
 #include "config/property.h"
+#include "container/chunked_circular_buffer.h"
 #include "model/fundamental.h"
 #include "ssx/semaphore.h"
+
+#include <queue>
 
 namespace cloud_topics::l1 {
 
@@ -35,14 +39,15 @@ public:
       ss::sharded<file_io>*,
       ss::sharded<l1::replicated_metastore>*);
 
-    // Starts the contained `_log_collector`, `_executor`, and the backgrounded
-    // scheduling loop.
+    // Starts the contained `_log_collector`, `_worker_manager`, and the
+    // backgrounded scheduling loop.
     ss::future<> start();
 
     // Shuts down concurrency primitives, thereby stopping the backgrounded
     // scheduling loop, stops the `_log_collector`, requests inflight compaction
-    // jobs in the `_executor` be stopped, drains the managed partition log
-    // list, and finally shuts down the `_executor` once it is safe to do so.
+    // jobs in the `_worker_manager` be stopped, drains the managed partition
+    // log list, and finally shuts down the `_worker_manager` once it is safe to
+    // do so.
     ss::future<> stop();
 
     // Returns `true` iff the provided `tidp` is managed by this scheduler.
@@ -71,18 +76,17 @@ private:
     // Samples managed logs and schedules compactions.
     ss::future<> schedule_some();
 
-    // Filters provided vector of log information, leaving only logs that
-    // require compaction in the container.
-    void filter_log_infos(chunked_vector<log_info_and_meta>&) const;
-
 private:
-    // Pointer to sharded `file_io` held by `app`. Used by the `executor` for
-    // writing to local files and by the `committer` for writing to cloud
+    // Pointer to sharded `file_io` held by `app`. Used by the `worker_manager`
+    // for writing to local files and by the `committer` for writing to cloud
     // storage.
     ss::sharded<file_io>* _io;
 
     // Pointer to metastore.
     ss::sharded<replicated_metastore>* _metastore;
+
+    // Pointer to metadata_cache.
+    ss::sharded<cluster::metadata_cache>* _metadata_cache;
 
 private:
     // Responsible for pushing logs to manage/unmanage to this scheduler.
@@ -96,11 +100,11 @@ private:
     std::unique_ptr<scheduling_policy> _scheduling_policy;
 
     // Responsible for dispatching compaction jobs to per-shard workers.
-    compaction_executor _executor;
+    worker_manager _worker_manager;
 
     // Responsible for committing updates from sharded jobs ran on the
-    // `executor` to the metastore and uploading compacted objects to cloud
-    // storage.
+    // `worker_manager` to the metastore and uploading compacted objects to
+    // cloud storage.
     ss::sharded<compaction_committer> _committer;
 
     // The interval on which compaction loop is executed.
@@ -121,6 +125,10 @@ private:
     // Intrusive list of logs this scheduler is responsible for issuing
     // compaction jobs for.
     log_list_t _logs_list;
+
+    // Container of pointers to logs in `_logs/_logs_list` which have sampled
+    // metadata available, i.e `log->info_and_ts` is guaranteed to have a value.
+    pq_t _cached_metadata;
 
     // TODO: remove this once more cluster objects speak `topic_id_partition`.
     chunked_hash_map<model::ntp, model::topic_id_partition> _ntp_to_tidp;

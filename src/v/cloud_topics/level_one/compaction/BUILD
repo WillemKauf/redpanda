@@ -63,6 +63,7 @@ redpanda_cc_library(
         "//src/v/bytes:iostream",
         "//src/v/cloud_topics/level_one/common:abstract_io",
         "//src/v/cloud_topics/level_one/common:object",
+        "//src/v/cloud_topics/level_one/metastore:offset_interval_set",
         "//src/v/compaction:reducer",
         "//src/v/container:chunked_vector",
         "//src/v/model",
@@ -84,6 +85,8 @@ redpanda_cc_library(
         "//src/v/cloud_topics/level_one:__subpackages__",
     ],
     deps = [
+        ":sink",
+        "//src/v/cloud_topics/level_one/metastore:offset_interval_set",
         "//src/v/compaction:filter",
         "//src/v/compaction:key_offset_map",
         "//src/v/compaction:utils",
@@ -95,9 +98,11 @@ redpanda_cc_library(
 redpanda_cc_library(
     name = "worker",
     srcs = [
+        "worker_manager.cc",
         "worker.cc",
     ],
     hdrs = [
+        "worker_manager.h",
         "worker.h",
     ],
     visibility = [
@@ -110,9 +115,12 @@ redpanda_cc_library(
         ":sink",
         ":source",
         "//src/v/cloud_topics/level_one/common:abstract_io",
+        "//src/v/cloud_topics/level_one/common:file_io",
         "//src/v/cloud_topics/level_one/metastore",
+        "//src/v/cloud_topics/level_one/metastore:replicated_metastore",
         "//src/v/compaction:key_offset_map",
         "//src/v/compaction:reducer",
+        "//src/v/container:chunked_hash_map",
         "//src/v/config",
         "//src/v/model",
         "//src/v/ssx:future_util",
@@ -120,33 +128,34 @@ redpanda_cc_library(
     ],
 )
 
-redpanda_cc_library(
-    name = "executor",
-    srcs = [
-        "executor.cc",
-    ],
-    hdrs = [
-        "executor.h",
-    ],
-    visibility = [
-        "//src/v/cloud_topics/level_one:__subpackages__",
-    ],
-    deps = [
-        ":committer",
-        ":logger",
-        ":meta",
-        ":worker",
-        "//src/v/cloud_topics/level_one/common:file_io",
-        "//src/v/cloud_topics/level_one/metastore:replicated_metastore",
-        "//src/v/compaction:key_offset_map",
-        "//src/v/container:chunked_circular_buffer",
-        "//src/v/container:chunked_hash_map",
-        "//src/v/container:intrusive",
-        "//src/v/model",
-        "//src/v/ssx:future_util",
-        "@seastar",
-    ],
-)
+#redpanda_cc_library(
+#    name = "worker_manager",
+#    srcs = [
+#        "worker_manager.cc",
+#    ],
+#    hdrs = [
+#        "worker_manager.h",
+#    ],
+#    visibility = [
+#        "//src/v/cloud_topics/level_one:__subpackages__",
+#    ],
+#    deps = [
+#        ":committer",
+#        ":logger",
+#        ":meta",
+#        ":worker",
+#        "//src/v/cloud_topics/level_one/common:file_io",
+#        "//src/v/cloud_topics/level_one/metastore:replicated_metastore",
+#        "//src/v/compaction:key_offset_map",
+#        "//src/v/container:chunked_circular_buffer",
+#        "//src/v/container:chunked_hash_map",
+#        "//src/v/container:intrusive",
+#        "//src/v/model",
+#        "//src/v/ssx:future_util",
+#        "//src/v/ssx:semaphore",
+#        "@seastar",
+#    ],
+#)
 
 redpanda_cc_library(
     name = "meta",
@@ -204,7 +213,9 @@ redpanda_cc_library(
         ":meta",
         "//src/v/cloud_topics/level_one/metastore",
         "//src/v/cluster",
+        "//src/v/compaction:utils",
         "//src/v/config",
+        "//src/v/container:chunked_circular_buffer",
         "//src/v/container:chunked_vector",
         "//src/v/model",
         "@seastar",
@@ -246,11 +257,13 @@ redpanda_cc_library(
         ":committing_policy",
         ":logger",
         ":meta",
+        "//src/v/base",
         "//src/v/cloud_topics/level_one/common:abstract_io",
         "//src/v/cloud_topics/level_one/common:object_id",
         "//src/v/cloud_topics/level_one/metastore",
         "//src/v/container:chunked_circular_buffer",
         "//src/v/ssx:semaphore",
+        "//src/v/utils:to_string",
         "@seastar",
     ],
 )
@@ -264,7 +277,6 @@ redpanda_cc_library(
         "scheduling_policies.h",
     ],
     implementation_deps = [
-        ":executor",
         "//src/v/random:generators",
     ],
     visibility = [
@@ -272,8 +284,6 @@ redpanda_cc_library(
     ],
     deps = [
         ":meta",
-        "//src/v/container:chunked_circular_buffer",
-        "//src/v/container:chunked_vector",
         "//src/v/model",
         "@seastar",
     ],
@@ -296,7 +306,7 @@ redpanda_cc_library(
     deps = [
         ":committer",
         ":committing_policy",
-        ":executor",
+        ":worker",
         ":log_collector",
         ":log_sampler",
         ":logger",
@@ -305,8 +315,8 @@ redpanda_cc_library(
         "//src/v/cloud_topics/level_one/common:file_io",
         "//src/v/cloud_topics/level_one/metastore:replicated_metastore",
         "//src/v/cluster",
-        "//src/v/compaction:utils",
         "//src/v/config",
+        "//src/v/container:chunked_circular_buffer",
         "//src/v/container:intrusive",
         "//src/v/model",
         "//src/v/ssx:semaphore",

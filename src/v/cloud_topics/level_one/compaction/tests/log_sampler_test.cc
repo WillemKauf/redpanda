@@ -10,6 +10,7 @@
 
 #include "cloud_topics/level_one/compaction/log_sampler.h"
 #include "cloud_topics/level_one/compaction/meta.h"
+#include "cloud_topics/level_one/compaction/scheduling_policies.h"
 #include "cloud_topics/level_one/frontend_reader/tests/l1_reader_fixture.h"
 #include "cluster/tests/cluster_test_fixture.h"
 #include "model/fundamental.h"
@@ -43,6 +44,8 @@ TEST_F(SamplerTestFixture, TestSampler) {
 
     std::vector<tidp_batches_t> tidp_batches;
     l1::logs_type_t logs;
+    l1::dirty_ratio_scheduling_policy policy;
+    l1::pq_t cached_metadata(policy.get_cmp_t());
     l1::log_list_t logs_list;
     for (const auto& [ntp, tidp] : ntidps) {
         auto [it, success] = logs.emplace(
@@ -55,10 +58,13 @@ TEST_F(SamplerTestFixture, TestSampler) {
     }
 
     make_l1_objects(tidp_batches);
-    auto samples = sampler.sample_logs(logs_list, num_topics).get();
-    ASSERT_EQ(samples.size(), num_topics);
-    for (const auto& sample : samples) {
-        ASSERT_FLOAT_EQ(sample.info.dirty_ratio, 1.0);
-        ASSERT_TRUE(sample.info.earliest_dirty_ts.has_value());
+    sampler.sample_logs(logs_list, cached_metadata, num_topics).get();
+    ASSERT_EQ(cached_metadata.size(), num_topics);
+    while (!cached_metadata.empty()) {
+        auto sample = std::move(cached_metadata.top());
+        cached_metadata.pop();
+        ASSERT_TRUE(sample->info_and_ts.has_value());
+        ASSERT_FLOAT_EQ(sample->info_and_ts->info.dirty_ratio, 1.0);
+        ASSERT_TRUE(sample->info_and_ts->info.earliest_dirty_ts.has_value());
     }
 }

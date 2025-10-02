@@ -533,6 +533,11 @@ simple_metastore::get_compaction_offsets(
               r.base_offset, r.last_offset);
         }
     }
+
+    resp.extents.reserve(prt.extents.size());
+    for (const auto& extent : prt.extents) {
+        resp.extents.emplace_back(extent.base_offset, extent.last_offset);
+    }
     return resp;
 }
 

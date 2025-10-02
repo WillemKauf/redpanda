@@ -17,74 +17,154 @@
 #include "cloud_topics/level_one/metastore/metastore.h"
 #include "compaction/key_offset_map.h"
 
+class WorkerManagerTestFixture;
+
 namespace cloud_topics::l1 {
+
+class worker_manager;
 
 // A per-shard worker that accepts compaction jobs and performs de-duplication
 // using a `sink`, `source`, and `reducer`.
 // Can be pre-empted to either cancel or stop a compaction job.
 class compaction_worker {
 public:
+    // Describes whether a worker on a given shard is `active` and available
+    // for compaction jobs, or `paused` and temporarily unavailable, or fully
+    // `stopped`.
+    enum class worker_state { active, paused, stopped };
+
     // io, metastore, and committer are all passed to the compaction `source`
     // and `sink`.
-    compaction_worker(io*, metastore*, compaction_committer*);
+    compaction_worker(worker_manager*, io*, metastore*, compaction_committer*);
 
-    // Requests a compaction of the provided CTP and its `compaction_offsets`
-    // as obtained from the `metastore`.
-    ss::future<> compact(
-      model::ntp,
-      model::topic_id_partition,
-      metastore::compaction_offsets_response,
-      ss::abort_source&);
+    // Launches background loop.
+    ss::future<> start();
 
-    // Sets `_state = compaction_job_state::hard_stop`, indicating the inflight
-    // compaction job should stop promptly and abandon any in progress work,
-    // e.g. during shutdown. It is up to users/currently running compaction jobs
-    // to respect this flag. The worker will continue to accept compaction jobs
-    // after this function is called.
-    void request_hard_stop();
+    // Indicates that the `worker` will not perform any more compaction jobs.
+    // Closes concurrency primitives and sets `_job_state` and `_worker_state`
+    // to `stopped` to indicate to a potential inflight compaction job that it
+    // should exit early. This should only be invoked during application
+    // shutdown.
+    ss::future<> stop();
 
     // Sets `_state = compaction_job_state::soft_stop`. This is a request to
     // checkpoint any valuable progress from the inflight compaction job and
     // finish at earliest convenience, e.g. when a worker shard is being
     // pre-empted for various reasons. It is up to users/currently running
-    // compaction jobs to respect this flag. The worker will continue to accept
-    // compaction jobs after this function is called.
+    // compaction jobs to respect this flag.
+    //
+    // This function cancels the inflight compaction job but does not affect the
+    // worker state- the worker will continue to accept compaction jobs
+    // after this function is called.
     void request_soft_stop();
 
-    // Sets `_stopped` flag to indicate the `worker` will not perform any more
-    // compaction jobs, as well as `_state = compaction_job_state::stopped` to
-    // indicate to a potential inflight compaction job that it should exit
-    // early. This should only be invoked during application shutdown.
-    void stop_worker();
+    // Sets `_state = compaction_job_state::hard_stop`, indicating the inflight
+    // compaction job should stop promptly and abandon any in progress work,
+    // e.g. during shutdown. It is up to users/currently running compaction jobs
+    // to respect this flag.
+    //
+    // This function stops the inflight compaction job but does not affect
+    // the worker state- the worker will continue to accept compaction jobs
+    // after this function is called.
+    void request_hard_stop();
+
+    // Pauses the compaction worker by setting `_worker_state` to `paused` and
+    // waiting for the backgrounded `_bg_fut` to complete. `_bg_fut` is left as
+    // `std::nullopt` as a result of this function- no new compaction jobs
+    // will be processed until the worker is resumed. If `_worker_state` is not
+    // `active`, this function is a no-op.
+    ss::future<> pause_worker();
+
+    // Resumes the compaction worker by setting `_worker_state` to `active` and
+    // launching a new backgrounded job held in `_bg_fut`, allowing this worker
+    // to process new compaction jobs. If `_worker_state` is not `paused`, this
+    // function is a no-op.
+    ss::future<> resume_worker();
+
+    // Alert the worker that new work has become available by signalling
+    // `_worker_cv`.
+    void alert_worker();
 
 private:
+    // Kicks off a backgrounded loop held in `_bg_fut` which waits for alerts
+    // and polls occasionally to perform compaction work.
+    void start_bg_loop();
+
+    // The main compaction loop which waits for jobs to become available.
+    ss::future<> bg_loop();
+
+    // Waits for `_bg_fut`'s future to resolve and clears its value. Leaves
+    // `_bg_fut`'s value as `std::nullopt`.
+    ss::future<> clear_bg_fut();
+
+    // Requests a compaction of the provided CTP and its `compaction_offsets`
+    // as obtained from the `metastore`.
+    ss::future<> compact_log(log_compaction_meta*);
+
+    // Retrieves a job from the `_worker_manager`, if there is one available.
+    ss::future<std::optional<log_compaction_meta*>>
+    try_acquire_work_from_manager();
+
+    // Lets the `worker_manager` know that a compaction job for the
+    // provided CTP has been completed on this worker.
+    ss::future<> finish_work(log_compaction_meta*);
+
     // Performs lazy initialization of the `compaction::key_offset_map` using
     // its reserved memory, if it is uninitialized.
     ss::future<> initialize_map();
 
-private:
-    // The state of the worker (`idle`, `running`, `cancelled`, or `stopped`).
-    // `idle` means no compaction job is currently running on this worker.
-    // `running` means a compaction job is inflight. `cancelled` means that the
-    // inflight compaction job on this worker has been requested to checkpoint
-    // its valuable progress and finish at earliest convenience (a graceful
-    // stop), whereas `stopped` means that the inflight compaction job running
-    // on this worker has been pre-empted to abandon all work and return as soon
-    // as possible. `cancelled`/`stopped` do not mean that the worker itself is
-    // stopped from running future compaction jobs (`_stopped` is used as a flag
-    // to indicate this state instead).
-    compaction_job_state _state{compaction_job_state::idle};
+    // Returns `true` iff the worker is currently `active` and a shutdown has
+    // not been requested.
+    bool is_active() const;
 
+private:
+    friend class ::WorkerManagerTestFixture;
+
+    // The state of a potentially inflight compaction job (`idle`, `running`,
+    // `cancelled`, or `stopped`) on this worker. `idle` means no compaction job
+    // is currently running on this worker. `running` means a compaction job is
+    // inflight. `cancelled` means that the inflight compaction job on this
+    // worker has been requested to checkpoint its valuable progress and finish
+    // at earliest convenience (a graceful stop), whereas `stopped` means that
+    // the inflight compaction job running on this worker has been pre-empted to
+    // abandon all work and return as soon as possible. `cancelled`/`stopped` do
+    // not mean that the worker itself is stopped from running future compaction
+    // jobs.
+    compaction_job_state _job_state{compaction_job_state::idle};
+
+    // The state of the worker, which is `active`, `paused`, or `stopped`.
+    // * A worker in an `active` state should have an active `_bg_fut` value
+    //   which is accepting and completing compaction jobs.
+    // * A worker in a `paused` state has `_bg_fut == std::nullopt` and is not
+    //   accepting compaction jobs.
+    // * A worker in a `stopped` state is in the process of shutting down and
+    //   therefore has its concurrency primitives closed and is not accepting
+    //   compaction jobs.
+    worker_state _worker_state{worker_state::active};
+
+    // If set, this is the active background loop for taking jobs from the
+    // `_worker_manager` and compacting them.
+    std::optional<ss::future<>> _bg_fut;
+
+    // The shard local key-offset map used for de-duplication during compaction.
+    // This is lazily initialized when a compaction job is first ran on this
+    // worker/shard.
     std::unique_ptr<compaction::key_offset_map> _map{nullptr};
 
-    // If `true`, new compaction jobs are automatically rejected (shutdown has
-    // likely been requested).
-    bool _stopped{false};
+    ss::gate _gate;
+
+    ss::abort_source _as;
+
+    // Used to alert worker that a job has become available.
+    ss::condition_variable _worker_cv;
+
+    // Owned by `scheduler`.
+    worker_manager* _worker_manager;
 
     // Owned by `app`.
     io* _io;
 
-    // TODO: Owned by `app`.
+    // Owned by `app`.
     metastore* _metastore;
 
     // Owned by `scheduler`.
