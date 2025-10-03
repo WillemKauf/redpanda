@@ -94,12 +94,41 @@ using logs_type_t = chunked_hash_set<
 using log_list_t
   = intrusive_list<log_compaction_meta, &log_compaction_meta::link>;
 
+struct staging_file_and_md_info {
+    std::unique_ptr<staging_file> staging_file;
+    object_builder::object_info info;
+    metastore::object_metadata::ntp_metadata ntp_md;
+};
+
+struct staging_file_ref_and_md_info {
+    staging_file* staging_file_ref;
+    object_builder::object_info info;
+    metastore::object_metadata::ntp_metadata ntp_md;
+};
+
+inline chunked_vector<staging_file_ref_and_md_info>
+to_ref(chunked_vector<staging_file_and_md_info>& v) {
+    chunked_vector<staging_file_ref_and_md_info> ret;
+    ret.reserve(v.size());
+    for (auto& file_and_md : v) {
+        ret.emplace_back(
+          file_and_md.staging_file.get(),
+          std::move(file_and_md.info),
+          std::move(file_and_md.ntp_md));
+    }
+    return ret;
+}
+
 // Represents the output from a compaction job over a cloud topic partition.
 // Highly subject to change in the future.
 struct object_output_t {
-    metastore::object_metadata::ntp_metadata ntp_md;
-    object_builder::object_info info;
-    std::unique_ptr<staging_file> staging_file;
+    model::topic_id_partition tidp;
+    chunked_vector<staging_file_and_md_info> staging_files_and_md_infos;
+    metastore::compaction_update compact_update;
+
+    fmt::iterator format_to(fmt::iterator it) const {
+        return fmt::format_to(it, "tidp:{}", tidp);
+    }
 };
 
 using cmp_t = std::function<bool(
@@ -108,5 +137,19 @@ using log_compaction_queue = std::priority_queue<
   log_compaction_meta_ptr,
   chunked_vector<log_compaction_meta_ptr>,
   cmp_t>;
+
+enum class compaction_job_state {
+    // No compaction job is currently inflight.
+    idle,
+    // A compaction job is currently inflight.
+    running,
+    // A graceful stop has been requested of an inflight compaction job.
+    // The user should try to commit as much useful data as possible while still
+    // shutting down in a prompt manner.
+    soft_stop,
+    // A forceful stop has been requested of an inflight compaction job.
+    // The user should abandon any work and shutdown immediately.
+    hard_stop
+};
 
 } // namespace cloud_topics::l1

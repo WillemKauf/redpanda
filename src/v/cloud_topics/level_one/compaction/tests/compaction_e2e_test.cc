@@ -16,10 +16,14 @@
 #include "model/timeout_clock.h"
 #include "redpanda/tests/fixture.h"
 #include "test_utils/async.h"
+#include "test_utils/scoped_config.h"
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+
 using namespace cloud_topics;
+using namespace std::chrono_literals;
 
 static const cluster::topic_properties compact_topic_props = [] {
     cluster::topic_properties props;
@@ -57,7 +61,8 @@ TEST_F(CompactionFixture, ManageCompactedTopic) {
 
     auto* ct_app = app.cloud_topics_app.get();
     auto* compaction_scheduler = ct_app->get_compaction_scheduler();
-    ASSERT_TRUE(compaction_scheduler->is_managed(ntp));
+    RPTEST_REQUIRE_EVENTUALLY(
+      10s, [&] { return compaction_scheduler->is_managed(ntp); });
 
     app.controller->get_topics_frontend()
       .local()
@@ -78,7 +83,8 @@ TEST_F(CompactionFixture, ManageAndDeleteCompactedTopic) {
 
     auto* ct_app = app.cloud_topics_app.get();
     auto* compaction_scheduler = ct_app->get_compaction_scheduler();
-    ASSERT_TRUE(compaction_scheduler->is_managed(ntp));
+    RPTEST_REQUIRE_EVENTUALLY(
+      10s, [&] { return compaction_scheduler->is_managed(ntp); });
 
     app.controller->get_topics_frontend()
       .local()
@@ -131,7 +137,8 @@ TEST_F(CompactionFixture, ManageAndAlterCompactedTopic) {
 
     auto* ct_app = app.cloud_topics_app.get();
     auto* compaction_scheduler = ct_app->get_compaction_scheduler();
-    ASSERT_TRUE(compaction_scheduler->is_managed(ntp));
+    RPTEST_REQUIRE_EVENTUALLY(
+      10s, [&] { return compaction_scheduler->is_managed(ntp); });
 
     auto property_update = cluster::incremental_topic_updates{};
     property_update.cleanup_policy_bitflags.op
@@ -152,4 +159,18 @@ TEST_F(CompactionFixture, ManageAndAlterCompactedTopic) {
 
     RPTEST_REQUIRE_EVENTUALLY(
       10s, [&] { return !compaction_scheduler->is_managed(ntp); });
+}
+
+TEST_F(CompactionFixture, CompactionE2ETest) {
+    scoped_config cfg;
+    cfg.get("log_compaction_interval_ms").set_value(1ms);
+    const model::topic topic_name("tapioca");
+    model::ntp ntp(model::kafka_namespace, topic_name, 0);
+    create_cloud_topic(ntp, compact_topic_props).get();
+
+    auto* ct_app = app.cloud_topics_app.get();
+    auto* compaction_scheduler = ct_app->get_compaction_scheduler();
+    RPTEST_REQUIRE_EVENTUALLY(
+      10s, [&] { return compaction_scheduler->is_managed(ntp); });
+    ASSERT_TRUE(false);
 }

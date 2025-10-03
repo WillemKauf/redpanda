@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include "base/format_to.h"
 #include "cloud_topics/level_one/common/abstract_io.h"
 #include "cloud_topics/level_one/common/object_id.h"
 #include "cloud_topics/level_one/compaction/committing_policy.h"
@@ -27,6 +28,9 @@ class compaction_committer {
 public:
     compaction_committer(std::unique_ptr<committing_policy>, metastore*, io*);
 
+    // Launches background committing loop.
+    ss::future<> start();
+
     // Shuts down concurrency primitives, thereby stopping the backgrounded
     // committing loop.
     ss::future<> stop();
@@ -38,15 +42,29 @@ private:
     friend class ::ReducerTestFixture;
     using updates_t = chunked_circular_buffer<object_output_t>;
 
-    struct built_object {
-        model::topic_id_partition tp;
-        object_id oid;
-        object_builder::object_info info;
-        std::unique_ptr<staging_file> staging_file;
-        std::unique_ptr<metastore::object_metadata_builder> builder;
-        metastore::compaction_map_t compaction_map;
+    struct built_update_context {
+        std::unique_ptr<metastore::object_metadata_builder> metadata_builder;
+        metastore::compaction_map_t compact_map;
     };
 
+    struct inflight_update_context {
+        model::topic_id_partition tidp;
+        chunked_vector<staging_file_ref_and_md_info>
+          staging_file_refs_and_md_infos;
+        metastore::compaction_update compact_update;
+    };
+
+    struct error {
+        enum class type : uint8_t { build_or_put_failure, commit_failure } t;
+        ss::sstring msg;
+
+        fmt::iterator format_to(fmt::iterator it) const {
+            return fmt::format_to(
+              it, "type:{}, msg:{}", static_cast<int>(t), msg);
+        }
+    };
+
+private:
     // Starts the backgrounded committing loop.
     void start_bg_loop();
 
@@ -54,16 +72,25 @@ private:
     // an abort requested or the `_gate` is closed.
     ss::future<> committing_loop();
 
-    // Builds objects to be committed from the provided updates.
-    ss::future<chunked_vector<built_object>> build_objects(updates_t);
+    // Builds update context to be committed from the provided updates.
+    ss::future<std::expected<built_update_context, error>>
+      build_and_put_update(inflight_update_context);
+
+    ss::future<std::expected<void, error>>
+      try_build_and_commit_update(inflight_update_context);
 
     // Attempts to commit all updates in the provided container to the metastore
     // and cloud storage.
     ss::future<> commit_some(updates_t);
 
+    // Removes all staging files in an compaction update.
+    // Should be called after successfully or unsuccessfully uploading &
+    // committing a compaction update, or during clean-up of uncommitted
+    // compaction updates during shutdown.
+    ss::future<> remove_staging_files(object_output_t);
+
 private:
     // A queue of updates to be committed.
-    // TODO: add clean-up safety to built staging files.
     updates_t _updates;
 
     // The committing policy. Controls pre-emption and scheduling of commits
@@ -76,10 +103,10 @@ private:
     ss::gate _gate;
 
     // Commits of newly compacted objects go to the `metastore`.
-    [[maybe_unused]] metastore* _metastore;
+    metastore* _metastore;
 
     // Newly compacted objects are uploaded using `io`.
-    [[maybe_unused]] io* _io;
+    io* _io;
 };
 
 } // namespace cloud_topics::l1

@@ -13,7 +13,6 @@
 #include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/metastore/metastore.h"
 #include "cluster/metadata_cache.h"
-#include "container/chunked_vector.h"
 
 namespace cloud_topics::l1 {
 
@@ -31,13 +30,11 @@ public:
     // by sampling each log's compaction info from the metastore. It is not
     // guaranteed that every log present in `log_list_t` will have an entry in
     // the returned vector, e.g. due to concurrent removal or metastore errors.
-    // Also take an optional `size_t` hint for the size of the `log_list_t` (as
-    // calling `.size()` on the `intrusive_list` is an O(n)` operation).
-    ss::future<chunked_vector<log_info_and_meta>>
-    sample_logs(log_list_t&, std::optional<size_t>) const;
+    ss::future<>
+    sample_logs(logs_type_t&, log_list_t&, log_compaction_queue&) const;
 
 private:
-    // TODO: owned by `app`.
+    // Owned by `app`.
     metastore* _metastore;
 
     // Owned by `redpanda` application.
