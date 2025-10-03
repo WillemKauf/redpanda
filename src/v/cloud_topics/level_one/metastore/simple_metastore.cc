@@ -497,6 +497,12 @@ simple_metastore::get_compaction_offsets(
     }
     auto& prt = prt_ref->get();
     compaction_offsets_response resp;
+
+    resp.extents.reserve(prt.extents.size());
+    for (const auto& extent : prt.extents) {
+        resp.extents.emplace_back(extent.base_offset, extent.last_offset);
+    }
+
     if (prt.start_offset >= prt.next_offset) {
         // The log is empty, nothing to compact.
         return resp;
@@ -534,10 +540,6 @@ simple_metastore::get_compaction_offsets(
         }
     }
 
-    resp.extents.reserve(prt.extents.size());
-    for (const auto& extent : prt.extents) {
-        resp.extents.emplace_back(extent.base_offset, extent.last_offset);
-    }
     return resp;
 }
 

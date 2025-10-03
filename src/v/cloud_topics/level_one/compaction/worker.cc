@@ -115,8 +115,8 @@ ss::future<> compaction_worker::compact_log(log_compaction_meta* log) {
     // backgrounded loop).
     auto holder = log->gate.hold();
 
-    // Copy
-    auto compaction_offsets = log->info_and_ts->info.offsets_response;
+    auto compaction_offsets = std::move(
+      log->info_and_ts->info.offsets_response);
 
     // Lazy initialization of offset map.
     if (!_map) {
@@ -124,14 +124,13 @@ ss::future<> compaction_worker::compact_log(log_compaction_meta* log) {
     }
 
     auto dirty_range_intervals = compaction_offsets.dirty_ranges.to_vec();
-    auto extents = compaction_offsets.extents;
 
     auto src = std::make_unique<compaction_source>(
       std::move(ntp),
       tidp,
       dirty_range_intervals,
       compaction_offsets.removable_tombstone_ranges,
-      std::move(extents),
+      std::move(compaction_offsets.extents),
       _map.get(),
       _metastore,
       _io,

@@ -78,6 +78,7 @@ ss::future<> compaction_committer::committing_loop() {
 }
 
 void compaction_committer::push_update(object_output_t update) {
+    std::cout << "PUSHED UPDATE\n";
     _updates.push_back(std::move(update));
     auto update_response = _policy->on_update(_updates.back());
     if (update_response == committing_policy::update_response::preempt) {

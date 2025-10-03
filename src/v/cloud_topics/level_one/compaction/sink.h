@@ -31,6 +31,8 @@ public:
       compaction_committer*,
       object_builder::options = {});
 
+    ss::future<> initialize(compaction::sliding_window_reducer::source&) final;
+
     ss::future<ss::stop_iteration>
     operator()(model::record_batch, model::compression) final;
 
@@ -99,7 +101,9 @@ private:
       _closed_staging_files_and_md_infos{};
     bool _range_has_tombstones{false};
 
-    kafka::offset _max_batch_offset;
+    metastore::extent_offsets_t::const_iterator* _extent_it;
+    metastore::extent_offsets_t::const_iterator _extents_end_it;
+    kafka::offset _update_base_offset;
 };
 
 } // namespace cloud_topics::l1

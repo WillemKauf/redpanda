@@ -36,10 +36,12 @@ std::ostream& operator<<(std::ostream& o, const stats& s) {
     fmt::print(
       o,
       "{{ batches_processed: {}, batches_discarded: {}, "
-      "records_discarded: {}, non_compactible_batches: {} }}",
+      "records_discarded: {}, expired_tombstones_discarded: {}, "
+      "non_compactible_batches: {} }}",
       s.batches_processed,
       s.batches_discarded,
       s.records_discarded,
+      s.expired_tombstones_discarded,
       s.non_compactible_batches);
     return o;
 }

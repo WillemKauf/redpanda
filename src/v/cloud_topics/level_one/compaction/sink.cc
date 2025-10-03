@@ -15,6 +15,7 @@
 #include "cloud_topics/level_one/compaction/committer.h"
 #include "cloud_topics/level_one/compaction/logger.h"
 #include "cloud_topics/level_one/compaction/meta.h"
+#include "cloud_topics/level_one/compaction/source.h"
 #include "cloud_topics/level_one/metastore/offset_interval_set.h"
 #include "compaction/reducer.h"
 #include "model/batch_compression.h"
@@ -43,6 +44,15 @@ compaction_sink::compaction_sink(
   , _io(io)
   , _committer(committer)
   , _opts(opts) {}
+
+ss::future<>
+compaction_sink::initialize(compaction::sliding_window_reducer::source& src) {
+    auto& ct_src = static_cast<compaction_source&>(src);
+    _extent_it = &ct_src._extent_it;
+    _extents_end_it = ct_src._extents_end_it;
+    _update_base_offset = (*_extent_it)->first;
+    co_await roll(true);
+}
 
 bool compaction_sink::needs_roll() const {
     // TODO: This needs to consider L1 object size and what-not eventually.
@@ -96,17 +106,21 @@ ss::future<> compaction_sink::roll(bool start_new) {
             co_await active_staging_file->remove();
             std::rethrow_exception(e);
         }
-
+        auto extent_it = *_extent_it;
+        if (extent_it == _extents_end_it) {
+            std::advance(extent_it, -1);
+        }
         auto object_info = object_info_fut.get();
-        auto ntp_md = [this](const object_builder::object_info& info) {
+        auto ntp_md = [this,
+                       extent_it](const object_builder::object_info& info) {
             auto [first, last] = info.index.partitions.equal_range(_tp);
             vassert(
               std::distance(first, last) == 1,
               "Expected one partition range in builder.");
             return metastore::object_metadata::ntp_metadata{
               .tidp = _tp,
-              .base_offset = first->second.first_offset,
-              .last_offset = first->second.last_offset,
+              .base_offset = _update_base_offset,
+              .last_offset = extent_it->second,
               .max_timestamp = first->second.max_timestamp,
               .pos = first->second.file_position,
               .size = first->second.length};
@@ -116,6 +130,8 @@ ss::future<> compaction_sink::roll(bool start_new) {
           std::move(active_staging_file),
           std::move(object_info),
           std::move(ntp_md));
+
+        _update_base_offset = extent_it->first;
     }
 
     // 2. Start new `_active_staging_file` and `_builder`.
@@ -159,6 +175,11 @@ void compaction_sink::push_update() {
       _closed_staging_files_and_md_infos, {});
     auto range_has_tombstones = std::exchange(_range_has_tombstones, false);
 
+    auto extent_it = *_extent_it;
+    if (extent_it == _extents_end_it) {
+        std::advance(extent_it, -1);
+    }
+
     std::optional<metastore::compaction_update::cleaned_range>
       new_cleaned_range;
     // This update could be triggered by one of two things:
@@ -167,13 +188,13 @@ void compaction_sink::push_update() {
     // iff 1., we have made part of a dirty range clean. If 2., we may not have.
     auto did_compact_part_of_dirty_range = _dirty_range_it
                                              != _dirty_range_intervals.cend()
-                                           && _max_batch_offset
+                                           && extent_it->second
                                                 >= _dirty_range_it->base_offset;
     if (did_compact_part_of_dirty_range) {
         new_cleaned_range = metastore::compaction_update::cleaned_range{
           .base_offset = _dirty_range_it->base_offset,
           .last_offset = kafka::offset(
-            std::min(_max_batch_offset(), _dirty_range_it->last_offset())),
+            std::min(extent_it->second(), _dirty_range_it->last_offset())),
           .has_tombstones = range_has_tombstones};
         ++_dirty_range_it;
     }
@@ -182,7 +203,7 @@ void compaction_sink::push_update() {
     auto tombstone_strm = _removable_tombstone_ranges.make_stream();
     while (tombstone_strm.has_next()) {
         auto i = tombstone_strm.next();
-        if (_max_batch_offset >= i.last_offset) {
+        if (extent_it->second >= i.last_offset) {
             removed_tombstones_ranges.insert(i.base_offset, i.last_offset);
         }
     }
@@ -216,9 +237,7 @@ compaction_sink::operator()(model::record_batch b, model::compression c) {
         b = co_await model::compress_batch(c, std::move(b));
     }
 
-    auto last_offset = model::offset_cast(b.last_offset());
     co_await _builder->add_batch(std::move(b));
-    _max_batch_offset = last_offset;
     co_return ss::stop_iteration::no;
 }
 

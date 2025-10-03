@@ -99,8 +99,9 @@ compaction_source::compaction_source(
   , _state(state) {}
 
 ss::future<> compaction_source::initialize() {
-    _map_building_it = _dirty_range_intervals.cbegin();
+    _dirty_range_it = _dirty_range_intervals.cbegin();
     _extent_it = _extents.cbegin();
+    _extents_end_it = _extents.cend();
     co_return;
 }
 
@@ -109,11 +110,11 @@ ss::future<ss::stop_iteration> compaction_source::map_building_iteration() {
         co_return ss::stop_iteration::yes;
     }
 
-    if (_map_building_it == _dirty_range_intervals.cend()) {
+    if (_dirty_range_it == _dirty_range_intervals.cend()) {
         co_return ss::stop_iteration::yes;
     }
 
-    const auto& dirty_range = *_map_building_it;
+    const auto& dirty_range = *_dirty_range_it;
     const auto& start_offset = dirty_range.base_offset;
     const auto& max_offset = dirty_range.last_offset;
 
@@ -129,42 +130,46 @@ ss::future<ss::stop_iteration> compaction_source::map_building_iteration() {
         co_return ss::stop_iteration::yes;
     }
 
-    ++_map_building_it;
+    ++_dirty_range_it;
     co_return ss::stop_iteration::no;
 }
 
 ss::future<ss::stop_iteration> compaction_source::deduplication_iteration(
   compaction::sliding_window_reducer::sink& sink) {
+    auto& ct_sink = static_cast<compaction_sink&>(sink);
     if (preempted()) {
         co_return ss::stop_iteration::yes;
     }
 
-    auto max_indexed_offset = model::offset_cast(_map->max_offset());
-    if (max_indexed_offset == kafka::offset{}) {
-        // We indexed nothing.
+    if (_extent_it == _extents_end_it) {
         co_return ss::stop_iteration::yes;
     }
 
-    // TODO: Maybe find a different way to chunk this work into iterations.
-    // An easy way to do this is to go from [start_offset,
-    // next_dirty_interval.last_offset], and so on. For now, setting `max_bytes`
-    // in the `log_reader_config` is an easy lift.
-    // TODO: maybe this has to be extent aware?
-    static constexpr size_t max_bytes_per_iteration = 2_GiB;
-    kafka::offset start_offset{_next_deduplication_start_offset};
-    kafka::offset max_offset{max_indexed_offset};
+    auto max_indexed_offset = model::offset_cast(_map->max_offset());
+    // If we have iterated to a portion of the log which is higher than the
+    // maximum indexed offset, we cannot perform any meaningful de-duplication.
+    auto can_deduplicate = max_indexed_offset >= _extent_it->second;
+    // If we have iterated to a portion of the log which is higher than the last
+    // removable tombstone, there is no longer any meaningful tombstone removal
+    // work to do.
+    auto can_remove_tombstones
+      = !_removable_tombstone_ranges.empty()
+        && _removable_tombstone_ranges.to_vec().back().last_offset
+             >= _extent_it->second;
+
+    if (!can_deduplicate && !can_remove_tombstones) {
+        co_return ss::stop_iteration::yes;
+    }
+
+    kafka::offset start_offset{_extent_it->first};
+    kafka::offset max_offset{_extent_it->second};
     cloud_topic_log_reader_config config(start_offset, max_offset, _as);
-    config.max_bytes = max_bytes_per_iteration;
     auto rdr = model::record_batch_reader(
       std::make_unique<level_one_log_reader_impl>(
         config, _ntp, _tp, _metastore, _io));
 
     auto stats = co_await rdr.consume(
-      compaction_filter{
-        static_cast<compaction_sink&>(sink),
-        *_map,
-        _ntp,
-        _removable_tombstone_ranges},
+      compaction_filter{ct_sink, *_map, _ntp, _removable_tombstone_ranges},
       model::no_timeout);
     if (stats.has_removed_data()) {
         vlog(
@@ -187,9 +192,8 @@ ss::future<ss::stop_iteration> compaction_source::deduplication_iteration(
       _extent_it->second);
 
     ++_extent_it;
-    bool finished = _next_deduplication_start_offset > max_indexed_offset;
 
-    co_return finished ? ss::stop_iteration::yes : ss::stop_iteration::no;
+    co_return ss::stop_iteration::no;
 }
 
 bool compaction_source::preempted() const {

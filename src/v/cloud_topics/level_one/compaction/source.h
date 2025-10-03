@@ -19,6 +19,8 @@
 
 namespace cloud_topics::l1 {
 
+class compaction_sink;
+
 class compaction_source : public compaction::sliding_window_reducer::source {
 public:
     compaction_source(
@@ -42,6 +44,8 @@ private:
     bool preempted() const;
 
 private:
+    friend compaction_sink;
+
     const model::ntp _ntp;
     const model::topic_id_partition _tp;
 
@@ -53,10 +57,11 @@ private:
 
     // Iterator used during `map_building_iteration()` which points into the
     // above vector `_dirty_range_intervals`.
-    interval_vec::const_iterator _map_building_it;
+    interval_vec::const_iterator _dirty_range_it;
 
     metastore::extent_offsets_t _extents;
     metastore::extent_offsets_t::const_iterator _extent_it;
+    metastore::extent_offsets_t::const_iterator _extents_end_it;
 
     // The key-offset map for this run of compaction. Built up from existing
     // data during `map_building_iteration()` by iterating over `_dirty_ranges`

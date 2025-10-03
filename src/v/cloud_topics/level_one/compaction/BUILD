@@ -17,39 +17,15 @@ redpanda_cc_library(
 )
 
 redpanda_cc_library(
-    name = "source",
+    name = "reducer",
     srcs = [
+        "filter.cc",
         "source.cc",
-    ],
-    hdrs = [
-        "source.h",
-    ],
-    visibility = [
-        "//src/v/cloud_topics/level_one:__subpackages__",
-    ],
-    deps = [
-        ":filter",
-        ":logger",
-        "//src/v/cloud_topics:log_reader_config",
-        "//src/v/cloud_topics/level_one/common:abstract_io",
-        "//src/v/cloud_topics/level_one/frontend_reader:reader",
-        "//src/v/cloud_topics/level_one/metastore",
-        "//src/v/cloud_topics/level_one/metastore:offset_interval_set",
-        "//src/v/compaction:key",
-        "//src/v/compaction:key_offset_map",
-        "//src/v/compaction:reducer",
-        "//src/v/model",
-        "//src/v/model:batch_compression",
-        "@seastar",
-    ],
-)
-
-redpanda_cc_library(
-    name = "sink",
-    srcs = [
         "sink.cc",
     ],
     hdrs = [
+        "filter.h",
+        "source.h",
         "sink.h",
     ],
     visibility = [
@@ -57,14 +33,21 @@ redpanda_cc_library(
     ],
     deps = [
         ":committer",
-        ":logger",
         ":meta",
+        ":logger",
         "//src/v/bytes",
         "//src/v/bytes:iostream",
+        "//src/v/cloud_topics:log_reader_config",
         "//src/v/cloud_topics/level_one/common:abstract_io",
         "//src/v/cloud_topics/level_one/common:object",
+        "//src/v/cloud_topics/level_one/frontend_reader:reader",
+        "//src/v/cloud_topics/level_one/metastore",
         "//src/v/cloud_topics/level_one/metastore:offset_interval_set",
+        "//src/v/compaction:filter",
+        "//src/v/compaction:key",
+        "//src/v/compaction:key_offset_map",
         "//src/v/compaction:reducer",
+        "//src/v/compaction:utils",
         "//src/v/container:chunked_vector",
         "//src/v/model",
         "//src/v/model:batch_compression",
@@ -73,27 +56,56 @@ redpanda_cc_library(
     ],
 )
 
-redpanda_cc_library(
-    name = "filter",
-    srcs = [
-        "filter.cc",
-    ],
-    hdrs = [
-        "filter.h",
-    ],
-    visibility = [
-        "//src/v/cloud_topics/level_one:__subpackages__",
-    ],
-    deps = [
-        ":sink",
-        "//src/v/cloud_topics/level_one/metastore:offset_interval_set",
-        "//src/v/compaction:filter",
-        "//src/v/compaction:key_offset_map",
-        "//src/v/compaction:utils",
-        "//src/v/model",
-        "@seastar",
-    ],
-)
+#redpanda_cc_library(
+#    name = "sink",
+#    srcs = [
+#        "sink.cc",
+#    ],
+#    hdrs = [
+#        "sink.h",
+#    ],
+#    visibility = [
+#        "//src/v/cloud_topics/level_one:__subpackages__",
+#    ],
+#    deps = [
+#        ":committer",
+#        ":logger",
+#        ":meta",
+#        "//src/v/bytes",
+#        "//src/v/bytes:iostream",
+#        "//src/v/cloud_topics/level_one/common:abstract_io",
+#        "//src/v/cloud_topics/level_one/common:object",
+#        "//src/v/cloud_topics/level_one/metastore:offset_interval_set",
+#        "//src/v/compaction:reducer",
+#        "//src/v/container:chunked_vector",
+#        "//src/v/model",
+#        "//src/v/model:batch_compression",
+#        "//src/v/ssx:future_util",
+#        "@seastar",
+#    ],
+#)
+
+#redpanda_cc_library(
+#    name = "filter",
+#    srcs = [
+#        "filter.cc",
+#    ],
+#    hdrs = [
+#        "filter.h",
+#    ],
+#    visibility = [
+#        "//src/v/cloud_topics/level_one:__subpackages__",
+#    ],
+#    deps = [
+#        ":sink",
+#        "//src/v/cloud_topics/level_one/metastore:offset_interval_set",
+#        "//src/v/compaction:filter",
+#        "//src/v/compaction:key_offset_map",
+#        "//src/v/compaction:utils",
+#        "//src/v/model",
+#        "@seastar",
+#    ],
+#)
 
 redpanda_cc_library(
     name = "worker",
@@ -112,8 +124,7 @@ redpanda_cc_library(
         ":committer",
         ":logger",
         ":meta",
-        ":sink",
-        ":source",
+        ":reducer",
         "//src/v/cloud_topics/level_one/common:abstract_io",
         "//src/v/cloud_topics/level_one/common:file_io",
         "//src/v/cloud_topics/level_one/metastore",
@@ -128,34 +139,6 @@ redpanda_cc_library(
     ],
 )
 
-#redpanda_cc_library(
-#    name = "worker_manager",
-#    srcs = [
-#        "worker_manager.cc",
-#    ],
-#    hdrs = [
-#        "worker_manager.h",
-#    ],
-#    visibility = [
-#        "//src/v/cloud_topics/level_one:__subpackages__",
-#    ],
-#    deps = [
-#        ":committer",
-#        ":logger",
-#        ":meta",
-#        ":worker",
-#        "//src/v/cloud_topics/level_one/common:file_io",
-#        "//src/v/cloud_topics/level_one/metastore:replicated_metastore",
-#        "//src/v/compaction:key_offset_map",
-#        "//src/v/container:chunked_circular_buffer",
-#        "//src/v/container:chunked_hash_map",
-#        "//src/v/container:intrusive",
-#        "//src/v/model",
-#        "//src/v/ssx:future_util",
-#        "//src/v/ssx:semaphore",
-#        "@seastar",
-#    ],
-#)
 
 redpanda_cc_library(
     name = "meta",

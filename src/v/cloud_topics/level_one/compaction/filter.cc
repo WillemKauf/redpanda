@@ -39,6 +39,7 @@ ss::future<bool> compaction_filter::should_keep(
         auto o = model::offset_cast(
           b.base_offset() + model::offset_delta(r.offset_delta()));
         if (_removable_tombstone_ranges.contains(o)) {
+            ++_stats.expired_tombstones_discarded;
             co_return false;
         }
     }
