@@ -142,9 +142,15 @@ private:
     //   compaction jobs.
     worker_state _worker_state{worker_state::active};
 
+    std::optional<model::ntp> _inflight_ntp;
+
     // If set, this is the active background loop for taking jobs from the
     // `_worker_manager` and compacting them.
     std::optional<ss::future<>> _work_fut;
+
+    // A condition variable which signals when `_work_fut` has been cleared of
+    // its value.
+    ss::condition_variable _work_fut_cv;
 
     // The shard local key-offset map used for de-duplication during compaction.
     // This is lazily initialized when a compaction job is first ran on this

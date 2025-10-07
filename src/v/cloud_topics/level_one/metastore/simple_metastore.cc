@@ -80,13 +80,12 @@ simple_object_builder::finish(
         return std::unexpected(
           error{fmt::format("Object {} is not a pending object", oid)});
     }
-    finished_objects_.emplace_back(
-      metastore::object_metadata{
-        .oid = oid,
-        .footer_pos = footer_pos,
-        .object_size = object_size,
-        .ntp_metas = std::move(it->second),
-      });
+    finished_objects_.emplace_back(metastore::object_metadata{
+      .oid = oid,
+      .footer_pos = footer_pos,
+      .object_size = object_size,
+      .ntp_metas = std::move(it->second),
+    });
     pending_objects_.erase(it);
     return {};
 }
@@ -96,10 +95,8 @@ std::expected<
   metastore::object_metadata_builder::error>
 simple_object_builder::release() {
     if (!pending_objects_.empty()) {
-        return std::unexpected(
-          error{fmt::format(
-            "Builder still has {} pending object(s)",
-            pending_objects_.size())});
+        return std::unexpected(error{fmt::format(
+          "Builder still has {} pending object(s)", pending_objects_.size())});
     }
     return std::exchange(finished_objects_, {});
 }
@@ -358,6 +355,7 @@ simple_metastore::get_end_offset_for_term(
     }
     auto& prt = prt_ref->get();
     if (prt.term_starts.empty()) {
+        vlog(cd_log.debug, "Partition {} terms not tracked", tp);
         return std::unexpected(metastore::errc::missing_ntp);
     }
 
@@ -405,6 +403,7 @@ simple_metastore::get_term_for_offset(
     }
     auto& prt = prt_ref->get();
     if (prt.term_starts.empty()) {
+        vlog(cd_log.debug, "Partition {} terms not tracked", tp);
         return std::unexpected(metastore::errc::missing_ntp);
     }
     // Past the next offset return OOR, but return a valid term for the exact
@@ -497,6 +496,12 @@ simple_metastore::get_compaction_offsets(
     }
     auto& prt = prt_ref->get();
     compaction_offsets_response resp;
+
+    resp.extents.reserve(prt.extents.size());
+    for (const auto& extent : prt.extents) {
+        resp.extents.emplace_back(extent.base_offset, extent.last_offset);
+    }
+
     if (prt.start_offset >= prt.next_offset) {
         // The log is empty, nothing to compact.
         return resp;
@@ -533,6 +538,7 @@ simple_metastore::get_compaction_offsets(
               r.base_offset, r.last_offset);
         }
     }
+
     return resp;
 }
 
@@ -541,6 +547,7 @@ std::expected<double, metastore::errc> simple_metastore::get_dirty_ratio(
     auto prt_ref = state.partition_state(tp);
 
     if (!prt_ref.has_value()) {
+        vlog(cd_log.debug, "Partition {} not tracked", tp);
         return std::unexpected(errc::missing_ntp);
     }
 
@@ -576,6 +583,7 @@ simple_metastore::get_earliest_dirty_ts(
     auto prt_ref = state.partition_state(tp);
 
     if (!prt_ref.has_value()) {
+        vlog(cd_log.debug, "Partition {} not tracked", tp);
         return std::unexpected(errc::missing_ntp);
     }
 

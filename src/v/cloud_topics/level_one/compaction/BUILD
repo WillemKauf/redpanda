@@ -17,40 +17,16 @@ redpanda_cc_library(
 )
 
 redpanda_cc_library(
-    name = "source",
+    name = "reducer",
     srcs = [
+        "filter.cc",
+        "sink.cc",
         "source.cc",
     ],
     hdrs = [
-        "source.h",
-    ],
-    visibility = [
-        "//src/v/cloud_topics/level_one:__subpackages__",
-    ],
-    deps = [
-        ":filter",
-        ":logger",
-        "//src/v/cloud_topics:log_reader_config",
-        "//src/v/cloud_topics/level_one/common:abstract_io",
-        "//src/v/cloud_topics/level_one/frontend_reader:reader",
-        "//src/v/cloud_topics/level_one/metastore",
-        "//src/v/cloud_topics/level_one/metastore:offset_interval_set",
-        "//src/v/compaction:key",
-        "//src/v/compaction:key_offset_map",
-        "//src/v/compaction:reducer",
-        "//src/v/model",
-        "//src/v/model:batch_compression",
-        "@seastar",
-    ],
-)
-
-redpanda_cc_library(
-    name = "sink",
-    srcs = [
-        "sink.cc",
-    ],
-    hdrs = [
+        "filter.h",
         "sink.h",
+        "source.h",
     ],
     visibility = [
         "//src/v/cloud_topics/level_one:__subpackages__",
@@ -61,33 +37,21 @@ redpanda_cc_library(
         ":meta",
         "//src/v/bytes",
         "//src/v/bytes:iostream",
+        "//src/v/cloud_topics:log_reader_config",
         "//src/v/cloud_topics/level_one/common:abstract_io",
         "//src/v/cloud_topics/level_one/common:object",
+        "//src/v/cloud_topics/level_one/frontend_reader:reader",
+        "//src/v/cloud_topics/level_one/metastore",
+        "//src/v/cloud_topics/level_one/metastore:offset_interval_set",
+        "//src/v/compaction:filter",
+        "//src/v/compaction:key",
+        "//src/v/compaction:key_offset_map",
         "//src/v/compaction:reducer",
+        "//src/v/compaction:utils",
         "//src/v/container:chunked_vector",
         "//src/v/model",
         "//src/v/model:batch_compression",
         "//src/v/ssx:future_util",
-        "@seastar",
-    ],
-)
-
-redpanda_cc_library(
-    name = "filter",
-    srcs = [
-        "filter.cc",
-    ],
-    hdrs = [
-        "filter.h",
-    ],
-    visibility = [
-        "//src/v/cloud_topics/level_one:__subpackages__",
-    ],
-    deps = [
-        "//src/v/compaction:filter",
-        "//src/v/compaction:key_offset_map",
-        "//src/v/compaction:utils",
-        "//src/v/model",
         "@seastar",
     ],
 )
@@ -109,8 +73,7 @@ redpanda_cc_library(
         ":committer",
         ":logger",
         ":meta",
-        ":sink",
-        ":source",
+        ":reducer",
         "//src/v/cloud_topics/level_one/common:abstract_io",
         "//src/v/cloud_topics/level_one/common:file_io",
         "//src/v/cloud_topics/level_one/metastore",
@@ -181,7 +144,9 @@ redpanda_cc_library(
         ":meta",
         "//src/v/cloud_topics/level_one/metastore",
         "//src/v/cluster",
+        "//src/v/compaction:utils",
         "//src/v/config",
+        "//src/v/container:chunked_circular_buffer",
         "//src/v/container:chunked_vector",
         "//src/v/model",
         "@seastar",
@@ -223,11 +188,13 @@ redpanda_cc_library(
         ":committing_policy",
         ":logger",
         ":meta",
+        "//src/v/base",
         "//src/v/cloud_topics/level_one/common:abstract_io",
         "//src/v/cloud_topics/level_one/common:object_id",
         "//src/v/cloud_topics/level_one/metastore",
         "//src/v/container:chunked_circular_buffer",
         "//src/v/ssx:semaphore",
+        "//src/v/utils:to_string",
         "@seastar",
     ],
 )
@@ -256,11 +223,9 @@ redpanda_cc_library(
 redpanda_cc_library(
     name = "scheduler",
     srcs = [
-        "log_collector_impl.cc",
         "scheduler.cc",
     ],
     hdrs = [
-        "log_collector_impl.h",
         "scheduler.h",
     ],
     implementation_deps = [
@@ -280,7 +245,6 @@ redpanda_cc_library(
         "//src/v/cloud_topics/level_one/metastore:replicated_metastore",
         "//src/v/cluster",
         "//src/v/config",
-        "//src/v/container:chunked_circular_buffer",
         "//src/v/container:intrusive",
         "//src/v/model",
         "//src/v/ssx:semaphore",

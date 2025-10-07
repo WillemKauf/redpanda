@@ -34,7 +34,8 @@ TEST_F(SamplerTestFixture, TestSampler) {
     model::node_id n(0);
     create_node_application(n);
     auto& cache = get_local_cache(n);
-    l1::log_sampler sampler(&_metastore, &cache);
+    l1::log_sampler sampler(
+      &_metastore, std::make_unique<l1::topic_cfg_provider_impl>(&cache));
     std::vector<std::pair<model::ntp, model::topic_id_partition>> ntidps;
     const auto topic_names = {"topic_a", "topic_b", "topic_c"};
     const auto num_topics = topic_names.size();
@@ -57,7 +58,7 @@ TEST_F(SamplerTestFixture, TestSampler) {
         tidp_batches.emplace_back(tidp, std::move(batches));
     }
 
-    make_l1_objects(tidp_batches);
+    make_l1_objects(std::move(tidp_batches)).get();
     sampler.sample_logs(logs, logs_list, cached_metadata).get();
     ASSERT_EQ(cached_metadata.size(), num_topics);
     while (!cached_metadata.empty()) {

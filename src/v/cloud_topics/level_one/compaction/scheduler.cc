@@ -18,7 +18,6 @@
 #include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/compaction/scheduling_policies.h"
 #include "config/configuration.h"
-#include "container/chunked_circular_buffer.h"
 #include "model/fundamental.h"
 #include "ssx/future-util.h"
 
@@ -31,11 +30,31 @@ compaction_scheduler::compaction_scheduler(
   ss::sharded<l1::replicated_metastore>* metastore)
   : _io(io)
   , _metastore(metastore)
-  , _metadata_cache(state.metadata_cache)
-  , _log_collector(make_default_log_collector(this, state))
-  , _log_sampler(&_metastore->local(), &state.metadata_cache->local())
+  , _log_collector(make_default_log_collector(
+      [this](
+        const model::ntp& ntp,
+        const model::topic_id_partition& tidp,
+        std::string_view ctx) { manage_partition(ntp, tidp, ctx); },
+      [this](model::ntp ntp, std::string_view ctx) {
+          return unmanage_partition(std::move(ntp), ctx);
+      },
+      [this](const model::ntp& ntp) { return is_managed(ntp); },
+      state))
+  , _log_sampler(make_default_log_sampler(
+      &_metastore->local(), &state.metadata_cache->local()))
   , _scheduling_policy(std::move(policy))
   , _worker_manager(_cached_metadata, io, metastore, &_committer)
+  , _compaction_interval(
+      config::shard_local_cfg().log_compaction_interval_ms.bind())
+  , _cached_metadata(_scheduling_policy->get_cmp_t()) {
+    _compaction_interval.watch([this]() { _sem.signal(); });
+}
+
+compaction_scheduler::compaction_scheduler(
+  log_sampler sampler, std::unique_ptr<scheduling_policy> policy)
+  : _log_sampler(std::move(sampler))
+  , _scheduling_policy(std::move(policy))
+  , _worker_manager(_cached_metadata, nullptr, nullptr, &_committer)
   , _compaction_interval(
       config::shard_local_cfg().log_compaction_interval_ms.bind())
   , _cached_metadata(_scheduling_policy->get_cmp_t()) {
@@ -58,7 +77,11 @@ void compaction_scheduler::manage_partition(
   const model::topic_id_partition& tidp,
   std::string_view ctx) {
     vlog(
-      compaction_log.info, "Asked to manage compacted CTP: {} ({})", ntp, ctx);
+      compaction_log.info,
+      "Asked to manage compacted CTP: {}/{} ({})",
+      ntp,
+      tidp,
+      ctx);
     auto [it, success] = _logs.insert(
       ss::make_lw_shared<log_compaction_meta>(tidp, ntp));
     _logs_list.push_back(*it->get());
@@ -79,7 +102,7 @@ compaction_scheduler::unmanage_partition(model::ntp ntp, std::string_view ctx) {
     vlog(
       compaction_log.info,
       "Asked to unmanage compacted CTP: {} ({})",
-      tidp,
+      ntp,
       ctx);
 
     auto handle_opt = _logs.extract(tidp);
@@ -89,12 +112,10 @@ compaction_scheduler::unmanage_partition(model::ntp ntp, std::string_view ctx) {
 
     auto handle = std::move(handle_opt).value();
 
-    auto close_fut = handle->gate.close();
-
-    // Request that compaction of this CTP be stopped, if in flight.
+    // Request that compaction of this CTP be stopped, if in flight. `handle` is
+    // a `lw_shared_ptr`- we can allow it to go out of scope here without fear
+    // of UAF elsewhere.
     co_await _worker_manager.request_stop_compaction(handle);
-
-    co_await std::move(close_fut);
 }
 
 void compaction_scheduler::start_bg_loop() {
@@ -138,8 +159,8 @@ ss::future<> compaction_scheduler::scheduling_loop() {
 ss::future<> compaction_scheduler::start() {
     co_await _committer.start(
       ss::sharded_parameter([] { return make_default_committing_policy(); }),
-      ss::sharded_parameter([this] { return &_metastore->local(); }),
-      ss::sharded_parameter([this] { return &_io->local(); }));
+      ss::sharded_parameter([this] { return &_io->local(); }),
+      ss::sharded_parameter([this] { return &_metastore->local(); }));
     co_await _committer.invoke_on_all(&compaction_committer::start);
     co_await _worker_manager.start();
     co_await _log_collector->start();
@@ -155,21 +176,21 @@ ss::future<> compaction_scheduler::stop() {
     auto close_fut = _gate.close();
 
     // Stop collecting logs.
-    co_await _log_collector->stop();
+    if (_log_collector) {
+        co_await _log_collector->stop();
+    }
 
-    // Close gates for all logs.
-    static constexpr size_t max_concurrent_close = 1024;
-    co_await ss::max_concurrent_for_each(
-      _logs.begin(), _logs.end(), max_concurrent_close, [](auto& log) {
-          return log->gate.close();
-      });
+    // Clear logs.
     _logs.clear();
 
-    // It is only safe to stop the worker_manager once all gates have been
-    // closed.
+    // Notify the committer that a shutdown is in progress before stopping
+    // inflight compactions.
+    co_await _committer.invoke_on_all(&compaction_committer::notify_stopped);
+
+    // Stop workers and inflight compactions.
     co_await _worker_manager.stop();
 
-    // Stop committing data.
+    // Destruct committer.
     co_await _committer.stop();
 
     co_await std::move(close_fut);

@@ -33,14 +33,24 @@ std::ostream& operator<<(std::ostream& o, const compaction_config& c) {
 }
 
 std::ostream& operator<<(std::ostream& o, const stats& s) {
+    auto offsets_processed_str = s.start_offset.has_value()
+                                     && s.last_offset.has_value()
+                                   ? fmt::format(
+                                       ", offset_range: {}-{}",
+                                       s.start_offset.value(),
+                                       s.last_offset.value())
+                                   : "";
     fmt::print(
       o,
       "{{ batches_processed: {}, batches_discarded: {}, "
-      "records_discarded: {}, non_compactible_batches: {} }}",
+      "records_discarded: {}, expired_tombstones_discarded: {}, "
+      "non_compactible_batches: {}{} }}",
       s.batches_processed,
       s.batches_discarded,
       s.records_discarded,
-      s.non_compactible_batches);
+      s.expired_tombstones_discarded,
+      s.non_compactible_batches,
+      offsets_processed_str);
     return o;
 }
 

@@ -94,6 +94,14 @@ struct compaction_config {
 
 // POD containing compaction statistics from a `compaction::filter`'s run.
 struct stats {
+    stats(
+      std::optional<model::offset> start_offset,
+      std::optional<model::offset> last_offset)
+      : start_offset(start_offset)
+      , last_offset(last_offset) {}
+
+    stats() = default;
+
     // Total number of batches passed to this reducer.
     size_t batches_processed{0};
     // Number of batches that were completely removed.
@@ -104,10 +112,19 @@ struct stats {
     // Number of batches that were ignored because they are not
     // of a compactible type.
     size_t non_compactible_batches{0};
+    // Number of tombstone records that were removed due to expiration (not
+    // including those removed by de-duplication)
+    size_t expired_tombstones_discarded{0};
+
+    // The starting offset of the range processed by this reducer.
+    std::optional<model::offset> start_offset{std::nullopt};
+    // The last offset of the range processed by this reducer.
+    std::optional<model::offset> last_offset{std::nullopt};
 
     // Returns whether any data was removed by this reducer.
     bool has_removed_data() const {
-        return batches_discarded > 0 || records_discarded > 0;
+        return batches_discarded > 0 || records_discarded > 0
+               || expired_tombstones_discarded > 0;
     }
 
     friend std::ostream& operator<<(std::ostream& os, const stats& s);

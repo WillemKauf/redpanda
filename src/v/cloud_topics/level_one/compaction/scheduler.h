@@ -20,11 +20,10 @@
 #include "cloud_topics/level_one/metastore/replicated_metastore.h"
 #include "cluster/metadata_cache.h"
 #include "config/property.h"
-#include "container/chunked_circular_buffer.h"
 #include "model/fundamental.h"
 #include "ssx/semaphore.h"
 
-#include <queue>
+class SchedulerTestFixture;
 
 namespace cloud_topics::l1 {
 
@@ -73,9 +72,6 @@ private:
     // an abort requested or the `_gate` is closed.
     ss::future<> scheduling_loop();
 
-    // Samples managed logs and schedules compactions.
-    ss::future<> schedule_some();
-
 private:
     // Pointer to sharded `file_io` held by `app`. Used by the `worker_manager`
     // for writing to local files and by the `committer` for writing to cloud
@@ -84,9 +80,6 @@ private:
 
     // Pointer to metastore.
     ss::sharded<replicated_metastore>* _metastore;
-
-    // Pointer to metadata_cache.
-    ss::sharded<cluster::metadata_cache>* _metadata_cache;
 
 private:
     // Responsible for pushing logs to manage/unmanage to this scheduler.
@@ -132,6 +125,12 @@ private:
 
     // TODO: remove this once more cluster objects speak `topic_id_partition`.
     chunked_hash_map<model::ntp, model::topic_id_partition> _ntp_to_tidp;
+
+private:
+    friend class ::SchedulerTestFixture;
+
+    // Testing c-tor
+    compaction_scheduler(log_sampler, std::unique_ptr<scheduling_policy>);
 };
 
 std::unique_ptr<compaction_scheduler> make_default_compaction_scheduler(
