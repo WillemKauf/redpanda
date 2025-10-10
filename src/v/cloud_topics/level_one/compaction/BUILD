@@ -30,6 +30,7 @@ redpanda_cc_library(
     deps = [
         ":filter",
         ":logger",
+        ":meta",
         "//src/v/cloud_topics:log_reader_config",
         "//src/v/cloud_topics/level_one/common:abstract_io",
         "//src/v/cloud_topics/level_one/frontend_reader:reader",
