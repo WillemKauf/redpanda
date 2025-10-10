@@ -119,7 +119,7 @@ TEST_F(ReducerTestFixture, Reducer) {
     auto batches = gen(spec, num_batches);
     std::vector<tidp_batches_t> tidp_batches;
     tidp_batches.emplace_back(tidp, std::move(batches));
-    make_l1_objects(tidp_batches);
+    make_l1_objects(std::move(tidp_batches)).get();
 
     ss::abort_source as;
 
