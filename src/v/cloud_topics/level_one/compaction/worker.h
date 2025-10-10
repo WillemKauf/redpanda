@@ -142,6 +142,8 @@ private:
     //   compaction jobs.
     worker_state _worker_state{worker_state::active};
 
+    std::optional<model::ntp> _inflight_ntp;
+
     // If set, this is the active background loop for taking jobs from the
     // `_worker_manager` and compacting them.
     std::optional<ss::future<>> _work_fut;

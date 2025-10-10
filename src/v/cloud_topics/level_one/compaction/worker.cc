@@ -148,6 +148,7 @@ ss::future<> compaction_worker::compact_log(log_compaction_meta* log) {
     vlog(compaction_log.info, "Compacting CTP {}", tidp);
 
     _job_state = compaction_job_state::running;
+    _inflight_ntp = ntp;
 
     // Copy
     auto compaction_offsets = log->info_and_ts->info.offsets_response;
@@ -188,6 +189,7 @@ ss::future<> compaction_worker::compact_log(log_compaction_meta* log) {
     }
 
     _job_state = compaction_job_state::idle;
+    _inflight_ntp.reset();
 }
 
 ss::future<std::optional<foreign_log_compaction_meta_ptr>>
@@ -215,10 +217,22 @@ bool compaction_worker::is_active() const {
 }
 
 void compaction_worker::interrupt_current_job() {
+    if (_inflight_ntp.has_value()) {
+        vlog(
+          compaction_log.debug,
+          "Interrupting compaction job for CTP {}",
+          _inflight_ntp);
+    }
     _job_state = compaction_job_state::soft_stop;
 }
 
 void compaction_worker::terminate_current_job() {
+    if (_inflight_ntp.has_value()) {
+        vlog(
+          compaction_log.debug,
+          "Terminating compaction job for CTP {}",
+          _inflight_ntp);
+    }
     _job_state = compaction_job_state::hard_stop;
 }
 
