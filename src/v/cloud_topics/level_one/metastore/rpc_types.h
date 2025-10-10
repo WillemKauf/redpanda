@@ -10,6 +10,7 @@
 #pragma once
 
 #include "cloud_topics/level_one/common/object_id.h"
+#include "cloud_topics/level_one/metastore/metastore.h"
 #include "cloud_topics/level_one/metastore/offset_interval_set.h"
 #include "cloud_topics/level_one/metastore/state_update.h"
 #include "model/fundamental.h"
@@ -200,7 +201,8 @@ struct get_compaction_info_reply
           dirty_ranges,
           removable_tombstone_ranges,
           dirty_ratio,
-          earliest_dirty_ts);
+          earliest_dirty_ts,
+          extents);
     }
 
     errc ec;
@@ -208,6 +210,7 @@ struct get_compaction_info_reply
     offset_interval_set removable_tombstone_ranges;
     double dirty_ratio;
     std::optional<model::timestamp> earliest_dirty_ts;
+    metastore::extent_metadata_vec extents;
 };
 struct get_compaction_info_request
   : serde::envelope<
