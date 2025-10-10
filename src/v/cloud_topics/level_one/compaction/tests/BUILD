@@ -28,6 +28,9 @@ redpanda_cc_gtest(
     ],
     deps = [
         ":in_memory_sink",
+        "//src/v/bytes",
+        "//src/v/bytes:iobuf",
+        "//src/v/bytes:iobuf_parser",
         "//src/v/bytes:iostream",
         "//src/v/cloud_topics/level_one/common:object",
         "//src/v/cloud_topics/level_one/common:object_id",
@@ -43,6 +46,7 @@ redpanda_cc_gtest(
         "//src/v/compaction/tests:simple_reducer",
         "//src/v/container:chunked_circular_buffer",
         "//src/v/container:chunked_vector",
+        "//src/v/kafka/server/tests:kafka_test_utils",
         "//src/v/model",
         "//src/v/model:batch_compression",
         "//src/v/model/tests:random",
@@ -79,6 +83,7 @@ redpanda_cc_gtest(
     deps = [
         "//src/v/cloud_topics/level_one/compaction:log_info_collector",
         "//src/v/cloud_topics/level_one/compaction:meta",
+        "//src/v/cloud_topics/level_one/compaction:scheduling_policies",
         "//src/v/cloud_topics/level_one/frontend_reader/tests:l1_reader_fixture",
         "//src/v/cluster",
         "//src/v/model",
