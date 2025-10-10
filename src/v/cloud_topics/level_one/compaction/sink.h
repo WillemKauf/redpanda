@@ -28,6 +28,9 @@ public:
       model::topic_id_partition,
       object_builder::options = {});
 
+    ss::future<bool>
+    initialize(compaction::sliding_window_reducer::source&) final;
+
     ss::future<ss::stop_iteration>
     operator()(model::record_batch, model::compression) final;
 

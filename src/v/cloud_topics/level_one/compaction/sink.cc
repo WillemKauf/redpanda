@@ -36,6 +36,11 @@ compaction_sink::compaction_sink(
   , _tp(tp)
   , _opts(opts) {}
 
+ss::future<bool>
+compaction_sink::initialize(compaction::sliding_window_reducer::source&) {
+    co_return true;
+}
+
 bool compaction_sink::needs_roll() const {
     // TODO: This needs to consider L1 object size and what-not eventually.
     return !_active_staging_file;
