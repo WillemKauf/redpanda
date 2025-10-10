@@ -112,6 +112,9 @@ struct stats {
     // Number of batches that were ignored because they are not
     // of a compactible type.
     size_t non_compactible_batches{0};
+    // Number of tombstone records that were removed due to expiration (not
+    // including those removed by de-duplication)
+    size_t expired_tombstones_discarded{0};
 
     // The starting offset of the range processed by this reducer.
     std::optional<model::offset> start_offset{std::nullopt};
@@ -120,7 +123,8 @@ struct stats {
 
     // Returns whether any data was removed by this reducer.
     bool has_removed_data() const {
-        return batches_discarded > 0 || records_discarded > 0;
+        return batches_discarded > 0 || records_discarded > 0
+               || expired_tombstones_discarded > 0;
     }
 
     friend std::ostream& operator<<(std::ostream& os, const stats& s);
