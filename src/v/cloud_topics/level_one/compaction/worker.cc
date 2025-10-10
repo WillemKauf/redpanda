@@ -45,6 +45,8 @@ ss::future<> compaction_worker::stop() {
 
     _as.request_abort();
     _worker_cv.broken();
+    _work_fut_cv.broken();
+
     auto close_fut = _gate.close();
 
     co_await clear_work_fut();
@@ -53,6 +55,9 @@ ss::future<> compaction_worker::stop() {
 }
 
 void compaction_worker::start_work_loop() {
+    vassert(
+      !_work_fut.has_value(),
+      "Cannot set value of _work_fut when it already has a value.");
     _work_fut = ssx::spawn_with_gate_then(
       _gate, [this]() { return work_loop(); });
 }
@@ -100,8 +105,9 @@ ss::future<> compaction_worker::work_loop() {
 
 ss::future<> compaction_worker::clear_work_fut() {
     if (_work_fut.has_value()) {
-        auto work_fut = std::exchange(_work_fut, std::nullopt);
-        co_await std::move(work_fut).value();
+        co_await std::move(_work_fut).value();
+        _work_fut.reset();
+        _work_fut_cv.broadcast();
     }
 }
 
@@ -223,13 +229,21 @@ ss::future<> compaction_worker::pause_worker() {
         co_return;
     }
 
+    vlog(
+      compaction_log.info,
+      "Pausing compaction worker on shard {}",
+      ss::this_shard_id());
+
     interrupt_current_job();
 
     _worker_state = worker_state::paused;
-
     // Signal `_worker_cv` in case work_loop is currently waiting.
     alert_worker();
     co_await clear_work_fut();
+    vlog(
+      compaction_log.info,
+      "Paused compaction worker on shard {}",
+      ss::this_shard_id());
 }
 
 ss::future<> compaction_worker::resume_worker() {
@@ -239,9 +253,42 @@ ss::future<> compaction_worker::resume_worker() {
         co_return;
     }
 
+    // If `_work_fut` still has a value, it is because the request to
+    // `resume_worker()` was received before `_work_fut` was stopped by
+    // `pause_worker()`. Wait for it to be cleared before launching a new
+    // background fiber.
+    if (_work_fut.has_value()) {
+        vlog(
+          compaction_log.info,
+          "Waiting for backgrounded compaction process to finish before "
+          "resuming worker");
+    }
+
+    static constexpr std::chrono::seconds work_fut_timeout(60);
+    while (_work_fut.has_value()) {
+        auto wait_fut = co_await ss::coroutine::as_future(
+          _work_fut_cv.wait(work_fut_timeout));
+        if (wait_fut.failed()) {
+            auto eptr = wait_fut.get_exception();
+            auto log_lvl = ssx::is_shutdown_exception(eptr)
+                             ? ss::log_level::debug
+                             : ss::log_level::warn;
+            vlogl(
+              compaction_log,
+              log_lvl,
+              "Caught exception {} while attempting to resume worker",
+              eptr);
+            co_return;
+        }
+    }
+
     // Set state back to active and start a new background loop.
     _worker_state = worker_state::active;
     start_work_loop();
+    vlog(
+      compaction_log.info,
+      "Resumed compaction worker on shard {}",
+      ss::this_shard_id());
 }
 
 void compaction_worker::alert_worker() { _worker_cv.signal(); }
