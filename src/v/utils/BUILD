@@ -502,6 +502,19 @@ redpanda_cc_library(
 )
 
 redpanda_cc_library(
+    name = "tidp_logger",
+    hdrs = [
+        "tidp_logger.h",
+    ],
+    deps = [
+        "//src/v/base",
+        "//src/v/ssx:sformat",
+        "@seastar",
+    ],
+)
+
+
+redpanda_cc_library(
     name = "notification_list",
     hdrs = [
         "notification_list.h",

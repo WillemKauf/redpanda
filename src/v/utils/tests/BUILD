@@ -602,3 +602,19 @@ redpanda_cc_gtest(
         "@seastar",
     ],
 )
+
+redpanda_cc_gtest(
+    name = "tidp_logger_test",
+    timeout = "short",
+    srcs = [
+        "tidp_logger_test.cc",
+    ],
+    deps = [
+        "//src/v/cluster",
+        "//src/v/cluster/tests:topic_table_fixture_gtest",
+        "//src/v/utils:tidp_logger",
+        "@googletest//:gtest",
+        "@seastar",
+        "@seastar//:testing",
+    ],
+)

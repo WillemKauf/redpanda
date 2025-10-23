@@ -27,16 +27,10 @@
 #include "model/fundamental.h"
 #include "model/metadata.h"
 #include "random/generators.h"
+#include "test_utils/test_macros.h"
 
 #include <seastar/core/sharded.hh>
 #include <seastar/core/smp.hh>
-
-#include <boost/test/unit_test.hpp>
-
-#if defined(IS_GTEST)
-#error                                                                         \
-  "topic table fixture cannot be used in gtest because it uses boost assertions"
-#endif
 
 struct topic_table_fixture {
     static constexpr uint32_t partitions_per_shard = 7000;
@@ -141,7 +135,7 @@ struct topic_table_fixture {
         auto cmd = make_create_topic_cmd(
           random_generators::gen_alphanum_string(5), 1, 3);
         auto res = table.local().apply(std::move(cmd), model::offset(0)).get();
-        BOOST_REQUIRE_EQUAL(res, cluster::errc::success);
+        RPTEST_REQUIRE_EQ(res, cluster::errc::success);
     }
 
     void create_topics() {
@@ -165,9 +159,9 @@ struct topic_table_fixture {
         auto res_3
           = table.local().apply(std::move(cmd_3), model::offset(0)).get();
 
-        BOOST_REQUIRE_EQUAL(res_1, cluster::errc::success);
-        BOOST_REQUIRE_EQUAL(res_2, cluster::errc::success);
-        BOOST_REQUIRE_EQUAL(res_3, cluster::errc::success);
+        RPTEST_REQUIRE_EQ(res_1, cluster::errc::success);
+        RPTEST_REQUIRE_EQ(res_2, cluster::errc::success);
+        RPTEST_REQUIRE_EQ(res_3, cluster::errc::success);
     }
 
     size_t total_capacity() {

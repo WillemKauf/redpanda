@@ -141,15 +141,30 @@ redpanda_test_cc_library(
 )
 
 redpanda_test_cc_library(
-    name = "topic_table_fixture",
+    name = "topic_table_fixture_gtest",
     hdrs = [
         "topic_table_fixture.h",
     ],
+    visibility = ["//visibility:public"],
     deps = [
         ":utils",
         "//src/v/base",
         "//src/v/cluster",
-        "@boost//:test",
+        "//src/v/test_utils:gtest",
+    ],
+)
+
+redpanda_test_cc_library(
+    name = "topic_table_fixture",
+    hdrs = [
+        "topic_table_fixture.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":utils",
+        "//src/v/base",
+        "//src/v/cluster",
+        "//src/v/test_utils:seastar_boost",
     ],
 )
 
