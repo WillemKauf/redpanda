@@ -93,6 +93,7 @@ redpanda_cc_library(
         ":logger",
         ":meta",
         ":source_and_sink",
+        ":scheduler_probe",
         "//src/v/cloud_topics/level_one/common:abstract_io",
         "//src/v/cloud_topics/level_one/common:file_io",
         "//src/v/cloud_topics/level_one/metastore",
@@ -261,6 +262,7 @@ redpanda_cc_library(
         ":log_info_collector",
         ":logger",
         ":meta",
+        ":scheduler_probe",
         ":scheduling_policies",
         ":worker",
         "//src/v/cloud_topics/level_one/common:file_io",
@@ -269,6 +271,21 @@ redpanda_cc_library(
         "//src/v/container:intrusive",
         "//src/v/model",
         "//src/v/ssx:semaphore",
+        "@seastar",
+    ],
+)
+
+redpanda_cc_library(
+    name = "scheduler_probe",
+    srcs = [
+        "scheduler_probe.cc",
+    ],
+    hdrs = [
+        "scheduler_probe.h",
+    ],
+    deps = [
+        "//src/v/config",
+        "//src/v/metrics",
         "@seastar",
     ],
 )
