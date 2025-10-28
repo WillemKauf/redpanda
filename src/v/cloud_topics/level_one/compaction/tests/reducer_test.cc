@@ -18,6 +18,7 @@
 #include "cloud_topics/level_one/compaction/sink.h"
 #include "cloud_topics/level_one/compaction/source.h"
 #include "cloud_topics/level_one/compaction/tests/in_memory_sink.h"
+#include "cloud_topics/level_one/compaction/worker_probe.h"
 #include "cloud_topics/level_one/frontend_reader/tests/l1_reader_fixture.h"
 #include "cloud_topics/level_one/metastore/metastore.h"
 #include "cloud_topics/level_one/metastore/simple_metastore.h"

@@ -55,6 +55,7 @@ redpanda_cc_library(
         ":filter",
         ":logger",
         ":meta",
+        ":worker_probe",
         "//src/v/bytes",
         "//src/v/bytes:iostream",
         "//src/v/cloud_topics:log_reader_config",
@@ -94,6 +95,7 @@ redpanda_cc_library(
         ":meta",
         ":source_and_sink",
         ":scheduler_probe",
+        ":worker_probe",
         "//src/v/cloud_topics/level_one/common:abstract_io",
         "//src/v/cloud_topics/level_one/common:file_io",
         "//src/v/cloud_topics/level_one/metastore",
@@ -286,6 +288,23 @@ redpanda_cc_library(
     deps = [
         "//src/v/config",
         "//src/v/metrics",
+        "@seastar",
+    ],
+)
+
+redpanda_cc_library(
+    name = "worker_probe",
+    srcs = [
+        "worker_probe.cc",
+    ],
+    hdrs = [
+        "worker_probe.h",
+    ],
+    deps = [
+        "//src/v/compaction:types",
+        "//src/v/config",
+        "//src/v/metrics",
+        "//src/v/utils:log_hist",
         "@seastar",
     ],
 )

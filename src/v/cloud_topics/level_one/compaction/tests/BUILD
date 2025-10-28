@@ -37,6 +37,7 @@ redpanda_cc_gtest(
         "//src/v/cloud_topics/level_one/compaction:filter",
         "//src/v/cloud_topics/level_one/compaction:meta",
         "//src/v/cloud_topics/level_one/compaction:source_and_sink",
+        "//src/v/cloud_topics/level_one/compaction:worker_probe",
         "//src/v/cloud_topics/level_one/frontend_reader/tests:l1_reader_fixture",
         "//src/v/cloud_topics/level_one/metastore",
         "//src/v/cloud_topics/level_one/metastore:simple",

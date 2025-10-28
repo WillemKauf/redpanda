@@ -13,6 +13,7 @@
 #include "cloud_topics/level_one/common/abstract_io.h"
 #include "cloud_topics/level_one/compaction/filter.h"
 #include "cloud_topics/level_one/compaction/meta.h"
+#include "cloud_topics/level_one/compaction/worker_probe.h"
 #include "cloud_topics/level_one/metastore/metastore.h"
 #include "cloud_topics/level_one/metastore/offset_interval_set.h"
 #include "compaction/key_offset_map.h"
@@ -35,7 +36,8 @@ public:
       metastore*,
       io*,
       ss::abort_source&,
-      compaction_job_state&);
+      compaction_job_state&,
+      compaction_worker_probe&);
     ss::future<> initialize() final;
     ss::future<ss::stop_iteration> map_building_iteration() final;
     ss::future<ss::stop_iteration>
@@ -80,6 +82,7 @@ private:
 
     ss::abort_source& _as;
     compaction_job_state& _state;
+    compaction_worker_probe& _probe;
 
     // Dirty ranges returned by the `metastore` that were indexed during
     // `map_deduplication_iteration`.
