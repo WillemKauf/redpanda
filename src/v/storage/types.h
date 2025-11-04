@@ -473,6 +473,31 @@ struct housekeeping_config {
     compaction::compaction_config compact;
     gc_config gc;
 
+    static housekeeping_config make_config(
+      model::timestamp upper,
+      std::optional<size_t> max_bytes_in_log,
+      model::offset max_collect_offset,
+      model::offset max_tombstone_remove_offset,
+      std::optional<std::chrono::milliseconds> tombstone_retention_ms,
+      std::optional<std::chrono::milliseconds> tx_retention_ms,
+      std::chrono::milliseconds min_lag_ms,
+      ss::abort_source& as,
+      std::optional<ntp_sanitizer_config> san_cfg = std::nullopt,
+      compaction::hash_key_offset_map* key_map = nullptr) {
+        auto cfg = housekeeping_config(
+          upper,
+          max_bytes_in_log,
+          max_collect_offset,
+          max_tombstone_remove_offset,
+          tombstone_retention_ms,
+          tx_retention_ms,
+          min_lag_ms,
+          as,
+          san_cfg,
+          key_map);
+        return cfg;
+    }
+
     friend std::ostream& operator<<(std::ostream&, const housekeeping_config&);
 };
 
