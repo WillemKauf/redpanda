@@ -478,6 +478,7 @@ struct housekeeping_config {
       std::optional<size_t> max_bytes_in_log,
       model::offset max_collect_offset,
       model::offset max_tombstone_remove_offset,
+      model::offset max_tx_remove_offset,
       std::optional<std::chrono::milliseconds> tombstone_retention_ms,
       std::optional<std::chrono::milliseconds> tx_retention_ms,
       std::chrono::milliseconds min_lag_ms,
@@ -495,6 +496,7 @@ struct housekeeping_config {
           as,
           san_cfg,
           key_map);
+        cfg.compact.max_tx_remove_offset = max_tx_remove_offset;
         return cfg;
     }
 
