@@ -257,6 +257,7 @@ ss::future<checked<model::term_id, tx::errc>> rm_stm::begin_tx(
   std::chrono::milliseconds transaction_timeout_ms,
   model::partition_id tm) {
     auto state_lock = co_await _state_lock.hold_read_lock();
+    auto lso_lock_holder = co_await _lso_lock.hold_write_lock();
     if (!co_await sync(_sync_timeout())) {
         vlog(
           _ctx_log.trace,
@@ -1301,6 +1302,16 @@ model::offset rm_stm::last_stable_offset() {
         vlog(
           _ctx_log.trace,
           "state machine is resetting, last_known_lso: {}, last_applied: {}",
+          _last_known_lso,
+          last_applied);
+        return _last_known_lso;
+    }
+    auto lso_read_units = _lso_lock.try_hold_read_lock();
+    if (!lso_read_units) {
+        // LSO calculation is in progress, return last known LSO
+        vlog(
+          _ctx_log.trace,
+          "lso update in progress, last_known_lso: {}, last_applied: {}",
           _last_known_lso,
           last_applied);
         return _last_known_lso;

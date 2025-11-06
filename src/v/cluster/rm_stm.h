@@ -435,6 +435,15 @@ private:
     model::producer_id _highest_producer_id;
     // for monotonicity of computed LSO.
     model::offset _last_known_lso{-1};
+    /**
+     * LSO lock protects the LSO from being exposed before transaction begin
+     * batch is applied.
+     *
+     * The lock is acquired in write mode when a begin transaction batch is
+     * being handled protecting exposure of potentially invalid LSO until the
+     * begin batch is applied.
+     */
+    ss::rwlock _lso_lock;
 
     friend struct ::rm_stm_test_fixture;
 };
