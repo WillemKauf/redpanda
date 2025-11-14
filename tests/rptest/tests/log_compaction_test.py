@@ -785,8 +785,8 @@ class LogCompactionTxRemovalTestBase(LogCompactionTestBase, PreallocNodesTest):
             retry_on_exc=True,
         )
 
-    def wait_for_local_snaphot_catchup(self, offsets: list[int]):
-        def stms_snaphotted(partition_id: int, target_offset: int):
+    def wait_for_local_snapshot_catchup(self, offsets: list[int]):
+        def stms_snapshotted(partition_id: int, target_offset: int):
             state = self.redpanda._admin.get_partition_state(
                 namespace="kafka", topic=self.topic_spec.name, partition=partition_id
             )
@@ -799,10 +799,10 @@ class LogCompactionTxRemovalTestBase(LogCompactionTestBase, PreallocNodesTest):
                         snapshotted.append(last_snapshot >= target_offset)
             return all(snapshotted) and len(snapshotted) == len(raft_states)
 
-        def all_partition_stms_snaphotted():
+        def all_partition_stms_snapshotted():
             return all(
                 [
-                    stms_snaphotted(partition_id, offsets[partition_id])
+                    stms_snapshotted(partition_id, offsets[partition_id])
                     for partition_id in range(self.partition_count)
                 ]
             )
@@ -814,7 +814,7 @@ class LogCompactionTxRemovalTestBase(LogCompactionTestBase, PreallocNodesTest):
                     "Not all STMs have local snapshots at target offsets."
                 )
             try:
-                if all_partition_stms_snaphotted():
+                if all_partition_stms_snapshotted():
                     return
                 # Produce some garbage to force snapshots
                 KgoVerifierProducer.oneshot(
@@ -853,7 +853,7 @@ class LogCompactionTxRemovalTestBase(LogCompactionTestBase, PreallocNodesTest):
         self.logger.debug(
             f"STMs caught up at commit indexes {commit_idxs}, waiting for local snapshots to catchup"
         )
-        self.wait_for_local_snaphot_catchup(commit_idxs)
+        self.wait_for_local_snapshot_catchup(commit_idxs)
         # Check that no tx batches are seen after compaction settles
         self.redpanda.wait_until(
             self.all_tx_batches_removed,
