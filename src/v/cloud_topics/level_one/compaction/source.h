@@ -29,8 +29,9 @@ public:
       model::topic_id_partition,
       const chunked_vector<offset_interval_set::interval>&,
       const offset_interval_set&,
-      metastore::extent_offsets_t,
+      metastore::extent_metadata_vec,
       compaction::key_offset_map*,
+      std::chrono::milliseconds,
       metastore*,
       io*,
       ss::abort_source&,
@@ -59,24 +60,20 @@ private:
 
     // Iterator used during `map_building_iteration()` which points into the
     // above vector `_dirty_range_intervals`.
-    interval_vec::const_iterator _dirty_range_it;
+    interval_vec::const_reverse_iterator _dirty_range_it;
 
-    metastore::extent_offsets_t _extents;
-    metastore::extent_offsets_t::const_iterator _extents_it;
-    metastore::extent_offsets_t::const_iterator _extents_end_it;
-
-    // The base offset of the currently referenced extent. Set _before_ batches
-    // in the current extent are processed by the `filter` & `sink`.
-    kafka::offset _extent_base_offset{0};
-
-    // The last offset of the previously referenced extent. Set _after_ batches
-    // in the previous extent are processed by the `filter` & `sink`.
-    kafka::offset _extent_last_offset;
+    metastore::extent_metadata_vec _extents;
+    metastore::extent_metadata_vec::const_iterator _extents_it;
+    metastore::extent_metadata_vec::const_iterator _extents_end_it;
 
     // The key-offset map for this run of compaction. Built up from existing
     // data during `map_building_iteration()` by iterating over `_dirty_ranges`
     // and used for removal of old keys in `deduplication_iteration`.
     compaction::key_offset_map* _map;
+
+    // `min.compaction.lag.ms` or the cluster default `min_compaction_lag_ms`
+    // for this CTP.
+    std::chrono::milliseconds _min_compaction_lag_ms;
 
     metastore* _metastore;
     io* _io;
@@ -85,9 +82,10 @@ private:
     compaction_job_state& _state;
     compaction_worker_probe& _probe;
 
-    // The start offset (inclusive) for the next round of
-    // `deduplication_iteration()`.
-    kafka::offset _next_deduplication_start_offset;
+    // Dirty ranges returned by the `metastore` that were indexed during
+    // `map_deduplication_iteration`.
+    chunked_vector<metastore::compaction_update::cleaned_range>
+      _new_cleaned_ranges;
 };
 
 } // namespace cloud_topics::l1

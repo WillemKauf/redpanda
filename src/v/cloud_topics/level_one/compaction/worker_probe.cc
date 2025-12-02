@@ -35,6 +35,12 @@ void compaction_worker_probe::setup_metrics() {
             "Number of batches removed across all cloud topic partitions on "
             "this shard")),
         sm::make_gauge(
+          "records_removed",
+          [this] { return _records_removed; },
+          sm::description(
+            "Number of records removed across all cloud topic partitions on "
+            "this shard")),
+        sm::make_gauge(
           "tombstones_removed",
           [this] { return _tombstones_removed; },
           sm::description(

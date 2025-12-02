@@ -26,11 +26,13 @@ ss::future<> compaction::sliding_window_reducer::run() && {
           [this]() { return _src->map_building_iteration(); });
 
         // Step 2: Initialize sink
-        co_await _sink->initialize(*_src);
+        bool should_deduplicate = co_await _sink->initialize(*_src);
 
-        // Step 3: Perform de-duplication pass.
-        co_await ss::repeat(
-          [this]() { return _src->deduplication_iteration(*_sink); });
+        if (should_deduplicate) {
+            // Step 3: Perform de-duplication pass.
+            co_await ss::repeat(
+              [this]() { return _src->deduplication_iteration(*_sink); });
+        }
 
     } catch (...) {
         eptr = std::current_exception();

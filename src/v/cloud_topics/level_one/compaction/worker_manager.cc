@@ -24,11 +24,13 @@ worker_manager::worker_manager(
   ss::sharded<file_io>* io,
   ss::sharded<replicated_metastore>* metastore,
   ss::sharded<compaction_committer>* committer,
+  ss::sharded<cluster::metadata_cache>* metadata_cache,
   compaction_scheduler_probe& probe)
   : _work_queue(work_queue)
   , _io(io)
   , _metastore(metastore)
   , _committer(committer)
+  , _metadata_cache(metadata_cache)
   , _probe(probe) {}
 
 ss::future<> worker_manager::start() {
@@ -36,7 +38,8 @@ ss::future<> worker_manager::start() {
       this,
       ss::sharded_parameter([this] { return &_io->local(); }),
       ss::sharded_parameter([this] { return &_metastore->local(); }),
-      ss::sharded_parameter([this] { return &_committer->local(); }));
+      ss::sharded_parameter([this] { return &_committer->local(); }),
+      ss::sharded_parameter([this] { return &_metadata_cache->local(); }));
     co_await _workers.invoke_on_all(&compaction_worker::start);
 }
 

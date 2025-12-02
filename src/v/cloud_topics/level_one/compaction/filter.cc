@@ -35,7 +35,6 @@ compaction_filter::compaction_filter(
       std::move(ntp),
       kafka::offset_cast(start_offset),
       kafka::offset_cast(last_offset))
-  , _ct_sink(sink)
   , _map(map)
   , _removable_tombstone_ranges(removable_tombstone_ranges) {}
 
@@ -51,10 +50,6 @@ ss::future<bool> compaction_filter::should_keep(
     }
 
     auto keep = co_await compaction::is_latest_record_for_key(_map, b, r);
-
-    if (r.is_tombstone() && keep) {
-        _ct_sink.set_range_has_tombstones();
-    }
 
     co_return keep;
 }

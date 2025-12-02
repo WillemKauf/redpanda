@@ -63,7 +63,7 @@ public:
         virtual ~sink() noexcept = default;
 
     public:
-        virtual ss::future<> initialize(source&) = 0;
+        virtual ss::future<bool> initialize(source&) = 0;
         virtual ss::future<ss::stop_iteration>
         operator()(model::record_batch, model::compression) = 0;
         virtual ss::future<> finalize() = 0;

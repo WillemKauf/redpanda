@@ -337,9 +337,21 @@ level_one_log_reader_impl::materialize_batches_from_object_offset(
     // Note that it's possible to materialize zero batches.
     vlog(
       _log.debug,
-      "Materialized {} batches from L1 object {}",
+      "Materialized {} batches from L1 object {}{}",
       batches.size(),
-      object.oid);
+      object.oid,
+      batches.empty() ? ""
+                      : fmt::format(
+                          ", offset range ({}-{})",
+                          batches.front().base_offset(),
+                          batches.back().last_offset()));
+    for (const auto& b : batches) {
+        vlog(
+          _log.debug,
+          "Materialized batch: {}-{}",
+          b.base_offset(),
+          b.last_offset());
+    }
 
     co_return batches;
 }

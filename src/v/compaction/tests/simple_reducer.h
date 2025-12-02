@@ -72,8 +72,8 @@ public:
     simple_sink(chunked_circular_buffer<model::record_batch>& output_batches)
       : _output_batches(output_batches) {}
 
-    ss::future<> initialize(sliding_window_reducer::source&) final {
-        co_return;
+    ss::future<bool> initialize(sliding_window_reducer::source&) final {
+        co_return true;
     }
 
     ss::future<ss::stop_iteration>

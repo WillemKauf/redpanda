@@ -537,9 +537,9 @@ simple_metastore::get_compaction_offsets(
     resp.extents.reserve(prt.extents.size());
     for (const auto& extent : prt.extents) {
         resp.extents.push_back(
-          offset_interval_set::interval{
-            .base_offset = extent.base_offset,
-            .last_offset = extent.last_offset});
+          {.base_offset = extent.base_offset,
+           .last_offset = extent.last_offset,
+           .max_timestamp = extent.max_timestamp});
     }
 
     if (prt.start_offset >= prt.next_offset) {
@@ -601,6 +601,7 @@ std::expected<double, metastore::errc> simple_metastore::get_dirty_ratio(
     size_t total_size{0};
     size_t dirty_size{0};
     const auto& cleaned_ranges = compaction_state->cleaned_ranges;
+
     for (const auto& extent : prt.extents) {
         total_size += extent.len;
         auto b = extent.base_offset;
@@ -610,9 +611,19 @@ std::expected<double, metastore::errc> simple_metastore::get_dirty_ratio(
         }
     }
 
-    return total_size == 0 ? 0.0
-                           : static_cast<double>(dirty_size)
-                               / static_cast<double>(total_size);
+    auto dirty_ratio = total_size == 0 ? 0.0
+                                       : static_cast<double>(dirty_size)
+                                           / static_cast<double>(total_size);
+    vlog(
+      cd_log.trace,
+      "Calculated dirty ratio for tidp {} as {} with cleaned ranges {} over "
+      "extents {}",
+      tp,
+      dirty_ratio,
+      cleaned_ranges,
+      prt.extents);
+
+    return dirty_ratio;
 }
 
 std::expected<std::optional<model::timestamp>, metastore::errc>

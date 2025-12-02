@@ -31,8 +31,17 @@ namespace {
 
 class map_building_reducer {
 public:
-    explicit map_building_reducer(compaction::key_offset_map& map)
-      : _map(map) {}
+    struct return_t {
+        bool map_is_full;
+        std::optional<model::offset> max_indexed_offset;
+        bool range_has_tombstones;
+    };
+
+public:
+    explicit map_building_reducer(
+      compaction::key_offset_map& map, kafka::offset start_offset)
+      : _map(map)
+      , _start_offset(kafka::offset_cast(start_offset)) {}
 
     ss::future<ss::stop_iteration> operator()(model::record_batch b) {
         if (b.compressed()) {
@@ -42,6 +51,9 @@ public:
         co_await b.for_each_record_async(
           [this, base_offset = b.base_offset()](
             const model::record& r) -> ss::future<ss::stop_iteration> {
+              if (r.is_tombstone()) {
+                  _range_has_tombstones = true;
+              }
               return maybe_index_record_in_map(r, base_offset);
           });
 
@@ -52,17 +64,25 @@ public:
         co_return ss::stop_iteration::no;
     }
 
-    bool end_of_stream() { return _map_is_full; }
+    return_t end_of_stream() {
+        return {_map_is_full, _max_indexed_offset, _range_has_tombstones};
+    }
 
 private:
     ss::future<ss::stop_iteration> maybe_index_record_in_map(
       const model::record& r, model::offset base_offset) {
         auto offset = base_offset + model::offset_delta(r.offset_delta());
 
+        if (offset < _start_offset) {
+            co_return ss::stop_iteration::no;
+        }
+
         auto key = compaction::compaction_key{iobuf_to_bytes(r.key())};
         bool inserted = co_await _map.put(key, offset);
 
         if (inserted) {
+            _max_indexed_offset = model::offset(
+              std::max(_max_indexed_offset.value_or(offset)(), offset()));
             co_return ss::stop_iteration::no;
         }
 
@@ -71,8 +91,51 @@ private:
     }
 
     compaction::key_offset_map& _map;
+    model::offset _start_offset;
+
     bool _map_is_full{false};
+    bool _range_has_tombstones{false};
+    std::optional<model::offset> _max_indexed_offset{std::nullopt};
 };
+
+// Returns extent regions that bound the provided `dirty_range`.
+// For example, if the passed `dirty_range` is `[10,100]` and the provided
+// `extents` are `[[0, 20], [21, 39], [40, 71], [72, 93], [94, 110]]`, the
+// container returned would be expected to hold `[[10, 20], [21, 39], [40, 71],
+// [72, 93], [94, 100]]`.
+chunked_vector<offset_interval_set::interval> intervals_for_dirty_range(
+  const offset_interval_set::interval& dirty_range,
+  const metastore::extent_metadata_vec& extents) {
+    chunked_vector<offset_interval_set::interval> result;
+    for (const auto& extent : extents) {
+        if (extent.base_offset > dirty_range.last_offset) {
+            break;
+        }
+
+        auto base = kafka::offset{
+          std::max(dirty_range.base_offset(), extent.base_offset())};
+        auto last = kafka::offset{
+          std::min(dirty_range.last_offset(), extent.last_offset())};
+
+        if (base <= last) {
+            result.push_back({.base_offset = base, .last_offset = last});
+        }
+    }
+
+    result.shrink_to_fit();
+    return result;
+}
+
+bool should_compact_extent(
+  const metastore::extent_metadata& extent,
+  std::chrono::milliseconds min_compaction_lag_ms) {
+    const auto now = to_time_point(model::timestamp::now());
+    const auto max_extent_ts = to_time_point(extent.max_timestamp);
+    if (now - max_extent_ts < min_compaction_lag_ms) {
+        return false;
+    }
+    return true;
+}
 
 } // namespace
 
@@ -81,8 +144,9 @@ compaction_source::compaction_source(
   model::topic_id_partition tp,
   const chunked_vector<offset_interval_set::interval>& dirty_range_intervals,
   const offset_interval_set& removable_tombstone_ranges,
-  metastore::extent_offsets_t extents,
+  metastore::extent_metadata_vec extents,
   compaction::key_offset_map* map,
+  std::chrono::milliseconds min_compaction_lag_ms,
   metastore* metastore,
   io* io,
   ss::abort_source& as,
@@ -94,6 +158,7 @@ compaction_source::compaction_source(
   , _removable_tombstone_ranges(removable_tombstone_ranges)
   , _extents(std::move(extents))
   , _map(map)
+  , _min_compaction_lag_ms(min_compaction_lag_ms)
   , _metastore(metastore)
   , _io(io)
   , _as(as)
@@ -101,7 +166,7 @@ compaction_source::compaction_source(
   , _probe(probe) {}
 
 ss::future<> compaction_source::initialize() {
-    _dirty_range_it = _dirty_range_intervals.cbegin();
+    _dirty_range_it = _dirty_range_intervals.crbegin();
     _extents_it = _extents.cbegin();
     _extents_end_it = _extents.cend();
     co_return;
@@ -112,21 +177,50 @@ ss::future<ss::stop_iteration> compaction_source::map_building_iteration() {
         co_return ss::stop_iteration::yes;
     }
 
-    if (_dirty_range_it == _dirty_range_intervals.cend()) {
+    if (_dirty_range_it == _dirty_range_intervals.crend()) {
         co_return ss::stop_iteration::yes;
     }
 
     const auto& dirty_range = *_dirty_range_it;
-    const auto& start_offset = dirty_range.base_offset;
-    const auto& max_offset = dirty_range.last_offset;
 
-    cloud_topic_log_reader_config config(start_offset, max_offset, _as);
-    auto rdr = model::record_batch_reader(
-      std::make_unique<level_one_log_reader_impl>(
-        config, _ntp, _tp, _metastore, _io));
+    auto dirty_range_intervals = intervals_for_dirty_range(
+      dirty_range, _extents);
+    bool map_is_full = false;
+    for (auto it = dirty_range_intervals.crbegin();
+         it != dirty_range_intervals.crend();
+         ++it) {
+        const auto& start_offset = it->base_offset;
+        const auto& max_offset = it->last_offset;
 
-    auto map_is_full = co_await std::move(rdr).consume(
-      map_building_reducer(*_map), model::no_timeout);
+        cloud_topic_log_reader_config config(start_offset, max_offset, _as);
+        auto rdr = model::record_batch_reader(
+          std::make_unique<level_one_log_reader_impl>(
+            config, _ntp, _tp, _metastore, _io));
+
+        auto res = co_await std::move(rdr).consume(
+          map_building_reducer(*_map, start_offset), model::no_timeout);
+        map_is_full = res.map_is_full;
+        auto max_indexed_offset = res.max_indexed_offset;
+
+        if (max_indexed_offset.has_value()) {
+            bool range_has_tombstones = res.range_has_tombstones;
+            auto base_offset = start_offset;
+            auto last_offset = map_is_full ? model::offset_cast(
+                                               max_indexed_offset.value())
+                                           : max_offset;
+            dassert(
+              base_offset <= last_offset,
+              "Cleaned range must be properly bounded.");
+            _new_cleaned_ranges.push_back(
+              {.base_offset = base_offset,
+               .last_offset = last_offset,
+               .has_tombstones = range_has_tombstones});
+        }
+
+        if (map_is_full) {
+            break;
+        }
+    }
 
     if (map_is_full) {
         co_return ss::stop_iteration::yes;
@@ -147,63 +241,42 @@ ss::future<ss::stop_iteration> compaction_source::deduplication_iteration(
         co_return ss::stop_iteration::yes;
     }
 
-    _extent_base_offset = _extents_it->base_offset;
+    auto& extent = *_extents_it;
+    if (should_compact_extent(extent, _min_compaction_lag_ms)) {
+        kafka::offset start_offset{extent.base_offset};
+        kafka::offset last_offset{extent.last_offset};
+        cloud_topic_log_reader_config config(start_offset, last_offset, _as);
+        auto rdr = model::record_batch_reader(
+          std::make_unique<level_one_log_reader_impl>(
+            config, _ntp, _tp, _metastore, _io));
 
-    auto max_indexed_offset = model::offset_cast(_map->max_offset());
-    // If we have iterated to a portion of the log which is higher than the
-    // maximum indexed offset, we cannot perform any meaningful de-duplication.
-    auto can_deduplicate = max_indexed_offset >= _extents_it->last_offset;
-    // If we have iterated to a portion of the log which is higher than the last
-    // removable tombstone, there is no longer any meaningful tombstone removal
-    // work to do.
-    auto can_remove_tombstones
-      = !_removable_tombstone_ranges.empty()
-        && _removable_tombstone_ranges.to_vec().back().last_offset
-             >= _extents_it->last_offset;
+        co_await ct_sink.process_next_extent_offset_bounds(
+          start_offset, last_offset);
+        auto stats = co_await rdr.consume(
+          compaction_filter{
+            ct_sink,
+            *_map,
+            _ntp,
+            _removable_tombstone_ranges,
+            start_offset,
+            last_offset},
+          model::no_timeout);
+        if (stats.has_removed_data()) {
+            vlog(
+              compaction_log.info,
+              "L1 compaction removing data from CTP {}, stats: {}",
+              _ntp,
+              stats);
+        } else {
+            vlog(
+              compaction_log.info,
+              "L1 compaction not removing data from CTP {}, stats: {}",
+              _ntp,
+              stats);
+        }
 
-    if (!can_deduplicate && !can_remove_tombstones) {
-        co_return ss::stop_iteration::yes;
+        _probe.add_stats(stats);
     }
-
-    kafka::offset start_offset{_extents_it->base_offset};
-    kafka::offset max_offset{_extents_it->last_offset};
-    cloud_topic_log_reader_config config(start_offset, max_offset, _as);
-    auto rdr = model::record_batch_reader(
-      std::make_unique<level_one_log_reader_impl>(
-        config, _ntp, _tp, _metastore, _io));
-
-    auto stats = co_await rdr.consume(
-      compaction_filter{
-        ct_sink,
-        *_map,
-        _ntp,
-        _removable_tombstone_ranges,
-        start_offset,
-        max_offset},
-      model::no_timeout);
-    if (stats.has_removed_data()) {
-        vlog(
-          compaction_log.info,
-          "L1 compaction removing data from CTP {}, stats: {}",
-          _ntp,
-          stats);
-    } else {
-        vlog(
-          compaction_log.info,
-          "L1 compaction not removing data from CTP {}, stats: {}",
-          _ntp,
-          stats);
-    }
-
-    _probe.add_stats(stats);
-
-    vlog(
-      compaction_log.info,
-      "Read from offset {} to offset {}",
-      _extents_it->base_offset,
-      _extents_it->last_offset);
-
-    _extent_last_offset = _extents_it->last_offset;
 
     ++_extents_it;
 

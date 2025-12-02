@@ -43,7 +43,13 @@ compaction_scheduler::compaction_scheduler(
   , _log_info_collector(make_default_log_info_collector(
       &_metastore->local(), &state.metadata_cache->local()))
   , _scheduling_policy(std::move(policy))
-  , _worker_manager(_compaction_queue, io, metastore, &_committer, _probe)
+  , _worker_manager(
+      _compaction_queue,
+      io,
+      metastore,
+      &_committer,
+      state.metadata_cache,
+      _probe)
   , _compaction_interval(
       config::shard_local_cfg().log_compaction_interval_ms.bind())
   , _compaction_queue(_scheduling_policy->get_comparator()) {
@@ -54,7 +60,8 @@ compaction_scheduler::compaction_scheduler(
   log_info_collector info_collector, std::unique_ptr<scheduling_policy> policy)
   : _log_info_collector(std::move(info_collector))
   , _scheduling_policy(std::move(policy))
-  , _worker_manager(_compaction_queue, nullptr, nullptr, &_committer, _probe)
+  , _worker_manager(
+      _compaction_queue, nullptr, nullptr, &_committer, nullptr, _probe)
   , _compaction_interval(
       config::shard_local_cfg().log_compaction_interval_ms.bind())
   , _compaction_queue(_scheduling_policy->get_comparator()) {

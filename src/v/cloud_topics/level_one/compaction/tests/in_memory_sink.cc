@@ -57,9 +57,9 @@ ss::future<> in_memory_sink::maybe_roll() {
     co_return;
 }
 
-ss::future<>
+ss::future<bool>
 in_memory_sink::initialize(compaction::sliding_window_reducer::source&) {
-    co_return;
+    co_return true;
 }
 
 ss::future<ss::stop_iteration>

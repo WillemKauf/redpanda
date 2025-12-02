@@ -17,6 +17,10 @@
 #include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/metastore/metastore.h"
 #include "container/chunked_circular_buffer.h"
+#include "container/chunked_hash_map.h"
+#include "model/fundamental.h"
+#include "utils/mutex.h"
+#include "utils/uuid.h"
 
 class ReducerTestFixture;
 
@@ -35,38 +39,25 @@ public:
     // committing loop.
     ss::future<> stop();
 
-    // Pushes an update to the queue to be committed.
-    void push_update(object_output_t);
+    ss::future<compaction_job_id>
+      begin_compaction_job(model::topic_id_partition);
 
-    // The `compaction_committer` is a sharded object within the
-    // `compaction_scheduler`, which means calling `stop()` on it destructs the
-    // underlying instances. Because `compaction_worker`s depend on the
-    // `committer`, the `committer` is the last object to be `stop()`'ed during
-    // shutdown. When the inflight workers/compaction jobs are stopped, a number
-    // of updates to the committer may be pushed at shutdown. `notify_stopped()`
-    // provides a way to let the `committer` know that it should not attempt to
-    // commit any more updates before `stop()` is called to avoid this stampede
-    // of last minute updates.
-    void notify_stopped() { _stopped = true; }
+    void add_l1_object(compaction_job_id, file_and_md_info);
+
+    ss::future<> finalize_job(
+      compaction_job_id,
+      chunked_vector<metastore::compaction_update::cleaned_range>,
+      offset_interval_set);
 
 private:
     friend class ::ReducerTestFixture;
-    using updates_t = chunked_circular_buffer<object_output_t>;
-
-    struct built_update_context {
-        std::unique_ptr<metastore::object_metadata_builder> metadata_builder;
-        metastore::compaction_map_t compact_map;
-    };
-
-    struct inflight_update_context {
-        model::topic_id_partition tidp;
-        chunked_vector<staging_file_ref_and_md_info>
-          staging_file_refs_and_md_infos;
-        metastore::compaction_update compact_update;
-    };
 
     struct error {
-        enum class type : uint8_t { build_or_put_failure, commit_failure } t;
+        enum class type : uint8_t {
+            builder_failure,
+            io_failure,
+            metastore_failure
+        } t;
         ss::sstring msg;
 
         fmt::iterator format_to(fmt::iterator it) const {
@@ -75,9 +66,55 @@ private:
         }
     };
 
+    using expected_t = std::expected<void, error>;
+
+    struct job_state {
+        job_state(
+          compaction_job_id id,
+          model::topic_id_partition tidp,
+          std::unique_ptr<metastore::object_metadata_builder> metadata_builder)
+          : id(id)
+          , tidp(tidp)
+          , metadata_builder(std::move(metadata_builder))
+          , upload_sem(0, fmt::format("upload_sem_{}", id)) {}
+
+        bool all_uploads_inflight() const {
+            return s == job_state::state::finalized
+                   && staging_file_and_md_infos.empty();
+        }
+
+        enum class state {
+            in_progress,
+            finalized,
+        };
+
+        compaction_job_id id;
+        model::topic_id_partition tidp;
+        mutex metadata_builder_mutex{"metadata_builder_mutex"};
+        std::unique_ptr<metastore::object_metadata_builder> metadata_builder;
+        ssx::semaphore upload_sem;
+
+        state s{state::in_progress};
+        chunked_circular_buffer<file_and_md_info> staging_file_and_md_infos;
+        chunked_circular_buffer<ss::future<expected_t>> inflight_uploads;
+        ss::promise<> all_uploads_complete;
+    };
+
+    using job_ptr_t = std::unique_ptr<job_state>;
+
 private:
+    job_state* get_job_by_id(compaction_job_id id) {
+        auto job_it = _compaction_jobs.find(id);
+        if (job_it == _compaction_jobs.end()) {
+            // Might be better to just throw here in the future. For now assert
+            // as a sanity check.
+            vassert(false, "Job ID {} does not exist.", id);
+        }
+        return job_it->second.get();
+    }
+
     // Starts the backgrounded committing loop.
-    void start_committing_loop();
+    void start_upload_loop(compaction_job_id);
 
     // Returns `true` if the committer is currently active and a shutdown has
     // not been requested.
@@ -85,38 +122,45 @@ private:
 
     // The main committing loop. Invoked in a background fiber until `_as` has
     // an abort requested or the `_gate` is closed.
-    ss::future<> committing_loop();
+    ss::future<> upload_loop(compaction_job_id);
 
-    // Builds update context to be committed from the provided updates.
-    ss::future<std::expected<built_update_context, error>>
-      build_and_put_update(inflight_update_context);
+    // Attempts to upload & commit all updates in the provided container to the
+    // metastore and cloud storage.
+    void start_uploads(job_state*, chunked_circular_buffer<file_and_md_info>);
 
-    ss::future<std::expected<void, error>>
-      try_build_and_commit_update(inflight_update_context);
+    ss::future<expected_t> do_upload(job_state*, file_and_md_info);
 
-    // Attempts to commit all updates in the provided container to the metastore
-    // and cloud storage.
-    ss::future<> commit_some(updates_t);
+    ss::future<expected_t> put_object_with_retries(object_id, staging_file*);
 
-    // Removes all staging files in an compaction update.
-    // Should be called after successfully or unsuccessfully uploading &
-    // committing a compaction update, or during clean-up of uncommitted
-    // compaction updates during shutdown.
-    ss::future<> remove_staging_files(object_output_t);
+    ss::future<> await_inflight_uploads(job_state*);
+
+    ss::future<> cancel_active_jobs();
+
+    enum class finalize_op { compact_objects, replace_objects };
+
+    ss::future<> do_finalize_job(
+      job_ptr_t,
+      chunked_vector<metastore::compaction_update::cleaned_range>,
+      offset_interval_set,
+      finalize_op);
+
+    metastore::compaction_update make_compaction_update(
+      chunked_vector<metastore::compaction_update::cleaned_range>,
+      offset_interval_set);
+
+    ss::future<> do_compact_objects(
+      job_ptr_t,
+      chunked_vector<metastore::compaction_update::cleaned_range>,
+      offset_interval_set);
+
+    ss::future<> do_replace_objects(job_ptr_t);
 
 private:
-    // A queue of updates to be committed.
-    updates_t _updates;
+    chunked_hash_map<compaction_job_id, job_ptr_t> _compaction_jobs;
 
     // The committing policy. Controls pre-emption and scheduling of commits
     // made to the metastore and cloud storage.
     std::unique_ptr<committing_policy> _policy;
-
-    ssx::semaphore _sem{0, "cloud_topics::compaction::committing_loop"};
-
-    // Used as a flag to notify committer that a shutdown has been triggered,
-    // and commits should no longer occur.
-    bool _stopped{false};
 
     ss::abort_source _as;
     ss::gate _gate;

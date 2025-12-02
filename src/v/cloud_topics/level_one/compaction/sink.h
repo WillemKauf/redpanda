@@ -27,22 +27,32 @@ public:
       model::topic_id_partition,
       const chunked_vector<offset_interval_set::interval>&,
       const offset_interval_set&,
-      compaction::key_offset_map*,
       l1::io*,
       compaction_committer*,
       object_builder::options = {});
 
-    ss::future<> initialize(compaction::sliding_window_reducer::source&) final;
+    ss::future<bool>
+    initialize(compaction::sliding_window_reducer::source&) final;
 
     ss::future<ss::stop_iteration>
     operator()(model::record_batch, model::compression) final;
 
     ss::future<> finalize() final;
 
-    void set_range_has_tombstones() { _range_has_tombstones = true; }
+    ss::future<>
+      process_next_extent_offset_bounds(kafka::offset, kafka::offset);
 
 private:
     static constexpr size_t max_object_size = 128_MiB;
+    // static constexpr size_t max_object_size = 256_MiB;
+    // static constexpr size_t max_object_size = 1_KiB;
+
+    void set_last_processed_offset(kafka::offset o) {
+        dassert(
+          o >= _last_processed_offset,
+          "last processed offset should never attempt to move backwards.");
+        _last_processed_offset = o;
+    }
 
     // Returns `true` if the current object represented by
     // `_active_staging_file` and `_builder` should be rolled (i.e the existing
@@ -62,27 +72,6 @@ private:
     // Calls `roll()` iff `needs_roll() == true`.
     ss::future<> maybe_roll();
 
-    // Returns `true` if the compaction update built up so far in
-    // `_closed_staging_files_and_infos` can be pushed to the
-    // `_committer`. The `_committer` will still decide (based on its
-    // `committing_policy`) when these updates should be finalized and committed
-    // to the `metastore` and cloud storage- this function only decides when the
-    // `sink` has done enough checkpointable compaction work worth pushing to
-    // the `_committer` as an update.
-    bool needs_pushing() const;
-
-    metastore::compaction_update make_compaction_update();
-
-    // Pushes the current compaction update composed of the objects in
-    // `_closed_staging_files_and_infos` to the `_committer`. `roll()` should be
-    // called before calling `push_update()`.
-    void push_update();
-
-    // Calls `push_update()` iff `needs_pushing() == true` and
-    // `_closed_staging_files_and_md_infos` is not empty. For that reason,
-    // `maybe_roll()` should be called before calling `maybe_push_update()`.
-    void maybe_push_update();
-
 private:
     model::topic_id_partition _tp;
 
@@ -92,8 +81,7 @@ private:
     const interval_vec& _dirty_range_intervals;
     const offset_interval_set& _removable_tombstone_ranges;
 
-    // Only used here for accessing _map->max_offset().
-    const compaction::key_offset_map* const _map;
+    compaction_job_id _id;
 
     io* _io;
     compaction_committer* _committer;
@@ -103,15 +91,23 @@ private:
     std::unique_ptr<staging_file> _active_staging_file{nullptr};
     // Guaranteed to have a value iff _active_staging_file.
     std::unique_ptr<object_builder> _builder{nullptr};
-    chunked_vector<staging_file_and_md_info>
-      _closed_staging_files_and_md_infos{};
-    bool _range_has_tombstones{false};
 
-    kafka::offset* _extent_base_offset;
-    kafka::offset* _extent_last_offset;
+    // The current _extent's base offset.
+    kafka::offset _extent_base_offset;
+    kafka::offset _extent_last_offset;
 
-    kafka::offset _update_base_offset{};
-    kafka::offset _update_last_offset{};
+    // The last offset processed by the sink.
+    kafka::offset _last_processed_offset{};
+
+    // The current active staging file's base offset.
+    kafka::offset _object_base_offset{};
+
+    offset_interval_set _processed_extents;
+
+    // Dirty ranges returned by the `metastore` that were indexed during
+    // `map_deduplication_iteration`.
+    chunked_vector<metastore::compaction_update::cleaned_range>
+      _new_cleaned_ranges;
 };
 
 } // namespace cloud_topics::l1

@@ -317,6 +317,7 @@ class KgoVerifierService(Service):
         process ended.
         """
         if not self._status_thread:
+            self._stopped = True
             return True
 
         self.logger.debug(f"wait_node {self.who_am_i()}: waiting for remote endpoint")

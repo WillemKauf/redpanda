@@ -44,7 +44,6 @@ private:
         model::record_batch, std::vector<int32_t>) const final;
 
 private:
-    compaction_sink& _ct_sink;
     const compaction::key_offset_map& _map;
     const offset_interval_set& _removable_tombstone_ranges;
 };
