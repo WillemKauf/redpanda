@@ -138,11 +138,16 @@ TEST_F(ReducerTestFixture, Reducer) {
     auto committer = l1::compaction_committer(
       std::make_unique<never_commit>(), &_io, &_metastore);
     auto committer_stop = ss::defer([&committer] { committer.stop().get(); });
+    auto dirty_range_intervals
+      = compaction_info->offsets_response.dirty_ranges.to_vec();
     auto src = std::make_unique<l1::compaction_source>(
       ntp,
       tidp,
-      std::move(compaction_info->offsets_response),
+      dirty_range_intervals,
+      compaction_info->offsets_response.removable_tombstone_ranges,
+      std::move(compaction_info->offsets_response.extents),
       &map,
+      std::chrono::milliseconds{0},
       &_metastore,
       &_io,
       as,
