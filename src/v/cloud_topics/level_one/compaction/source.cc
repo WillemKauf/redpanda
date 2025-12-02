@@ -249,6 +249,8 @@ ss::future<ss::stop_iteration> compaction_source::deduplication_iteration(
           std::make_unique<level_one_log_reader_impl>(
             config, _ntp, _tp, _metastore, _io));
 
+        co_await ct_sink.process_next_extent_offset_bounds(
+          start_offset, last_offset);
         auto stats = co_await rdr.consume(
           compaction_filter{
             ct_sink,
