@@ -10,12 +10,17 @@
 
 #pragma once
 
+#include "base/format_to.h"
 #include "cloud_topics/level_one/common/abstract_io.h"
 #include "cloud_topics/level_one/common/object_id.h"
 #include "cloud_topics/level_one/compaction/committing_policy.h"
 #include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/metastore/metastore.h"
 #include "container/chunked_circular_buffer.h"
+#include "container/chunked_hash_map.h"
+#include "model/fundamental.h"
+#include "utils/mutex.h"
+#include "utils/uuid.h"
 
 class ReducerTestFixture;
 
@@ -27,61 +32,144 @@ class compaction_committer {
 public:
     compaction_committer(std::unique_ptr<committing_policy>, io*, metastore*);
 
+    // Launches background committing loop.
     ss::future<> start();
 
     // Shuts down concurrency primitives, thereby stopping the backgrounded
     // committing loop.
     ss::future<> stop();
 
-    // Pushes an update to the queue to be committed.
-    void push_update(file_and_md_info);
+    ss::future<compaction_job_id>
+      begin_compaction_job(model::topic_id_partition);
+
+    void add_l1_object(compaction_job_id, file_and_md_info);
+
+    ss::future<> finalize_job(
+      compaction_job_id,
+      chunked_vector<metastore::compaction_update::cleaned_range>,
+      offset_interval_set);
 
 private:
     friend class ::ReducerTestFixture;
-    using updates_t = chunked_circular_buffer<file_and_md_info>;
 
-    struct built_object {
-        model::topic_id_partition tp;
-        object_id oid;
-        object_builder::object_info info;
-        std::unique_ptr<staging_file> staging_file;
-        std::unique_ptr<metastore::object_metadata_builder> builder;
-        metastore::compaction_map_t compaction_map;
+    struct error {
+        enum class type : uint8_t {
+            builder_failure,
+            io_failure,
+            metastore_failure
+        } t;
+        ss::sstring msg;
+
+        fmt::iterator format_to(fmt::iterator it) const {
+            return fmt::format_to(
+              it, "type:{}, msg:{}", static_cast<int>(t), msg);
+        }
     };
 
+    using expected_t = std::expected<void, error>;
+
+    struct job_state {
+        job_state(
+          compaction_job_id id,
+          model::topic_id_partition tidp,
+          std::unique_ptr<metastore::object_metadata_builder> metadata_builder)
+          : id(id)
+          , tidp(tidp)
+          , metadata_builder(std::move(metadata_builder))
+          , upload_sem(0, fmt::format("upload_sem_{}", id)) {}
+
+        bool all_uploads_inflight() const {
+            return s == job_state::state::finalized
+                   && staging_file_and_md_infos.empty();
+        }
+
+        enum class state {
+            in_progress,
+            finalized,
+        };
+
+        compaction_job_id id;
+        model::topic_id_partition tidp;
+        mutex metadata_builder_mutex{"metadata_builder_mutex"};
+        std::unique_ptr<metastore::object_metadata_builder> metadata_builder;
+        ssx::semaphore upload_sem;
+
+        state s{state::in_progress};
+        chunked_circular_buffer<file_and_md_info> staging_file_and_md_infos;
+        chunked_circular_buffer<ss::future<expected_t>> inflight_uploads;
+        ss::promise<> all_uploads_complete;
+    };
+
+    using job_ptr_t = std::unique_ptr<job_state>;
+
+private:
+    job_state* get_job_by_id(compaction_job_id id) {
+        auto job_it = _compaction_jobs.find(id);
+        if (job_it == _compaction_jobs.end()) {
+            // Might be better to just throw here in the future. For now assert
+            // as a sanity check.
+            vassert(false, "Job ID {} does not exist.", id);
+        }
+        return job_it->second.get();
+    }
+
     // Starts the backgrounded committing loop.
-    void start_bg_loop();
+    void start_upload_loop(compaction_job_id);
+
+    // Returns `true` if the committer is currently active and a shutdown has
+    // not been requested.
+    bool is_active() const;
 
     // The main committing loop. Invoked in a background fiber until `_as` has
     // an abort requested or the `_gate` is closed.
-    ss::future<> committing_loop();
+    ss::future<> upload_loop(compaction_job_id);
 
-    // Builds objects to be committed from the provided updates.
-    ss::future<chunked_vector<built_object>> build_objects(updates_t);
+    // Attempts to upload & commit all updates in the provided container to the
+    // metastore and cloud storage.
+    void start_uploads(job_state*, chunked_circular_buffer<file_and_md_info>);
 
-    // Attempts to commit all updates in the provided container to the metastore
-    // and cloud storage.
-    ss::future<> commit_some(updates_t);
+    ss::future<expected_t> do_upload(job_state*, file_and_md_info);
+
+    ss::future<expected_t> put_object_with_retries(object_id, staging_file*);
+
+    ss::future<> await_inflight_uploads(job_state*);
+
+    ss::future<> cancel_active_jobs();
+
+    enum class finalize_op { compact_objects, replace_objects };
+
+    ss::future<> do_finalize_job(
+      job_ptr_t,
+      chunked_vector<metastore::compaction_update::cleaned_range>,
+      offset_interval_set,
+      finalize_op);
+
+    metastore::compaction_update make_compaction_update(
+      chunked_vector<metastore::compaction_update::cleaned_range>,
+      offset_interval_set);
+
+    ss::future<> do_compact_objects(
+      job_ptr_t,
+      chunked_vector<metastore::compaction_update::cleaned_range>,
+      offset_interval_set);
+
+    ss::future<> do_replace_objects(job_ptr_t);
 
 private:
-    // A queue of updates to be committed.
-    // TODO: add clean-up safety to built staging files.
-    updates_t _updates;
+    chunked_hash_map<compaction_job_id, job_ptr_t> _compaction_jobs;
 
     // The committing policy. Controls pre-emption and scheduling of commits
     // made to the metastore and cloud storage.
     std::unique_ptr<committing_policy> _policy;
 
-    ssx::semaphore _sem{0, "cloud_topics::compaction::committing_loop"};
-
     ss::abort_source _as;
     ss::gate _gate;
 
     // Newly compacted objects are uploaded using `io`.
-    [[maybe_unused]] io* _io;
+    io* _io;
 
     // Commits of newly compacted objects go to the `metastore`.
-    [[maybe_unused]] metastore* _metastore;
+    metastore* _metastore;
 };
 
 } // namespace cloud_topics::l1
