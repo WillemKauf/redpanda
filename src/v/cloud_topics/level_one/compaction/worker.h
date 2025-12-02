@@ -167,7 +167,7 @@ private:
     // The shard local key-offset map used for de-duplication during compaction.
     // This is lazily initialized when a compaction job is first ran on this
     // worker/shard.
-    std::unique_ptr<compaction::key_offset_map> _map{nullptr};
+    std::unique_ptr<compaction::hash_key_offset_map> _map{nullptr};
 
     ss::gate _gate;
 

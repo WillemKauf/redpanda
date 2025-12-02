@@ -61,6 +61,11 @@ ss::future<> compaction_worker::stop() {
 
     co_await clear_work_fut();
 
+    if (_map) {
+        co_await _map->initialize(0);
+        _map.reset();
+    }
+
     co_await std::move(close_fut);
 }
 
