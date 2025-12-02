@@ -30,6 +30,43 @@
 
 namespace cloud_topics::l1 {
 
+namespace {
+
+offset_interval_set get_removed_tombstone_ranges(
+  const offset_interval_set& removable_tombstone_ranges,
+  const offset_interval_set& processed_extents) {
+    offset_interval_set removed_tombstone_ranges;
+    auto stream = removable_tombstone_ranges.make_stream();
+    while (stream.has_next()) {
+        auto i = stream.next();
+        if (processed_extents.covers(i.base_offset, i.last_offset)) {
+            removed_tombstone_ranges.insert(i.base_offset, i.last_offset);
+        }
+    }
+    return removed_tombstone_ranges;
+}
+
+chunked_vector<metastore::compaction_update::cleaned_range>
+get_new_cleaned_ranges(
+  const chunked_vector<metastore::compaction_update::cleaned_range>&
+    maybe_cleaned_ranges,
+  const offset_interval_set& processed_extents) {
+    chunked_vector<metastore::compaction_update::cleaned_range>
+      new_cleaned_ranges;
+    new_cleaned_ranges.reserve(maybe_cleaned_ranges.size());
+    for (const auto& cleaned_range : maybe_cleaned_ranges) {
+        if (processed_extents.covers(
+              cleaned_range.base_offset, cleaned_range.last_offset)) {
+            new_cleaned_ranges.push_back(cleaned_range);
+        }
+    }
+
+    new_cleaned_ranges.shrink_to_fit();
+    return new_cleaned_ranges;
+}
+
+} // namespace
+
 compaction_sink::compaction_sink(
   model::topic_id_partition tp,
   const chunked_vector<offset_interval_set::interval>& dirty_range_intervals,
@@ -57,6 +94,8 @@ compaction_sink::initialize(compaction::sliding_window_reducer::source& src) {
         co_return false;
     }
 
+    co_await initialize_builder();
+
     auto& new_cleaned_ranges = ct_src._new_cleaned_ranges;
     new_cleaned_ranges.shrink_to_fit();
     _new_cleaned_ranges = std::move(new_cleaned_ranges);
@@ -73,74 +112,18 @@ compaction_sink::initialize(compaction::sliding_window_reducer::source& src) {
 }
 
 bool compaction_sink::needs_roll() const {
-    // TODO: This needs to consider L1 object size and what-not eventually.
-    return !_active_staging_file;
-}
-
-ss::future<> compaction_sink::commit_update_and_roll() {
     if (!_active_staging_file) {
-        co_return;
+        return true;
     }
 
-    auto active_staging_file = std::exchange(_active_staging_file, nullptr);
-    auto builder = std::exchange(_builder, nullptr);
-
-    auto object_info_fut = co_await ss::coroutine::as_future(builder->finish());
-    co_await builder->close();
-    if (object_info_fut.failed()) {
-        auto e = object_info_fut.get_exception();
-        vlogl(
-          compaction_log,
-          ssx::is_shutdown_exception(e) ? ss::log_level::warn
-                                        : ss::log_level::error,
-          "Exception creating object_info: {}. Exiting compaction early.",
-          e);
-        co_await active_staging_file->remove();
-        std::rethrow_exception(e);
-    }
-    auto object_info = object_info_fut.get();
-
-    auto [first, last] = object_info.index.partitions.equal_range(_tp);
-    vassert(
-      std::distance(first, last) == 1,
-      "Expected one partition range in builder.");
-    size_t length = 0;
-    size_t file_position = 0;
-    kafka::offset first_offset{};
-    kafka::offset last_offset{};
-    model::timestamp max_timestamp{};
-
-    for (auto it = first; it != last; ++it) {
-        length += it->second.length;
-        file_position = it->second.file_position;
-        first_offset = it->second.first_offset;
-        last_offset = it->second.last_offset;
-        max_timestamp = it->second.max_timestamp;
+    if (_builder->file_size() >= max_object_size) {
+        return true;
     }
 
-    auto ntp_md = metastore::object_metadata::ntp_metadata{
-      .tidp = _tp,
-      .base_offset = first_offset,
-      .last_offset = last_offset,
-      .max_timestamp = max_timestamp,
-      .pos = file_position,
-      .size = length};
-
-    auto out = object_output_t{
-      .ntp_md = std::move(ntp_md),
-      .info = std::move(object_info),
-      .staging_file = std::move(active_staging_file)};
-
-    _committer->push_update(std::move(out));
+    return false;
 }
 
-ss::future<> compaction_sink::maybe_roll() {
-    if (!needs_roll()) {
-        co_return;
-    }
-
-    co_await commit_update_and_roll();
-
+ss::future<> compaction_sink::initialize_builder() {
     auto staging_file_fut = co_await ss::coroutine::as_future(
       _io->create_tmp_file());
 
@@ -162,20 +145,118 @@ ss::future<> compaction_sink::maybe_roll() {
     _builder = object_builder::create(std::move(output_stream), _opts);
 
     co_await _builder->start_partition(_tp);
+}
 
-    co_return;
+ss::future<> compaction_sink::roll(bool initialize_new_builder) {
+    // 1. Push currently built L1 object & metadata to the committer.
+    if (_active_staging_file) {
+        auto active_staging_file = std::exchange(_active_staging_file, nullptr);
+        auto builder = std::exchange(_builder, nullptr);
+
+        auto object_info_fut = co_await ss::coroutine::as_future(
+          builder->finish());
+        co_await builder->close();
+        if (object_info_fut.failed()) {
+            auto e = object_info_fut.get_exception();
+            vlogl(
+              compaction_log,
+              ssx::is_shutdown_exception(e) ? ss::log_level::warn
+                                            : ss::log_level::error,
+              "Exception creating object_info: {}. Exiting compaction early.",
+              e);
+            co_await active_staging_file->remove();
+            std::rethrow_exception(e);
+        }
+
+        auto object_info = object_info_fut.get();
+        auto ntp_md = [this](const object_builder::object_info& info) {
+            auto [first, last] = info.index.partitions.equal_range(_tp);
+            vassert(
+              std::distance(first, last) == 1,
+              "Expected one partition range in builder.");
+            return metastore::object_metadata::ntp_metadata{
+              .tidp = _tp,
+              .base_offset = _object_base_offset,
+              .last_offset = _last_processed_offset,
+              .max_timestamp = first->second.max_timestamp,
+              .pos = first->second.file_position,
+              .size = first->second.length};
+        }(object_info);
+
+        auto file_and_info = file_and_md_info{
+          .staging_file = std::move(active_staging_file),
+          .info = std::move(object_info),
+          .ntp_md = std::move(ntp_md)};
+
+        // TODO: push update to committer.
+        std::ignore = std::move(file_and_info);
+
+        _object_base_offset = kafka::next_offset(_last_processed_offset);
+    }
+
+    // 2. Start new `_active_staging_file` and `_builder`.
+    if (initialize_new_builder) {
+        co_await initialize_builder();
+    }
+}
+
+ss::future<> compaction_sink::maybe_roll() {
+    if (needs_roll()) {
+        co_await roll(true);
+    }
 }
 
 ss::future<ss::stop_iteration>
 compaction_sink::operator()(model::record_batch b, model::compression c) {
+    auto prev_offset = std::max(
+      kafka::prev_offset(model::offset_cast(b.base_offset())),
+      kafka::offset{0});
+    set_last_processed_offset(prev_offset);
+
     co_await maybe_roll();
+
     if (c != model::compression::none) {
         b = co_await model::compress_batch(c, std::move(b));
     }
+
     co_await _builder->add_batch(std::move(b));
+
     co_return ss::stop_iteration::no;
 }
 
-ss::future<> compaction_sink::finalize() { co_await commit_update_and_roll(); }
+ss::future<> compaction_sink::process_next_extent_offset_bounds(
+  kafka::offset next_extent_base, kafka::offset next_extent_last) {
+    bool is_first_extent = _object_base_offset == kafka::offset{};
+    if (is_first_extent) {
+        _object_base_offset = next_extent_base;
+    } else {
+        _processed_extents.insert(_extent_base_offset, _extent_last_offset);
+        set_last_processed_offset(_extent_last_offset);
+        if (next_extent_base != kafka::next_offset(_extent_last_offset)) {
+            // Passed extents are non-contiguous. Force a roll of the
+            // currently built L1 object with previous extent's last offset.
+            co_await roll(true);
+        }
+    }
+
+    _extent_base_offset = next_extent_base;
+    _extent_last_offset = next_extent_last;
+}
+
+ss::future<> compaction_sink::finalize() {
+    _processed_extents.insert(_extent_base_offset, _extent_last_offset);
+    set_last_processed_offset(_extent_last_offset);
+
+    co_await roll(false);
+
+    auto removed_tombstone_ranges = get_removed_tombstone_ranges(
+      _removable_tombstone_ranges, _processed_extents);
+    auto new_cleaned_ranges = get_new_cleaned_ranges(
+      _new_cleaned_ranges, _processed_extents);
+
+    // TODO: finalize job with committer
+    std::ignore = std::move(removed_tombstone_ranges);
+    std::ignore = std::move(new_cleaned_ranges);
+}
 
 } // namespace cloud_topics::l1

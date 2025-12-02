@@ -39,15 +39,38 @@ public:
 
     ss::future<> finalize() final;
 
+    // Called by the `source` before batches in a new extent range are provided
+    // to the `sink`. This is an asynchronous function because the active L1
+    // object may need to be rolled, in case that the next extent range provided
+    // is non-contiguous. For example, if the extents were
+    // `[[0,10],[11,20],[21,30]]`, and the extent [11,20] was deemed ineligible
+    // for compaction (due to `min.compaction.lag.ms` or some other reason), the
+    // current L1 object composing the range [0,10] would be rolled, and a new
+    // L1 object would be started for the range [21,30].
+    ss::future<>
+      process_next_extent_offset_bounds(kafka::offset, kafka::offset);
+
 private:
+    // The target maximum L1 object size that will be built. After this
+    // threshold is breached, `needs_roll()` should return `true` and a new L1
+    // object will be started.
+    static constexpr size_t max_object_size = 128_MiB;
+
+    void set_last_processed_offset(kafka::offset o) {
+        dassert(
+          o >= _last_processed_offset,
+          "last processed offset should never attempt to move backwards.");
+        _last_processed_offset = o;
+    }
+
     // Returns `true` if the current object represented by
     // `_active_staging_file` and `_builder` should be rolled.
     bool needs_roll() const;
 
-    // Pushes the current object represented by `_active_staging_file` and
-    // `_builder` to the `_committer`. Leaves `_active_staging_file` and
-    // `_builder` as `nullptr`.
-    ss::future<> commit_update_and_roll();
+    // Initializes the `_builder` and `_active_staging_file`. Both are
+    // guaranteed to have a value (!= nullptr) after this function is called, if
+    // no exception is thrown.
+    ss::future<> initialize_builder();
 
     // Closes the existing L1 represented by `_active_staging_file` and
     // `_builder`, pushing it to the current compaction job in the `_committer`,
@@ -68,7 +91,7 @@ private:
     const offset_interval_set& _removable_tombstone_ranges;
 
     io* _io;
-    compaction_committer* _committer;
+    [[maybe_unused]] compaction_committer* _committer;
 
     const object_builder::options _opts;
 
