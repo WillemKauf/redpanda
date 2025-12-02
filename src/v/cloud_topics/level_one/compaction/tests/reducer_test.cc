@@ -14,6 +14,7 @@
 #include "cloud_topics/level_one/common/object_utils.h"
 #include "cloud_topics/level_one/compaction/committer.h"
 #include "cloud_topics/level_one/compaction/committing_policy.h"
+#include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/compaction/sink.h"
 #include "cloud_topics/level_one/compaction/source.h"
 #include "cloud_topics/level_one/compaction/tests/in_memory_sink.h"
@@ -95,7 +96,7 @@ public:
 
 class never_commit : public l1::committing_policy {
 public:
-    update_response on_update(const l1::object_output_t&) final {
+    update_response on_update(const l1::file_and_md_info&) final {
         return update_response::wait;
     }
 
