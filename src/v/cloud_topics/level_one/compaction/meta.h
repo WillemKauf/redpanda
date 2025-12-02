@@ -135,4 +135,11 @@ struct file_and_md_info {
     metastore::object_metadata::ntp_metadata ntp_md;
 };
 
+// An object ID is a unique identifier for a cloud topic compaction job.
+using compaction_job_id = named_type<uuid_t, struct l1_compaction_job_id_tag>;
+
+inline compaction_job_id create_compaction_job_id() {
+    return compaction_job_id{uuid_t::create()};
+}
+
 } // namespace cloud_topics::l1
