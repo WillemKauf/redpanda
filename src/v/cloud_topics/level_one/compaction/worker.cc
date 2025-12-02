@@ -15,9 +15,11 @@
 #include "cloud_topics/level_one/compaction/sink.h"
 #include "cloud_topics/level_one/compaction/source.h"
 #include "cloud_topics/level_one/compaction/worker_manager.h"
+#include "cluster/metadata_cache.h"
 #include "compaction/reducer.h"
 #include "config/configuration.h"
 #include "model/fundamental.h"
+#include "model/metadata.h"
 #include "ssx/future-util.h"
 
 #include <seastar/coroutine/as_future.hh>
@@ -28,7 +30,8 @@ compaction_worker::compaction_worker(
   worker_manager* worker_manager,
   io* io,
   metastore* metastore,
-  compaction_committer* committer)
+  compaction_committer* committer,
+  cluster::metadata_cache* metadata_cache)
   : _worker_update_queue([](const std::exception_ptr& ex) {
       vlog(
         compaction_log.error,
@@ -38,7 +41,8 @@ compaction_worker::compaction_worker(
   , _worker_manager(worker_manager)
   , _io(io)
   , _metastore(metastore)
-  , _committer(committer) {}
+  , _committer(committer)
+  , _metadata_cache(metadata_cache) {}
 
 ss::future<> compaction_worker::start() {
     start_work_loop();

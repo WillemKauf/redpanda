@@ -15,6 +15,7 @@
 #include "cloud_topics/level_one/compaction/meta.h"
 #include "cloud_topics/level_one/compaction/source.h"
 #include "cloud_topics/level_one/metastore/metastore.h"
+#include "cluster/metadata_cache.h"
 #include "compaction/key_offset_map.h"
 #include "ssx/work_queue.h"
 
@@ -36,7 +37,12 @@ public:
 
     // io, metastore, and committer are all passed to the compaction `source`
     // and `sink`.
-    compaction_worker(worker_manager*, io*, metastore*, compaction_committer*);
+    compaction_worker(
+      worker_manager*,
+      io*,
+      metastore*,
+      compaction_committer*,
+      cluster::metadata_cache*);
 
     // Launches background loop.
     ss::future<> start();
@@ -181,6 +187,8 @@ private:
 
     // Owned by `scheduler`.
     compaction_committer* _committer;
+
+    cluster::metadata_cache* _metadata_cache;
 };
 
 } // namespace cloud_topics::l1

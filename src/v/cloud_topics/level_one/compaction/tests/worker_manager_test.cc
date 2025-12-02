@@ -26,7 +26,8 @@ using namespace std::chrono_literals;
 class WorkerManagerTestFixture : public seastar_test {
 public:
     ss::future<> start_workers(l1::worker_manager& manager) {
-        co_await manager._workers.start(&manager, nullptr, nullptr, nullptr);
+        co_await manager._workers.start(
+          &manager, nullptr, nullptr, nullptr, nullptr);
         co_await manager._workers.invoke_on_all(&l1::compaction_worker::start);
     }
 
@@ -48,7 +49,7 @@ public:
 
 TEST_F(WorkerManagerTestFixture, PauseAndResumeWorkers) {
     l1::log_compaction_queue pq;
-    l1::worker_manager manager(pq, nullptr, nullptr, nullptr);
+    l1::worker_manager manager(pq, nullptr, nullptr, nullptr, nullptr);
     start_workers(manager).get();
     auto stop_manager = ss::defer([&manager] { manager.stop().get(); });
     using worker_state = l1::compaction_worker::worker_state;
@@ -77,7 +78,7 @@ TEST_F(WorkerManagerTestFixture, AcquireWork) {
     };
     l1::log_compaction_queue pq(std::move(cmp_func));
     l1::log_list_t list;
-    l1::worker_manager manager(pq, nullptr, nullptr, nullptr);
+    l1::worker_manager manager(pq, nullptr, nullptr, nullptr, nullptr);
     auto stop_manager = ss::defer([&manager] { manager.stop().get(); });
 
     const auto test_ntp = model::ntp(
