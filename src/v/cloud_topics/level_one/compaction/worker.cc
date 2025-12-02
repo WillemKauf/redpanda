@@ -207,7 +207,12 @@ ss::future<> compaction_worker::compact_log(log_compaction_meta* log) {
       _io,
       _as,
       _job_state);
-    auto sink = std::make_unique<compaction_sink>(_io, _committer, tidp);
+    auto sink = std::make_unique<compaction_sink>(
+      tidp,
+      dirty_range_intervals,
+      compaction_offsets.removable_tombstone_ranges,
+      _io,
+      _committer);
     auto reducer = compaction::sliding_window_reducer(
       std::move(src), std::move(sink));
 

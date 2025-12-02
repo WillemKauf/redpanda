@@ -152,7 +152,12 @@ TEST_F(ReducerTestFixture, Reducer) {
       &_io,
       as,
       state);
-    auto sink = std::make_unique<l1::compaction_sink>(&_io, &committer, tidp);
+    auto sink = std::make_unique<l1::compaction_sink>(
+      tidp,
+      dirty_range_intervals,
+      compaction_info->offsets_response.removable_tombstone_ranges,
+      &_io,
+      &committer);
     auto reducer = compaction::sliding_window_reducer(
       std::move(src), std::move(sink));
 
