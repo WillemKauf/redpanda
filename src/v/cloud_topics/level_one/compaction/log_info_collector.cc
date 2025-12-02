@@ -153,9 +153,13 @@ log_info_collector::get_logs_to_collect(
             return delete_retention_ms.has_value()
                      ? collection_timestamp
                          - model::timestamp(delete_retention_ms->count())
-                     : model::timestamp::max();
+                     : model::timestamp::min();
         }();
-        vlog(compaction_log.debug, "Sampling CTP {}", log.ntp);
+        vlog(
+          compaction_log.debug,
+          "Sampling CTP {} with tombstone removal upper bound timestamp {}",
+          log.ntp,
+          tombstone_removal_ts);
 
         to_collect.emplace_back(log.tidp, tombstone_removal_ts);
     }
@@ -207,7 +211,7 @@ void log_info_collector::populate_log_infos(
           compaction_log.debug,
           "Compaction info for CTP {} returned {}",
           log.ntp,
-          log.info_and_ts->info.dirty_ratio);
+          log.info_and_ts->info);
 
         auto topic_cfg_opt = _topic_metadata_provider->get_topic_cfg(
           model::topic_namespace_view(log.ntp));
