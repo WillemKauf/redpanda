@@ -187,7 +187,14 @@ ss::future<ss::stop_iteration> compaction_source::deduplication_iteration(
         config, _ntp, _tp, _metastore, _io));
 
     auto stats = co_await rdr.consume(
-      compaction_filter{sink, *_map, _ntp}, model::no_timeout);
+      compaction_filter{
+        sink,
+        *_map,
+        _ntp,
+        _removable_tombstone_ranges,
+        start_offset,
+        max_offset},
+      model::no_timeout);
     if (stats.has_removed_data()) {
         vlog(
           compaction_log.info,

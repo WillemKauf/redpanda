@@ -85,6 +85,7 @@ redpanda_cc_library(
         "//src/v/cloud_topics/level_one:__subpackages__",
     ],
     deps = [
+        "//src/v/cloud_topics/level_one/metastore:offset_interval_set",
         "//src/v/compaction:filter",
         "//src/v/compaction:key_offset_map",
         "//src/v/compaction:utils",
