@@ -34,11 +34,11 @@ public:
     ss::future<> stop();
 
     // Pushes an update to the queue to be committed.
-    void push_update(object_output_t);
+    void push_update(file_and_md_info);
 
 private:
     friend class ::ReducerTestFixture;
-    using updates_t = chunked_circular_buffer<object_output_t>;
+    using updates_t = chunked_circular_buffer<file_and_md_info>;
 
     struct built_object {
         model::topic_id_partition tp;
