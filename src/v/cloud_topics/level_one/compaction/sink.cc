@@ -95,6 +95,7 @@ compaction_sink::initialize(compaction::sliding_window_reducer::source& src) {
     }
 
     co_await initialize_builder();
+    _id = co_await _committer->begin_compaction_job(_tp);
 
     auto& new_cleaned_ranges = ct_src._new_cleaned_ranges;
     new_cleaned_ranges.shrink_to_fit();
@@ -102,9 +103,10 @@ compaction_sink::initialize(compaction::sliding_window_reducer::source& src) {
 
     vlog(
       compaction_log.debug,
-      "Built compaction map for tidp {}, with {} keys (max allowed "
+      "Built compaction map for tidp {}, job id {} with {} keys (max allowed "
       "{})",
       _tp,
+      _id,
       ct_src._map->size(),
       ct_src._map->capacity());
 
@@ -188,8 +190,7 @@ ss::future<> compaction_sink::roll(bool initialize_new_builder) {
           .info = std::move(object_info),
           .ntp_md = std::move(ntp_md)};
 
-        // TODO: push update to committer.
-        std::ignore = std::move(file_and_info);
+        _committer->add_l1_object(_id, std::move(file_and_info));
 
         _object_base_offset = kafka::next_offset(_last_processed_offset);
     }
@@ -244,6 +245,10 @@ ss::future<> compaction_sink::process_next_extent_offset_bounds(
 }
 
 ss::future<> compaction_sink::finalize() {
+    if (!_id()) {
+        co_return;
+    }
+
     _processed_extents.insert(_extent_base_offset, _extent_last_offset);
     set_last_processed_offset(_extent_last_offset);
 
@@ -254,9 +259,8 @@ ss::future<> compaction_sink::finalize() {
     auto new_cleaned_ranges = get_new_cleaned_ranges(
       _new_cleaned_ranges, _processed_extents);
 
-    // TODO: finalize job with committer
-    std::ignore = std::move(removed_tombstone_ranges);
-    std::ignore = std::move(new_cleaned_ranges);
+    co_await _committer->finalize_job(
+      _id, std::move(new_cleaned_ranges), std::move(removed_tombstone_ranges));
 }
 
 } // namespace cloud_topics::l1

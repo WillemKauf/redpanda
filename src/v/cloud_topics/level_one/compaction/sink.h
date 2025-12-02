@@ -90,6 +90,10 @@ private:
     const interval_vec& _dirty_range_intervals;
     const offset_interval_set& _removable_tombstone_ranges;
 
+    // The `compaction_job_id` as provided by the `compaction_committer` when
+    // the compaction job is first initialized.
+    compaction_job_id _id;
+
     io* _io;
     [[maybe_unused]] compaction_committer* _committer;
 
