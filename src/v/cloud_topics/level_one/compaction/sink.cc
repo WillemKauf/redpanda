@@ -12,11 +12,15 @@
 
 #include "bytes/iostream.h"
 #include "cloud_topics/level_one/common/object.h"
+#include "cloud_topics/level_one/compaction/committer.h"
 #include "cloud_topics/level_one/compaction/logger.h"
 #include "cloud_topics/level_one/compaction/meta.h"
+#include "cloud_topics/level_one/compaction/source.h"
+#include "cloud_topics/level_one/metastore/offset_interval_set.h"
 #include "compaction/reducer.h"
 #include "model/batch_compression.h"
 #include "model/compression.h"
+#include "model/fundamental.h"
 #include "model/timestamp.h"
 #include "ssx/future-util.h"
 
@@ -27,17 +31,44 @@
 namespace cloud_topics::l1 {
 
 compaction_sink::compaction_sink(
+  model::topic_id_partition tp,
+  const chunked_vector<offset_interval_set::interval>& dirty_range_intervals,
+  const offset_interval_set& removable_tombstone_ranges,
   io* io,
   compaction_committer* committer,
-  model::topic_id_partition tp,
   object_builder::options opts)
-  : _io(io)
+  : _tp(tp)
+  , _dirty_range_intervals(dirty_range_intervals)
+  , _removable_tombstone_ranges(removable_tombstone_ranges)
+  , _io(io)
   , _committer(committer)
-  , _tp(tp)
   , _opts(opts) {}
 
 ss::future<bool>
-compaction_sink::initialize(compaction::sliding_window_reducer::source&) {
+compaction_sink::initialize(compaction::sliding_window_reducer::source& src) {
+    auto& ct_src = static_cast<compaction_source&>(src);
+
+    bool has_removable_tombstones = !_removable_tombstone_ranges.empty();
+    bool has_dirty_ranges = !_dirty_range_intervals.empty();
+    bool should_compact = !ct_src._extents.empty()
+                          && (has_removable_tombstones || has_dirty_ranges);
+
+    if (!should_compact) {
+        co_return false;
+    }
+
+    auto& new_cleaned_ranges = ct_src._new_cleaned_ranges;
+    new_cleaned_ranges.shrink_to_fit();
+    _new_cleaned_ranges = std::move(new_cleaned_ranges);
+
+    vlog(
+      compaction_log.debug,
+      "Built compaction map for tidp {}, with {} keys (max allowed "
+      "{})",
+      _tp,
+      ct_src._map->size(),
+      ct_src._map->capacity());
+
     co_return true;
 }
 
