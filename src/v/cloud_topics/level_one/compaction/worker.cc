@@ -173,6 +173,8 @@ ss::future<> compaction_worker::compact_log(log_compaction_meta* log) {
     // Lazy initialization of offset map.
     if (!_map) {
         co_await initialize_map();
+    } else {
+        co_await _map->reset();
     }
 
     auto src = std::make_unique<compaction_source>(
