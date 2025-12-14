@@ -433,6 +433,41 @@ public:
     // Vectorized RPC for obtaining compaction state for a number of partitions.
     virtual ss::future<std::expected<compaction_info_map, errc>>
     get_compaction_infos(const chunked_vector<compaction_info_spec>&) = 0;
+
+    struct extent_metadata_response {
+        extent_metadata_vec extents{};
+        std::optional<kafka::offset> continuation_offset{std::nullopt};
+    };
+
+    // Returns a number of extents in the offset range `[start, end]`
+    // inclusively, and in ascending offset order. If not all of the extents
+    // that compose the range are returned in the `extent_metadata_response`, a
+    // `continuation_offset` will be provided for use for a future call to
+    // `get_extent_metadata_ge([co, end])`. If this `continuation_token` is
+    // empty, all extents in the range have been returned. Useful for forward
+    // iteration over an extent-aligned offset range- that is, for an extent
+    // metastore state of `[[0, 9],[10,19],[20,29]]`, and a request like
+    // `get_extent_metadata_ge([0, 15])`, the returned extents will be `[[0, 9],
+    // [10, 19]]`.
+    virtual ss::future<std::expected<extent_metadata_response, errc>>
+    get_extent_metadata_ge(
+      const model::topic_id_partition&, kafka::offset, kafka::offset, size_t)
+      = 0;
+
+    // Returns a number of extents in the offset range `[start, end]`
+    // inclusively, and in descending offset order. If not all of the extents
+    // that compose the range are returned in the `extent_metadata_response`, a
+    // `continuation_offset` will be provided for use for a future call to
+    // `get_extent_metadata_le([start, co])`. If this `continuation_token` is
+    // empty, all extents in the range have been returned. Useful for backward
+    // iteration over an extent-aligned offset range- that is, for an extent
+    // metastore state of `[[0, 9],[10,19],[20,29]]`, and a request like
+    // `get_extent_metadata_le([0, 15])`, the returned extents will be `[[10,
+    // 19], [0, 9]]`.
+    virtual ss::future<std::expected<extent_metadata_response, errc>>
+    get_extent_metadata_le(
+      const model::topic_id_partition&, kafka::offset, kafka::offset, size_t)
+      = 0;
 };
 
 } // namespace cloud_topics::l1

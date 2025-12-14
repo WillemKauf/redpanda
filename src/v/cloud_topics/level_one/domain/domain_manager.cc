@@ -582,6 +582,52 @@ domain_manager::get_compaction_infos(rpc::get_compaction_infos_request req) {
       .responses = std::move(compaction_infos)};
 }
 
+ss::future<rpc::get_extent_metadata_reply>
+domain_manager::get_extent_metadata(rpc::get_extent_metadata_request req) {
+    auto gate = maybe_gate();
+    if (!gate.has_value()) {
+        co_return rpc::get_extent_metadata_reply{
+          .ec = rpc::errc::not_leader,
+        };
+    }
+    auto sync_res = co_await stm_->sync(10s);
+    if (!sync_res.has_value()) {
+        co_return rpc::get_extent_metadata_reply{
+          .ec = convert_stm_errc(sync_res.error()),
+        };
+    }
+    auto& stm_state = stm_->state();
+
+    auto get_res = [&]() {
+        switch (req.o) {
+        case rpc::get_extent_metadata_request::order::ge:
+            return simple_metastore::get_extent_metadata_ge(
+              stm_state,
+              req.tp,
+              req.min_offset,
+              req.max_offset,
+              req.max_num_extents);
+        case rpc::get_extent_metadata_request::order::le:
+            return simple_metastore::get_extent_metadata_le(
+              stm_state,
+              req.tp,
+              req.min_offset,
+              req.max_offset,
+              req.max_num_extents);
+        }
+    }();
+
+    if (!get_res.has_value()) {
+        co_return rpc::get_extent_metadata_reply{
+          .ec = convert_metastore_errc(get_res.error()),
+        };
+    }
+    co_return rpc::get_extent_metadata_reply{
+      .ec = rpc::errc::ok,
+      .extents = meta_to_rpc_extent_metadata(std::move(get_res->extents)),
+      .continuation_offset = std::move(get_res->continuation_offset)};
+}
+
 ss::lowres_clock::duration domain_manager::gc_interval() const {
     return config::shard_local_cfg()
       .cloud_topics_long_term_garbage_collection_interval();

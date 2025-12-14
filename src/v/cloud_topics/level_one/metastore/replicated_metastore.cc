@@ -772,4 +772,74 @@ replicated_metastore::get_compaction_infos(
     co_return resp;
 }
 
+ss::future<std::expected<metastore::extent_metadata_response, metastore::errc>>
+replicated_metastore::get_extent_metadata_le(
+  const model::topic_id_partition& tidp,
+  kafka::offset min_offset,
+  kafka::offset max_offset,
+  size_t max_num_extents) {
+    static constexpr auto o = rpc::get_extent_metadata_request::order::le;
+
+    rpc::get_extent_metadata_request req;
+    req.tp = tidp;
+    req.max_offset = min_offset;
+    req.max_offset = max_offset;
+    req.max_num_extents = max_num_extents;
+    req.o = o;
+
+    auto reply_fut = co_await ss::coroutine::as_future(
+      fe_.get_extent_metadata(std::move(req)));
+    if (reply_fut.failed()) {
+        auto ex = reply_fut.get_exception();
+        vlog(cd_log.warn, "Error while sending request: {}", ex);
+        co_return std::unexpected(metastore::errc::transport_error);
+    }
+    auto reply = reply_fut.get();
+
+    if (reply.ec != rpc::errc::ok) {
+        co_return std::unexpected(rpc_to_meta_errc(reply.ec));
+    }
+
+    metastore::extent_metadata_response resp;
+    resp.extents = rpc_to_meta_extent_metadata(std::move(reply.extents));
+    resp.continuation_offset = std::move(reply.continuation_offset);
+
+    co_return resp;
+}
+
+ss::future<std::expected<metastore::extent_metadata_response, metastore::errc>>
+replicated_metastore::get_extent_metadata_ge(
+  const model::topic_id_partition& tidp,
+  kafka::offset min_offset,
+  kafka::offset max_offset,
+  size_t max_num_extents) {
+    static constexpr auto o = rpc::get_extent_metadata_request::order::ge;
+
+    rpc::get_extent_metadata_request req;
+    req.tp = tidp;
+    req.max_offset = min_offset;
+    req.max_offset = max_offset;
+    req.max_num_extents = max_num_extents;
+    req.o = o;
+
+    auto reply_fut = co_await ss::coroutine::as_future(
+      fe_.get_extent_metadata(std::move(req)));
+    if (reply_fut.failed()) {
+        auto ex = reply_fut.get_exception();
+        vlog(cd_log.warn, "Error while sending request: {}", ex);
+        co_return std::unexpected(metastore::errc::transport_error);
+    }
+    auto reply = reply_fut.get();
+
+    if (reply.ec != rpc::errc::ok) {
+        co_return std::unexpected(rpc_to_meta_errc(reply.ec));
+    }
+
+    metastore::extent_metadata_response resp;
+    resp.extents = rpc_to_meta_extent_metadata(std::move(reply.extents));
+    resp.continuation_offset = std::move(reply.continuation_offset);
+
+    co_return resp;
+}
+
 } // namespace cloud_topics::l1

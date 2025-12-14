@@ -105,6 +105,20 @@ public:
     ss::future<std::expected<compaction_info_map, errc>>
     get_compaction_infos(const chunked_vector<compaction_info_spec>&) override;
 
+    ss::future<std::expected<extent_metadata_response, errc>>
+    get_extent_metadata_le(
+      const model::topic_id_partition&,
+      kafka::offset,
+      kafka::offset,
+      size_t) override;
+
+    ss::future<std::expected<extent_metadata_response, errc>>
+    get_extent_metadata_ge(
+      const model::topic_id_partition&,
+      kafka::offset,
+      kafka::offset,
+      size_t) override;
+
 private:
     friend class domain_manager;
     static std::expected<offsets_response, errc>
@@ -133,6 +147,18 @@ private:
       const state&, const model::topic_id_partition&, model::term_id);
     static std::expected<model::term_id, errc> get_term_for_offset(
       const state&, const model::topic_id_partition&, kafka::offset);
+    static std::expected<extent_metadata_response, errc> get_extent_metadata_le(
+      const state&,
+      const model::topic_id_partition&,
+      kafka::offset,
+      kafka::offset,
+      size_t);
+    static std::expected<extent_metadata_response, errc> get_extent_metadata_ge(
+      const state&,
+      const model::topic_id_partition&,
+      kafka::offset,
+      kafka::offset,
+      size_t);
 
     state state_;
 };

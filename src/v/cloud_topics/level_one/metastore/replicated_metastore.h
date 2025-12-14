@@ -71,6 +71,20 @@ public:
     ss::future<std::expected<compaction_info_map, errc>>
     get_compaction_infos(const chunked_vector<compaction_info_spec>&) override;
 
+    ss::future<std::expected<extent_metadata_response, errc>>
+    get_extent_metadata_le(
+      const model::topic_id_partition&,
+      kafka::offset,
+      kafka::offset,
+      size_t) override;
+
+    ss::future<std::expected<extent_metadata_response, errc>>
+    get_extent_metadata_ge(
+      const model::topic_id_partition&,
+      kafka::offset,
+      kafka::offset,
+      size_t) override;
+
 private:
     leader_router& fe_;
 };

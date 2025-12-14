@@ -64,6 +64,9 @@ public:
     ss::future<rpc::get_compaction_infos_reply>
       get_compaction_infos(rpc::get_compaction_infos_request);
 
+    ss::future<rpc::get_extent_metadata_reply>
+      get_extent_metadata(rpc::get_extent_metadata_request);
+
 private:
     std::optional<ss::gate::holder> maybe_gate();
     ss::future<> gc_loop();
