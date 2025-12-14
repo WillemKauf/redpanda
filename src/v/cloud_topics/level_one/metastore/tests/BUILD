@@ -138,3 +138,19 @@ redpanda_cc_gtest(
         "@googletest//:gtest",
     ],
 )
+
+redpanda_cc_gtest(
+    name = "extent_metadata_reader_test",
+    timeout = "short",
+    srcs = [
+        "extent_metadata_reader_test.cc",
+    ],
+    deps = [
+        ":builders",
+        "//src/v/cloud_topics/level_one/common:object_id",
+        "//src/v/cloud_topics/level_one/metastore:extent_metadata_reader",
+        "//src/v/cloud_topics/level_one/metastore:simple",
+        "//src/v/test_utils:gtest",
+        "@googletest//:gtest",
+    ],
+)
