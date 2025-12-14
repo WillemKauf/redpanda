@@ -540,14 +540,6 @@ simple_metastore::get_compaction_offsets(
     auto& prt = prt_ref->get();
     compaction_offsets_response resp;
 
-    resp.extents.reserve(prt.extents.size());
-    for (const auto& extent : prt.extents) {
-        resp.extents.push_back(
-          {.base_offset = extent.base_offset,
-           .last_offset = extent.last_offset,
-           .max_timestamp = extent.max_timestamp});
-    }
-
     if (prt.start_offset >= prt.next_offset) {
         // The log is empty, nothing to compact.
         return resp;
