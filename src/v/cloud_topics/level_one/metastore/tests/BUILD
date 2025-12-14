@@ -1,4 +1,16 @@
-load("//bazel:test.bzl", "redpanda_cc_gtest")
+load("//bazel:test.bzl", "redpanda_cc_gtest", "redpanda_test_cc_library")
+
+redpanda_test_cc_library(
+    name = "builders",
+    hdrs = [
+        "builders.h",
+    ],
+    deps = [
+        "//src/v/cloud_topics/level_one/common:object_id",
+        "//src/v/cloud_topics/level_one/metastore:metastore",
+        "@seastar",
+    ],
+)
 
 redpanda_cc_gtest(
     name = "simple_metastore_test",
@@ -7,6 +19,7 @@ redpanda_cc_gtest(
         "simple_metastore_test.cc",
     ],
     deps = [
+        ":builders",
         "//src/v/cloud_topics/level_one/common:object_id",
         "//src/v/cloud_topics/level_one/metastore:simple",
         "//src/v/test_utils:gtest",
