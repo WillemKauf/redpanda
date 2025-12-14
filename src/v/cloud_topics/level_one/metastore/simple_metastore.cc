@@ -592,6 +592,7 @@ std::expected<double, metastore::errc> simple_metastore::get_dirty_ratio(
     auto prt_ref = state.partition_state(tp);
 
     if (!prt_ref.has_value()) {
+        vlog(cd_log.debug, "Partition {} not tracked", tp);
         return std::unexpected(errc::missing_ntp);
     }
 
@@ -631,6 +632,7 @@ simple_metastore::get_earliest_dirty_ts(
     auto prt_ref = state.partition_state(tp);
 
     if (!prt_ref.has_value()) {
+        vlog(cd_log.debug, "Partition {} not tracked", tp);
         return std::unexpected(errc::missing_ntp);
     }
 
@@ -671,6 +673,7 @@ simple_metastore::get_compaction_epoch(
     auto prt_ref = state.partition_state(tp);
 
     if (!prt_ref.has_value()) {
+        vlog(cd_log.debug, "Partition {} not tracked", tp);
         return std::unexpected(errc::missing_ntp);
     }
 
