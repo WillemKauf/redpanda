@@ -168,7 +168,9 @@ public:
         // or when the job is marked as `finalized`.
         ssx::semaphore _upload_sem;
         ss::abort_source _as;
-        ss::condition_variable _upload_cv;
+        // Condition variable that is signalled when the last L1 object has been
+        // uploaded, and awaited upon within `await_inflight_uploads()`.
+        ss::condition_variable _last_upload_scheduled;
 
         compaction_committer* _committer;
         io* _io;

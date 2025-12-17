@@ -99,7 +99,7 @@ ss::future<> compaction_committer::compaction_job::finalize(
 void compaction_committer::compaction_job::cancel_job() {
     _as.request_abort();
     _upload_sem.broken();
-    _upload_cv.broken();
+    _last_upload_scheduled.broken();
     _metadata_builder_mutex.broken();
 }
 
@@ -135,7 +135,7 @@ ss::future<> compaction_committer::compaction_job::upload_loop() {
         }
     }
 
-    _upload_cv.signal();
+    _last_upload_scheduled.signal();
 }
 
 void compaction_committer::compaction_job::start_upload_loop() {
@@ -246,7 +246,7 @@ void compaction_committer::compaction_job::upload_some() {
 
 ss::future<std::optional<ss::sstring>>
 compaction_committer::compaction_job::await_inflight_uploads() {
-    co_await _upload_cv.wait();
+    co_await _last_upload_scheduled.wait();
 
     auto inflight_uploads = std::exchange(_inflight_uploads, {});
 
