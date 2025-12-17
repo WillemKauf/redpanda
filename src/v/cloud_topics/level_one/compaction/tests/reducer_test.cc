@@ -108,7 +108,6 @@ ss::future<> do_compact(
       tidp,
       dirty_range_intervals,
       offsets_response.removable_tombstone_ranges,
-      l1::metastore::extent_metadata_vec{},
       &map,
       min_compaction_lag_ms,
       metastore,

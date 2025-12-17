@@ -200,7 +200,6 @@ ss::future<> compaction_worker::compact_log(log_compaction_meta* log) {
       tidp,
       dirty_range_intervals,
       compaction_offsets.removable_tombstone_ranges,
-      metastore::extent_metadata_vec{},
       _map.get(),
       min_lag_ms,
       _metastore,
