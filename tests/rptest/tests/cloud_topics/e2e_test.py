@@ -271,41 +271,16 @@ class EndToEndCloudTopicsTxTest(EndToEndCloudTopicsBase):
         self.wait_until_all_reconciled(self.topics, transactions=True)
 
 
-class EndToEndCloudTopicsCompactionTest(EndToEndCloudTopicsBase):
-    """Cloud topics end-to-end test with a compacted topic."""
-
-    topics = (
-        TopicSpec(
-            name=EndToEndCloudTopicsBase.s3_topic_name,
-            partition_count=1,
-            replication_factor=3,
-            cleanup_policy=TopicSpec.CLEANUP_COMPACT,
-            min_cleanable_dirty_ratio=0.0,
-            delete_retention_ms=3000,
-        ),
-    )
-    kgo_producer: KgoVerifierProducer
-    kgo_consumer: KgoVerifierSeqConsumer
-
-    def __init__(self, test_context):
-        key_map_memory_kb = test_context.injected_args[
-            "storage_compaction_key_map_memory_kb"
-        ]
-        extra_rp_conf = {
-            "log_compaction_interval_ms": 4000,
-            "storage_compaction_key_map_memory": key_map_memory_kb * 1024,
-        }
-        environment = {"__REDPANDA_TEST_DISABLE_BOUNDED_PROPERTY_CHECKS": "ON"}
-        super(EndToEndCloudTopicsCompactionTest, self).__init__(
+class EndToEndCloudTopicsCompactionBase(EndToEndCloudTopicsBase):
+    def __init__(self, test_context, extra_rp_conf={}, environment={}):
+        super().__init__(
             test_context,
             extra_rp_conf,
             environment,
         )
-        self.msg_size = 4096
-        # Use a smaller message count to prevent timeouts
-        self.msg_count = 1000
-        self.key_set_cardinality = 100
-        self.tombstone_probability = 0.5
+
+        self.producer = None
+        self.consumer = None
 
     def _metric_sum(self, metric_name):
         assert self.redpanda
@@ -320,6 +295,11 @@ class EndToEndCloudTopicsCompactionTest(EndToEndCloudTopicsBase):
             "vectorized_cloud_topics_compaction_worker_records_removed"
         )
 
+    def get_removed_tombstones(self):
+        return self._metric_sum(
+            "vectorized_cloud_topics_compaction_worker_tombstones_removed"
+        )
+
     def get_log_compactions(self):
         return self._metric_sum(
             "vectorized_cloud_topics_compaction_scheduler_log_compactions"
@@ -331,8 +311,8 @@ class EndToEndCloudTopicsCompactionTest(EndToEndCloudTopicsBase):
         )
 
     def produce(self):
-        assert self.redpanda
-        assert self.topic
+        if self.producer:
+            self.producer.free()
         try:
             self.producer = KgoVerifierProducer(
                 self.test_context,
@@ -345,15 +325,15 @@ class EndToEndCloudTopicsCompactionTest(EndToEndCloudTopicsBase):
                 validate_latest_values=True,
                 tolerate_failed_produce=True,
             )
-            self.producer.start()
-            self.producer.wait_for_latest_value_map()
-            self.producer.wait()
+            self.producer.start(clean=True)
+            self.producer.wait(timeout_sec=2400)
         finally:
             self.producer.stop()
 
     def consume(self):
+        assert self.producer
+        assert self.test_context
         assert self.redpanda
-        assert self.topic
         traffic_node = self.producer.nodes[0]
         try:
             self.consumer = KgoVerifierSeqConsumer(
@@ -367,24 +347,51 @@ class EndToEndCloudTopicsCompactionTest(EndToEndCloudTopicsBase):
                 nodes=[traffic_node],
             )
             self.consumer.start(clean=False)
-            self.consumer.wait()
+            self.consumer.wait(timeout_sec=2400)
         finally:
             self.consumer.stop()
+        return True
 
-    @cluster(num_nodes=4)
-    @matrix(storage_compaction_key_map_memory_kb=[3, 10, 128 * 1024])
-    def test_compact(self, storage_compaction_key_map_memory_kb):
+    def wait_for_managed_logs(self, num_expected_logs):
         def seen_managed_logs():
-            return self.get_managed_logs() > 0
+            managed_logs = self.get_managed_logs()
+            self.logger.info(f"Saw {managed_logs=}")
+            return managed_logs >= num_expected_logs
 
         wait_until(
             seen_managed_logs,
             timeout_sec=60,
             backoff_sec=1,
-            err_msg="Did not see management of compact-enabled CTPs.",
+            err_msg=f"Did not see management of {num_expected_logs} compact-enabled CTPs.",
         )
 
-        num_rounds = 1
+    def wait_for_compacted_log(self):
+        wait_until(
+            self.consume,
+            timeout_sec=300,
+            backoff_sec=5,
+            err_msg="Did not see a fully compacted CTP log.",
+            retry_on_exc=True,
+        )
+
+    def wait_for_removed_tombstones(self):
+        def seen_removed_tombstones():
+            removed_tombstones = self.get_removed_tombstones()
+            self.logger.info(f"Saw {removed_tombstones=}")
+            return removed_tombstones > 0
+
+        wait_until(
+            seen_removed_tombstones,
+            timeout_sec=60,
+            backoff_sec=1,
+            err_msg="Did not see removal of tombstones from compacted logs.",
+        )
+
+    def do_test_compact(self, num_rounds=3):
+        assert self.topics is not None
+
+        self.wait_for_managed_logs(self.topics[0].partition_count)
+
         self.prev_log_compactions = 0
         self.prev_removed_records = 0
         for i in range(0, num_rounds):
@@ -392,6 +399,7 @@ class EndToEndCloudTopicsCompactionTest(EndToEndCloudTopicsBase):
 
             def seen_compaction():
                 log_compactions = self.get_log_compactions()
+                self.logger.info(f"Saw {log_compactions=}")
                 res = log_compactions > self.prev_log_compactions
                 self.prev_log_compactions = log_compactions
                 return res
@@ -405,6 +413,7 @@ class EndToEndCloudTopicsCompactionTest(EndToEndCloudTopicsBase):
 
             def seen_removed_records():
                 removed_records = self.get_removed_records()
+                self.logger.info(f"Saw {removed_records=}")
                 res = removed_records > self.prev_removed_records
                 self.prev_removed_records = removed_records
                 return res
@@ -416,16 +425,48 @@ class EndToEndCloudTopicsCompactionTest(EndToEndCloudTopicsBase):
                 err_msg="Did not see removed records during compaction of CTPs.",
             )
 
-            def consumed_latest_values():
-                try:
-                    self.consume()
-                    return True
-                except Exception:
-                    return False
+            self.wait_for_compacted_log()
+            print(f"We did round {i}")
 
-            wait_until(
-                consumed_latest_values,
-                timeout_sec=360,
-                backoff_sec=1,
-                err_msg="Did not see a fully compacted CTP log.",
-            )
+        if self.tombstone_probability > 0:
+            self.wait_for_removed_tombstones()
+
+
+class EndToEndCloudTopicsCompactionTest(EndToEndCloudTopicsCompactionBase):
+    """Cloud topics end-to-end test with a compacted topic."""
+
+    topics = (
+        TopicSpec(
+            name=EndToEndCloudTopicsBase.s3_topic_name,
+            partition_count=1,
+            replication_factor=3,
+            cleanup_policy=TopicSpec.CLEANUP_COMPACT,
+            min_cleanable_dirty_ratio=0.0,
+            delete_retention_ms=3000,
+        ),
+    )
+
+    def __init__(self, test_context):
+        key_map_memory_kb = test_context.injected_args[
+            "storage_compaction_key_map_memory_kb"
+        ]
+        extra_rp_conf = {
+            "log_compaction_interval_ms": 4000,
+            "storage_compaction_key_map_memory": key_map_memory_kb * 1024,
+        }
+        environment = {"__REDPANDA_TEST_DISABLE_BOUNDED_PROPERTY_CHECKS": "ON"}
+        super().__init__(
+            test_context,
+            extra_rp_conf,
+            environment,
+        )
+
+        self.msg_size = 4096
+        self.msg_count = 1000
+        self.key_set_cardinality = 100
+        self.tombstone_probability = 0.5
+
+    @cluster(num_nodes=4)
+    @matrix(storage_compaction_key_map_memory_kb=[3, 10, 128 * 1024])
+    def test_compact(self, storage_compaction_key_map_memory_kb):
+        self.do_test_compact()
