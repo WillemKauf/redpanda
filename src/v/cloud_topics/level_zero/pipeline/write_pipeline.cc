@@ -44,7 +44,7 @@ size_t get_cloud_topics_l0_write_path_memory() {
     return memory_groups().cloud_topics_memory() > 0
              // Split memory in half between read and write path.
              // TODO: take L1 into account.
-             ? memory_groups().cloud_topics_memory() / 2
+             ? memory_groups().cloud_topics_memory() * 10
              : max_memory_when_disabled;
 }
 } // namespace
