@@ -363,6 +363,13 @@ class KgoVerifierService(Service):
             try:
                 if self.is_running(node):
                     self._remote(node, "print_stack")
+                else:
+                    if self._status_thread is not None:
+                        self.status_thread.shutdown()
+                        self._status_thread = None
+                    self._release_port()
+                    self._stopped = True
+
             except Exception as e:
                 self._redpanda.logger.warning(
                     f"{self.who_am_i()} failed to print stacks during wait failure: {e}"
