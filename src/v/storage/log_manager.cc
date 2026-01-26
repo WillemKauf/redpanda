@@ -54,6 +54,7 @@
 #include <seastar/core/semaphore.hh>
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/core/thread.hh>
+#include <seastar/core/timer.hh>
 #include <seastar/core/with_scheduling_group.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 #include <seastar/coroutine/parallel_for_each.hh>
@@ -70,8 +71,19 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <ranges>
 
 using namespace std::chrono_literals;
+
+namespace {
+
+class priority_compaction_exception final : public std::runtime_error {
+public:
+    explicit priority_compaction_exception(const std::string& msg)
+      : std::runtime_error(msg) {}
+};
+
+} // namespace
 
 namespace storage {
 using logs_type = absl::flat_hash_map<model::ntp, log_housekeeping_meta>;
@@ -252,8 +264,8 @@ log_manager::housekeeping_scan(model::timestamp collection_threshold) {
 
     if (
       config::shard_local_cfg().log_compaction_use_sliding_window.value()
-      && !_compaction_hash_key_map && !_logs_list.empty()
-      && is_not_set(_logs_list.front().flags, bflags::compacted)) {
+      && !_compaction_hash_key_map
+      && (!_logs_list.empty() || !_priority_logs_list.empty())) {
         auto compaction_mem_bytes
           = memory_groups().compaction_reserved_memory();
         auto compaction_map
@@ -264,6 +276,9 @@ log_manager::housekeeping_scan(model::timestamp collection_threshold) {
 
     sort_logs_by_compaction_heuristic(_logs_list);
 
+    // Housekeep priority partitions first.
+    co_await priority_housekeeping_scan(collection_threshold);
+
     while (
       !_logs_list.empty()
       && is_not_set(_logs_list.front().flags, bflags::compaction_checked)) {
@@ -271,8 +286,20 @@ log_manager::housekeeping_scan(model::timestamp collection_threshold) {
             co_return;
         }
 
-        auto& current_log = _logs_list.front();
+        // Before each regular housekeeping application, housekeep any priority
+        // logs that need it. This ensures priority partitions (e.g.
+        // __consumer_offsets) are not starved by long-running compactions.
+        if (priority_logs_need_compaction()) {
+            co_await priority_housekeeping_scan(collection_threshold);
+        }
 
+        // Re-check log list size before accessing front() after the above
+        // scheduling point.
+        if (_logs_list.empty()) {
+            co_return;
+        }
+
+        auto& current_log = _logs_list.front();
         _logs_list.shift_forward();
 
         current_log.flags |= bflags::compaction_checked;
@@ -309,7 +336,44 @@ log_manager::housekeeping_scan(model::timestamp collection_threshold) {
             continue;
         }
 
-        co_await do_housekeeping(current_log, collection_threshold);
+        // Set up timer-based preemption: if compaction exceeds the configured
+        // timeout and a priority partition needs compaction, abort so priority
+        // partitions can be serviced. If no priority partition needs
+        // compaction, rearm the timer to check on a shorter interval to check
+        // more frequently after `log_compaction_max_priority_wait_ms` has
+        // already passed.
+        ss::abort_source preempt_as;
+        const auto& ntp = current_log.handle->config().ntp();
+        auto timeout
+          = config::shard_local_cfg().log_compaction_max_priority_wait_ms();
+        ss::timer<ss::lowres_clock> preempt_timer;
+        preempt_timer.set_callback(
+          [this, &preempt_as, &ntp, &preempt_timer, timeout] {
+              bool priority_needs_compaction = priority_logs_need_compaction();
+              if (priority_needs_compaction) {
+                  vlog(
+                    gclog.info,
+                    "{}: compaction exceeded {}ms, preempting for priority "
+                    "partitions",
+                    ntp,
+                    timeout.count());
+                  preempt_as.request_abort_ex(priority_compaction_exception(
+                    "Compaction pre-empted for compaction of priority "
+                    "partition"));
+              } else {
+                  // Rearm at a fraction of the initial timeout
+                  preempt_timer.arm(timeout / 8);
+              }
+          });
+        preempt_timer.arm(timeout);
+
+        try {
+            co_await do_housekeeping(
+              current_log, collection_threshold, preempt_as);
+        } catch (const priority_compaction_exception& e) {
+            // Preempted for priority partition compaction.
+            vlog(gclog.info, "{} - {}", ntp, e);
+        }
     }
 }
 
@@ -613,6 +677,69 @@ void log_manager::sort_logs_by_compaction_heuristic(
     }
 }
 
+bool log_manager::is_priority_ntp(const model::ntp& ntp) const {
+    return model::is_consumer_offsets_topic(ntp);
+}
+
+bool log_manager::priority_logs_need_compaction() const {
+    return std::ranges::any_of(_priority_logs_list, [](const auto& l) {
+        return l.handle->needs_compaction();
+    });
+}
+
+ss::future<>
+log_manager::priority_housekeeping_scan(model::timestamp collection_threshold) {
+    // reset flags for the next two loops, segment_ms and compaction.
+    clear_log_meta_flags(_priority_logs_list);
+
+    co_await apply_segment_ms_to_logs(_priority_logs_list);
+
+    if (_abort_source.abort_requested()) {
+        co_return;
+    }
+
+    sort_logs_by_compaction_heuristic(_priority_logs_list);
+
+    while (!_priority_logs_list.empty()
+           && is_not_set(
+             _priority_logs_list.front().flags, bflags::compaction_checked)) {
+        if (_abort_source.abort_requested()) {
+            co_return;
+        }
+
+        auto& current_log = _priority_logs_list.front();
+        _priority_logs_list.shift_forward();
+
+        current_log.flags |= bflags::compaction_checked;
+
+        auto gate = current_log.housekeeping_gate.hold();
+
+        if (is_not_set(current_log.flags, bflags::should_compact)) {
+            // Still perform gc() here.
+            auto units = current_log.housekeeping_lock.try_get_units();
+            if (units.has_value()) {
+                co_await current_log.handle->gc(
+                  gc_config(collection_threshold, _config.retention_bytes()));
+            }
+
+            continue;
+        }
+
+        if (!current_log.link.is_linked()) {
+            continue;
+        }
+
+        auto housekeeping_lock_holder
+          = co_await current_log.housekeeping_lock.get_units();
+
+        if (!current_log.link.is_linked()) {
+            continue;
+        }
+
+        co_await do_housekeeping(current_log, collection_threshold);
+    }
+}
+
 ss::future<> log_manager::do_housekeeping(
   log_housekeeping_meta& meta,
   model::timestamp collection_threshold,
@@ -835,7 +962,18 @@ ss::future<ss::shared_ptr<log>> log_manager::do_manage(
       std::move(translator_batch_types));
     auto [it, success] = _logs.emplace(
       l->config().ntp(), std::make_unique<log_housekeeping_meta>(l));
-    _logs_list.push_back(*it->second);
+
+    // Add to appropriate list based on whether this is a priority NTP.
+    if (is_priority_ntp(l->config().ntp())) {
+        _priority_logs_list.push_back(*it->second);
+        vlog(
+          stlog.debug,
+          "Tracking {} as priority partition for compaction",
+          l->config().ntp());
+    } else {
+        _logs_list.push_back(*it->second);
+    }
+
     update_log_count();
     vassert(success, "Could not keep track of:{} - concurrency issue", l);
     co_return l;
