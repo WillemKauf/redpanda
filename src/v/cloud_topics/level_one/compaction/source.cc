@@ -50,14 +50,16 @@ public:
             b = co_await model::decompress_batch(b);
         }
 
-        co_await b.for_each_record_async(
-          [this, base_offset = b.base_offset()](
-            const model::record& r) -> ss::future<ss::stop_iteration> {
-              if (r.is_tombstone()) {
-                  _range_has_tombstones = true;
-              }
-              return maybe_index_record_in_map(r, base_offset);
-          });
+        auto record_count = b.record_count();
+        auto base_offset = b.base_offset();
+        auto parser = iobuf_parser(std::move(b).release_data());
+        for (int32_t i = 0; i < record_count; ++i) {
+            auto r = model::parse_one_record_from_buffer(parser);
+            if (r.is_tombstone()) {
+                _range_has_tombstones = true;
+            }
+            co_await maybe_index_record_in_map(r, base_offset);
+        }
 
         if (_map_is_full) {
             co_return ss::stop_iteration::yes;
