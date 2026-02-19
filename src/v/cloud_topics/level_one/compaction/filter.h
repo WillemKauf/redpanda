@@ -26,15 +26,15 @@ public:
 
 private:
     ss::future<bool>
-    should_keep(const model::record_batch&, const model::record&) const;
+    should_keep(const model::record_batch_header&, const model::record&) const;
 
     ss::future<> maybe_index_offset_delta(
-      const model::record_batch&,
+      const model::record_batch_header&,
       const model::record&,
       std::vector<int32_t>&) const;
 
-    ss::future<std::vector<int32_t>>
-    compute_offset_deltas_to_keep(const model::record_batch&) const final;
+    ss::future<std::vector<int32_t>> compute_offset_deltas_to_keep(
+      const model::record_batch_header&, iobuf) const final;
 
     ss::future<std::optional<model::record_batch>>
       filter_batch_with_offset_deltas(

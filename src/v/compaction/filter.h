@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include "bytes/iobuf.h"
 #include "compaction/reducer.h"
 #include "compaction/types.h"
 #include "model/fundamental.h"
@@ -52,8 +53,9 @@ private:
     // For a given batch, this function should return a vector containing offset
     // deltas from records in the batch which we intend on keeping when
     // performing record batch filtering.
-    virtual ss::future<std::vector<int32_t>>
-    compute_offset_deltas_to_keep(const model::record_batch& b) const = 0;
+    virtual ss::future<std::vector<int32_t>> compute_offset_deltas_to_keep(
+      const model::record_batch_header& hdr, iobuf records) const
+      = 0;
 
     // For most implementations, this should serve as a pass through function to
     // `do_filter_batch()`. However, it provides flexibility in examining the

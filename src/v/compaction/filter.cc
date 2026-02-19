@@ -12,8 +12,10 @@
 #include "compaction/utils.h"
 #include "model/batch_compression.h"
 #include "model/record.h"
+#include "model/record_utils.h"
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 #include <vector>
 
@@ -36,12 +38,20 @@ filter::filter_batch(model::record_batch b) const {
         co_return std::move(b);
     }
 
+    // Decompose the batch so we can share the data for zero-copy parsing.
+    auto hdr = b.header();
+    auto data = std::move(b).release_data();
+
     // compute which records to keep
-    std::vector<int32_t> offset_deltas = co_await compute_offset_deltas_to_keep(
-      b);
+    std::vector<int32_t> offset_deltas
+      = co_await compute_offset_deltas_to_keep(hdr, data.share());
+
+    // Reconstruct the batch for filtering.
+    auto batch = model::record_batch(
+      hdr, std::move(data), model::record_batch::tag_ctor_ng{});
 
     auto ret = co_await filter_batch_with_offset_deltas(
-      std::move(b), std::move(offset_deltas));
+      std::move(batch), std::move(offset_deltas));
     co_return ret;
 }
 
@@ -62,31 +72,24 @@ ss::future<std::optional<model::record_batch>> filter::do_filter_batch(
     int32_t rec_count = 0;
     std::optional<int64_t> first_timestamp_delta;
     int64_t last_timestamp_delta;
-    co_await b.for_each_record_async([&rec_count,
-                                      &first_timestamp_delta,
-                                      &last_timestamp_delta,
-                                      &ret,
-                                      &offset_deltas](model::record record) {
-        // contains the key
-        if (std::count(
-              offset_deltas.begin(),
-              offset_deltas.end(),
-              record.offset_delta())) {
-            /*
-             * TODO when we further optimize lazy record materialization ot
-             * make use of views we can avoid this re-encoding by copying or
-             * sharing the view. either way, we were building
-             * record batch with the uncompressed records so they were being
-             * re-encoded.
-             */
-            if (!first_timestamp_delta) {
-                first_timestamp_delta = record.timestamp_delta();
+    {
+        iobuf_const_parser parser(b.data());
+        for (int32_t i = 0; i < b.record_count(); ++i) {
+            auto record = model::parse_one_record_copy_from_buffer(parser);
+            if (std::count(
+                  offset_deltas.begin(),
+                  offset_deltas.end(),
+                  record.offset_delta())) {
+                if (!first_timestamp_delta) {
+                    first_timestamp_delta = record.timestamp_delta();
+                }
+                last_timestamp_delta = record.timestamp_delta();
+                model::append_record_to_buffer(ret, record);
+                ++rec_count;
             }
-            last_timestamp_delta = record.timestamp_delta();
-            model::append_record_to_buffer(ret, record);
-            ++rec_count;
+            co_await ss::coroutine::maybe_yield();
         }
-    });
+    }
 
     if (rec_count == 0) {
         co_return std::nullopt;

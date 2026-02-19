@@ -13,6 +13,7 @@
 #include "compaction/utils.h"
 #include "model/fundamental.h"
 #include "model/record.h"
+#include "model/record_utils.h"
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/future.hh>
@@ -32,40 +33,41 @@ compaction_filter::compaction_filter(
   , _removable_tombstone_ranges(removable_tombstone_ranges) {}
 
 ss::future<bool> compaction_filter::should_keep(
-  const model::record_batch& b, const model::record& r) const {
+  const model::record_batch_header& hdr, const model::record& r) const {
     if (r.is_tombstone()) {
         auto o = model::offset_cast(
-          b.base_offset() + model::offset_delta(r.offset_delta()));
+          hdr.base_offset + model::offset_delta(r.offset_delta()));
         if (_removable_tombstone_ranges.contains(o)) {
             ++_stats.expired_tombstones_discarded;
             co_return false;
         }
     }
 
-    auto keep = co_await compaction::is_latest_record_for_key(_map, b, r);
+    auto keep = co_await compaction::is_latest_record_for_key(_map, hdr, r);
 
     co_return keep;
 }
 
 ss::future<> compaction_filter::maybe_index_offset_delta(
-  const model::record_batch& b,
+  const model::record_batch_header& hdr,
   const model::record& r,
   std::vector<int32_t>& offset_deltas) const {
-    if (co_await should_keep(b, r)) {
+    if (co_await should_keep(hdr, r)) {
         offset_deltas.push_back(r.offset_delta());
     }
 }
 
 ss::future<std::vector<int32_t>>
 compaction_filter::compute_offset_deltas_to_keep(
-  const model::record_batch& b) const {
+  const model::record_batch_header& hdr, iobuf records) const {
     std::vector<int32_t> offset_deltas;
-    offset_deltas.reserve(b.record_count());
+    offset_deltas.reserve(hdr.record_count);
 
-    co_await b.for_each_record_async(
-      [this, &b, &offset_deltas](const model::record& r) {
-          return maybe_index_offset_delta(b, r, offset_deltas);
-      });
+    iobuf_parser parser(std::move(data));
+    for (int32_t i = 0; i < hdr.record_count; ++i) {
+        auto record = model::parse_one_record_from_buffer(parser);
+        co_await maybe_index_offset_delta(hdr, record, offset_deltas);
+    }
 
     co_return offset_deltas;
 }

@@ -17,6 +17,7 @@
 #include "compaction/utils.h"
 #include "container/chunked_circular_buffer.h"
 #include "model/fundamental.h"
+#include "model/record_utils.h"
 
 #include <seastar/core/coroutine.hh>
 
@@ -35,23 +36,24 @@ public:
 
 private:
     ss::future<> maybe_index_offset_delta(
-      const model::record_batch& b,
+      const model::record_batch_header& hdr,
       const model::record& r,
       std::vector<int32_t>& offset_deltas) const {
-        if (co_await is_latest_record_for_key(_map, b, r)) {
+        if (co_await is_latest_record_for_key(_map, hdr, r)) {
             offset_deltas.push_back(r.offset_delta());
         }
     }
 
-    ss::future<std::vector<int32_t>>
-    compute_offset_deltas_to_keep(const model::record_batch& b) const final {
+    ss::future<std::vector<int32_t>> compute_offset_deltas_to_keep(
+      const model::record_batch_header& hdr, iobuf records) const final {
         std::vector<int32_t> offset_deltas;
-        offset_deltas.reserve(b.record_count());
+        offset_deltas.reserve(hdr.record_count);
 
-        co_await b.for_each_record_async(
-          [this, &b, &offset_deltas](const model::record& r) {
-              return maybe_index_offset_delta(b, r, offset_deltas);
-          });
+        iobuf_parser parser(std::move(records));
+        for (int32_t i = 0; i < hdr.record_count; ++i) {
+            auto record = model::parse_one_record_from_buffer(parser);
+            co_await maybe_index_offset_delta(hdr, record, offset_deltas);
+        }
 
         co_return offset_deltas;
     }
