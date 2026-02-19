@@ -10,6 +10,7 @@
 #include "storage/compaction_reducers.h"
 
 #include "base/vlog.h"
+#include "bytes/iobuf_parser.h"
 #include "compaction/key.h"
 #include "compaction/utils.h"
 #include "model/batch_compression.h"
@@ -26,6 +27,7 @@
 
 #include <seastar/core/future.hh>
 #include <seastar/core/loop.hh>
+#include <seastar/coroutine/maybe_yield.hh>
 
 #include <boost/range/irange.hpp>
 
@@ -170,36 +172,38 @@ copy_data_segment_reducer::filter(model::record_batch batch) {
         co_return std::move(batch);
     }
 
+    auto record_count = batch.record_count();
+    auto batch_header = std::move(batch.header());
+    auto batch_data = std::move(batch).release_data();
+
     // 1. compute which records to keep
     std::vector<int32_t> offset_deltas;
-    offset_deltas.reserve(batch.record_count());
-
-    int32_t records_seen = 0;
-    co_await batch.for_each_record_async(
-      [this, &batch, &offset_deltas, &records_seen](const model::record& r) {
-          ++records_seen;
-          return maybe_keep_offset(
-            batch.header(),
-            r,
-            batch.record_count() == records_seen,
-            offset_deltas);
-      });
+    offset_deltas.reserve(record_count);
+    {
+        auto parser = iobuf_parser(batch_data.share());
+        for (int32_t i = 0; i < record_count; ++i) {
+            auto record = model::parse_one_record_from_buffer(parser);
+            bool is_last_record_in_batch = i == record_count - 1;
+            co_await maybe_keep_offset(
+              batch_header, record, is_last_record_in_batch, offset_deltas);
+        }
+    }
 
     if (offset_deltas.empty() && _compaction_placeholder_enabled) {
         auto is_batch_in_idempotent_window
-          = _stm_mgr->is_batch_in_idempotent_window(batch.header());
+          = _stm_mgr->is_batch_in_idempotent_window(batch_header);
         if (is_last_batch_in_segment || is_batch_in_idempotent_window) {
             // last batch in the segment or for the producer has been compacted
             // away. This is most likely caused by aborted data batches getting
             // compacted away during self compaction of the segment if they are
             // the last batch in the segment. We install a placeholder batch of
             // same size to retain contiguousness of the offset space.
-            auto placeholder = make_placeholder_batch(batch.header());
+            auto placeholder = make_placeholder_batch(batch_header);
             vlog(
               gclog.debug,
               "installing a placeholder {} for compacted batch: {}",
               placeholder,
-              batch);
+              batch_header);
             co_return placeholder;
         }
     }
@@ -210,21 +214,24 @@ copy_data_segment_reducer::filter(model::record_batch batch) {
     }
 
     // 3. keep all records
-    if (offset_deltas.size() == static_cast<size_t>(batch.record_count())) {
-        auto& header = batch.header();
+    if (offset_deltas.size() == static_cast<size_t>(record_count)) {
         if (
-          header.type == model::record_batch_type::raft_data
-          && header.attrs.is_transactional() && !header.attrs.is_control()) {
+          batch_header.type == model::record_batch_type::raft_data
+          && batch_header.attrs.is_transactional()
+          && !batch_header.attrs.is_control()) {
             if (likely(_unset_transaction_bit_enabled)) {
                 vlog(
                   gclog.trace,
                   "Removing transactional bit for raft batch {}",
-                  header);
-                header.attrs.remove_transactional_type();
-                header.reset_size_checksum_metadata(batch.data());
+                  batch_header);
+                batch_header.attrs.remove_transactional_type();
+                batch_header.reset_size_checksum_metadata(batch_data);
             }
         }
-        co_return std::move(batch);
+        co_return model::record_batch(
+          std::move(batch_header),
+          std::move(batch_data),
+          model::record_batch::tag_ctor_ng{});
     }
 
     // 4. filter
@@ -232,31 +239,32 @@ copy_data_segment_reducer::filter(model::record_batch batch) {
     int32_t rec_count = 0;
     std::optional<int64_t> first_timestamp_delta;
     int64_t last_timestamp_delta;
-    batch.for_each_record([&rec_count,
-                           &first_timestamp_delta,
-                           &last_timestamp_delta,
-                           &ret,
-                           &offset_deltas](model::record record) {
-        // contains the key
-        if (std::count(
-              offset_deltas.begin(),
-              offset_deltas.end(),
-              record.offset_delta())) {
-            /*
-             * TODO when we further optimize lazy record materialization ot
-             * make use of views we can avoid this re-encoding by copying or
-             * sharing the view. either way, we were building
-             * record batch with the uncompressed records so they were being
-             * re-encoded.
-             */
-            if (!first_timestamp_delta) {
-                first_timestamp_delta = record.timestamp_delta();
+    {
+        auto parser = iobuf_parser(batch_data.share());
+        for (int32_t i = 0; i < record_count; ++i) {
+            auto record = model::parse_one_record_from_buffer(parser);
+            // contains the key
+            if (std::count(
+                  offset_deltas.begin(),
+                  offset_deltas.end(),
+                  record.offset_delta())) {
+                /*
+                 * TODO when we further optimize lazy record materialization ot
+                 * make use of views we can avoid this re-encoding by copying or
+                 * sharing the view. either way, we were building
+                 * record batch with the uncompressed records so they were being
+                 * re-encoded.
+                 */
+                if (!first_timestamp_delta) {
+                    first_timestamp_delta = record.timestamp_delta();
+                }
+                last_timestamp_delta = record.timestamp_delta();
+                model::append_record_to_buffer(ret, record);
+                ++rec_count;
+                co_await ss::coroutine::maybe_yield();
             }
-            last_timestamp_delta = record.timestamp_delta();
-            model::append_record_to_buffer(ret, record);
-            ++rec_count;
         }
-    });
+    }
     // From: DefaultRecordBatch.java
     // On Compaction: Unlike the older message formats, magic v2 and above
     // preserves the first and last offset/sequence numbers from the
@@ -271,7 +279,6 @@ copy_data_segment_reducer::filter(model::record_batch batch) {
     // checking: the broker checks incoming Produce requests for duplicates
     // by verifying that the first and last sequence numbers of the incoming
     // batch match the last from that producer.
-    //
     if (rec_count == 0) {
         // TODO:agallego - implement
         //
@@ -296,37 +303,38 @@ copy_data_segment_reducer::filter(model::record_batch batch) {
     // Additionally, the MaxTimestamp of an empty batch always retains the
     // previous value prior to becoming empty.
     //
-    auto& hdr = batch.header();
     const auto first_time = model::timestamp(
-      hdr.first_timestamp() + first_timestamp_delta.value());
-    auto last_time = hdr.max_timestamp;
-    if (hdr.attrs.timestamp_type() == model::timestamp_type::create_time) {
+      batch_header.first_timestamp() + first_timestamp_delta.value());
+    auto last_time = batch_header.max_timestamp;
+    if (
+      batch_header.attrs.timestamp_type()
+      == model::timestamp_type::create_time) {
         last_time = model::timestamp(first_time() + last_timestamp_delta);
     }
-    auto new_hdr = hdr;
 
     // Remove transactional bit for committed raft data batches.
     if (
-      new_hdr.type == model::record_batch_type::raft_data
-      && new_hdr.attrs.is_transactional() && !new_hdr.attrs.is_control()) {
+      batch_header.type == model::record_batch_type::raft_data
+      && batch_header.attrs.is_transactional()
+      && !batch_header.attrs.is_control()) {
         if (likely(_unset_transaction_bit_enabled)) {
             vlog(
               gclog.trace,
               "Removing transactional bit for raft batch {}",
-              new_hdr);
-            new_hdr.attrs.remove_transactional_type();
+              batch_header);
+            batch_header.attrs.remove_transactional_type();
         }
     }
 
-    new_hdr.first_timestamp = first_time;
-    new_hdr.max_timestamp = last_time;
-    new_hdr.record_count = rec_count;
+    batch_header.first_timestamp = first_time;
+    batch_header.max_timestamp = last_time;
+    batch_header.record_count = rec_count;
     // Remove compression bit, as this batch isn't compressed. If the original
     // batch is compressed, the caller will re-compress.
-    new_hdr.attrs.remove_compression();
-    new_hdr.reset_size_checksum_metadata(ret);
+    batch_header.attrs.remove_compression();
+    batch_header.reset_size_checksum_metadata(ret);
     auto new_batch = model::record_batch(
-      new_hdr, std::move(ret), model::record_batch::tag_ctor_ng{});
+      batch_header, std::move(ret), model::record_batch::tag_ctor_ng{});
     co_return new_batch;
 }
 
