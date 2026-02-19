@@ -543,17 +543,20 @@ map_building_reducer::operator()(model::record_batch batch) {
     if (batch.compressed()) {
         batch = co_await model::decompress_batch(batch);
     }
+
+    auto record_count = batch.record_count();
+    auto base_offset = batch.base_offset();
+    auto parser = iobuf_parser(std::move(batch).release_data());
     // is_control must be false below due to above `is_compactible()` check.
-    co_await batch.for_each_record_async(
-      [this,
-       &fully_indexed_batch,
-       base_offset = batch.base_offset(),
-       type = header.type,
-       is_control = false](
-        const model::record& r) -> ss::future<ss::stop_iteration> {
-          return maybe_index_record_in_map(
-            r, base_offset, type, is_control, fully_indexed_batch);
-      });
+    for (int32_t i = 0; i < record_count; ++i) {
+        auto record = model::parse_one_record_from_buffer(parser);
+        co_await maybe_index_record_in_map(
+          record,
+          base_offset,
+          header.type,
+          /*is_control=*/false,
+          fully_indexed_batch);
+    }
 
     if (fully_indexed_batch) {
         co_return ss::stop_iteration::no;
