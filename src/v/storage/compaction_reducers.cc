@@ -353,25 +353,37 @@ ss::future<ss::stop_iteration> copy_data_segment_reducer::filter_and_append(
         _stats.records_discarded += record_count_before;
         co_return stop_t::no;
     }
-    auto batch = std::move(maybe_batch.value());
-    const auto records_to_remove = record_count_before - batch.record_count();
+    auto filtered_batch = std::move(maybe_batch.value());
+    const auto records_to_remove = record_count_before
+                                   - filtered_batch.record_count();
     _stats.records_discarded += records_to_remove;
-    bool compactible_batch = compaction::is_compactible(batch.header());
+    bool compactible_batch = compaction::is_compactible(
+      filtered_batch.header());
     if (!compactible_batch) {
         ++_stats.non_compactible_batches;
     }
+
+    auto record_count = filtered_batch.record_count();
+    auto base_offset = filtered_batch.base_offset();
+    auto batch_header = std::move(filtered_batch.header());
+    auto batch_data = std::move(filtered_batch).release_data();
+
     if (_compacted_idx && compactible_batch) {
-        co_await model::for_each_record(
-          batch, [&batch, this](const model::record& r) {
-              auto& hdr = batch.header();
-              return _compacted_idx->index(
-                hdr.type,
-                hdr.attrs.is_control(),
-                r.key(),
-                batch.base_offset(),
-                r.offset_delta());
-          });
+        auto parser = iobuf_parser(batch_data.share());
+        for (int32_t i = 0; i < record_count; ++i) {
+            auto record = model::parse_one_record_from_buffer(parser);
+            co_await _compacted_idx->index(
+              batch_header.type,
+              batch_header.attrs.is_control(),
+              record.key(),
+              base_offset,
+              record.offset_delta());
+        }
     }
+    auto batch = model::record_batch(
+      std::move(batch_header),
+      std::move(batch_data),
+      model::record_batch::tag_ctor_ng{});
     if (original != model::compression::none) {
         batch = co_await model::compress_batch(original, std::move(batch));
     }
