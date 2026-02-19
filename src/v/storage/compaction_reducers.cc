@@ -31,7 +31,6 @@
 
 #include <boost/range/irange.hpp>
 
-#include <algorithm>
 #include <exception>
 
 namespace storage::internal {
@@ -127,9 +126,9 @@ ss::future<> copy_data_segment_reducer::maybe_keep_offset(
   const model::record_batch_header& header,
   const model::record& r,
   bool is_last_record_in_batch,
-  std::vector<int32_t>& offset_deltas) {
+  absl::flat_hash_set<int32_t>& offset_deltas) {
     if (co_await _should_keep_fn(header, r, is_last_record_in_batch)) {
-        offset_deltas.push_back(r.offset_delta());
+        offset_deltas.insert(r.offset_delta());
         co_return;
     }
 }
@@ -177,7 +176,7 @@ copy_data_segment_reducer::filter(model::record_batch batch) {
     auto batch_data = std::move(batch).release_data();
 
     // 1. compute which records to keep
-    std::vector<int32_t> offset_deltas;
+    absl::flat_hash_set<int32_t> offset_deltas;
     offset_deltas.reserve(record_count);
     {
         auto parser = iobuf_parser(batch_data.share());
@@ -244,10 +243,7 @@ copy_data_segment_reducer::filter(model::record_batch batch) {
         for (int32_t i = 0; i < record_count; ++i) {
             auto record = model::parse_one_record_from_buffer(parser);
             // contains the key
-            if (std::count(
-                  offset_deltas.begin(),
-                  offset_deltas.end(),
-                  record.offset_delta())) {
+            if (offset_deltas.contains(record.offset_delta())) {
                 /*
                  * TODO when we further optimize lazy record materialization ot
                  * make use of views we can avoid this re-encoding by copying or

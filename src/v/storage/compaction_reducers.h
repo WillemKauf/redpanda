@@ -12,6 +12,7 @@
 #pragma once
 
 #include "absl/container/btree_map.h"
+#include "absl/container/flat_hash_set.h"
 #include "base/units.h"
 #include "bytes/bytes.h"
 #include "compaction/fwd.h"
@@ -170,7 +171,7 @@ private:
       const model::record_batch_header&,
       const model::record&,
       bool,
-      std::vector<int32_t>&);
+      absl::flat_hash_set<int32_t>&);
 
     ss::future<std::optional<model::record_batch>> filter(model::record_batch);
 
