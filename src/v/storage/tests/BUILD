@@ -1034,3 +1034,19 @@ redpanda_cc_bench(
         "@seastar//:benchmark",
     ],
 )
+
+redpanda_cc_bench(
+    name = "compaction_reducer_rpbench",
+    timeout = "moderate",
+    srcs = ["compaction_reducer_bench.cc"],
+    deps = [
+        "//src/v/model",
+        "//src/v/model:batch_compression",
+        "//src/v/model/tests:random",
+        "//src/v/storage",
+        "//src/v/storage:segment_appender",
+        "//src/v/test_utils:tmpbuf_file",
+        "@seastar",
+        "@seastar//:benchmark",
+    ],
+)
