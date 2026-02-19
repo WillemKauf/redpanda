@@ -117,6 +117,7 @@ redpanda_cc_library(
         "//src/v/bytes",
         "//src/v/bytes:iobuf",
         "//src/v/model",
+        "@abseil-cpp//absl/container:flat_hash_set",
         "@seastar",
     ],
 )

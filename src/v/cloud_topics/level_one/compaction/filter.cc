@@ -19,7 +19,6 @@
 #include <seastar/core/future.hh>
 
 #include <optional>
-#include <vector>
 
 namespace cloud_topics::l1 {
 
@@ -51,19 +50,19 @@ ss::future<bool> compaction_filter::should_keep(
 ss::future<> compaction_filter::maybe_index_offset_delta(
   const model::record_batch_header& hdr,
   const model::record& r,
-  std::vector<int32_t>& offset_deltas) const {
+  absl::flat_hash_set<int32_t>& offset_deltas) const {
     if (co_await should_keep(hdr, r)) {
-        offset_deltas.push_back(r.offset_delta());
+        offset_deltas.insert(r.offset_delta());
     }
 }
 
-ss::future<std::vector<int32_t>>
+ss::future<absl::flat_hash_set<int32_t>>
 compaction_filter::compute_offset_deltas_to_keep(
   const model::record_batch_header& hdr, iobuf records) const {
-    std::vector<int32_t> offset_deltas;
+    absl::flat_hash_set<int32_t> offset_deltas;
     offset_deltas.reserve(hdr.record_count);
 
-    iobuf_parser parser(std::move(data));
+    iobuf_parser parser(std::move(records));
     for (int32_t i = 0; i < hdr.record_count; ++i) {
         auto record = model::parse_one_record_from_buffer(parser);
         co_await maybe_index_offset_delta(hdr, record, offset_deltas);
@@ -74,7 +73,7 @@ compaction_filter::compute_offset_deltas_to_keep(
 
 ss::future<std::optional<model::record_batch>>
 compaction_filter::filter_batch_with_offset_deltas(
-  model::record_batch b, std::vector<int32_t> offset_deltas) const {
+  model::record_batch b, absl::flat_hash_set<int32_t> offset_deltas) const {
     co_return co_await do_filter_batch(std::move(b), std::move(offset_deltas));
 }
 

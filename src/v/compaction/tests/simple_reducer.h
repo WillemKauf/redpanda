@@ -38,15 +38,15 @@ private:
     ss::future<> maybe_index_offset_delta(
       const model::record_batch_header& hdr,
       const model::record& r,
-      std::vector<int32_t>& offset_deltas) const {
+      absl::flat_hash_set<int32_t>& offset_deltas) const {
         if (co_await is_latest_record_for_key(_map, hdr, r)) {
-            offset_deltas.push_back(r.offset_delta());
+            offset_deltas.insert(r.offset_delta());
         }
     }
 
-    ss::future<std::vector<int32_t>> compute_offset_deltas_to_keep(
+    ss::future<absl::flat_hash_set<int32_t>> compute_offset_deltas_to_keep(
       const model::record_batch_header& hdr, iobuf records) const final {
-        std::vector<int32_t> offset_deltas;
+        absl::flat_hash_set<int32_t> offset_deltas;
         offset_deltas.reserve(hdr.record_count);
 
         iobuf_parser parser(std::move(records));
@@ -60,7 +60,8 @@ private:
 
     ss::future<std::optional<model::record_batch>>
     filter_batch_with_offset_deltas(
-      model::record_batch b, std::vector<int32_t> offset_deltas) const final {
+      model::record_batch b,
+      absl::flat_hash_set<int32_t> offset_deltas) const final {
         co_return co_await do_filter_batch(
           std::move(b), std::move(offset_deltas));
     }

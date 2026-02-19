@@ -17,8 +17,6 @@
 #include <seastar/core/coroutine.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
-#include <vector>
-
 namespace compaction {
 
 ss::future<ss::stop_iteration> filter::operator()(model::record_batch b) {
@@ -43,7 +41,7 @@ filter::filter_batch(model::record_batch b) const {
     auto data = std::move(b).release_data();
 
     // compute which records to keep
-    std::vector<int32_t> offset_deltas
+    absl::flat_hash_set<int32_t> offset_deltas
       = co_await compute_offset_deltas_to_keep(hdr, data.share());
 
     // Reconstruct the batch for filtering.
@@ -56,7 +54,7 @@ filter::filter_batch(model::record_batch b) const {
 }
 
 ss::future<std::optional<model::record_batch>> filter::do_filter_batch(
-  model::record_batch b, std::vector<int32_t> offset_deltas) const {
+  model::record_batch b, absl::flat_hash_set<int32_t> offset_deltas) const {
     // no records to keep
     if (offset_deltas.empty()) {
         co_return std::nullopt;
@@ -76,10 +74,7 @@ ss::future<std::optional<model::record_batch>> filter::do_filter_batch(
         iobuf_const_parser parser(b.data());
         for (int32_t i = 0; i < b.record_count(); ++i) {
             auto record = model::parse_one_record_copy_from_buffer(parser);
-            if (std::count(
-                  offset_deltas.begin(),
-                  offset_deltas.end(),
-                  record.offset_delta())) {
+            if (offset_deltas.contains(record.offset_delta())) {
                 if (!first_timestamp_delta) {
                     first_timestamp_delta = record.timestamp_delta();
                 }
