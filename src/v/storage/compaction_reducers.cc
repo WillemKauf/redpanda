@@ -432,16 +432,15 @@ index_rebuilder_reducer::operator()(model::record_batch b) {
 }
 
 ss::future<> index_rebuilder_reducer::do_index(model::record_batch&& b) {
-    return ss::do_with(std::move(b), [this](model::record_batch& b) {
-        return model::for_each_record(
-          b,
-          [this,
-           bt = b.header().type,
-           ctrl = b.header().attrs.is_control(),
-           o = b.base_offset()](model::record& r) {
-              return _w->index(bt, ctrl, r.key(), o, r.offset_delta());
-          });
-    });
+    auto record_count = b.record_count();
+    auto bt = b.header().type;
+    auto ctrl = b.header().attrs.is_control();
+    auto o = b.base_offset();
+    auto parser = iobuf_parser(std::move(b).release_data());
+    for (int32_t i = 0; i < record_count; ++i) {
+        auto record = model::parse_one_record_from_buffer(parser);
+        co_await _w->index(bt, ctrl, record.key(), o, record.offset_delta());
+    }
 }
 
 void tx_reducer::refresh_ongoing_aborted_txs(const model::record_batch& b) {
