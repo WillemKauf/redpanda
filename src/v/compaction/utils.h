@@ -62,7 +62,7 @@ model::record_batch make_placeholder_batch(model::record_batch_header& hdr);
 // does not have an entry for that key, and `false` otherwise.
 ss::future<bool> is_latest_record_for_key(
   const key_offset_map& map,
-  const model::record_batch& b,
+  const model::record_batch_header& hdr,
   const model::record& r);
 
 // A log is eligible for compaction if at least one of the following

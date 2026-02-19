@@ -411,9 +411,9 @@ ss::future<storage::index_state> do_copy_segment_data(
 
     auto offset_in_compacted_list =
       [compacted_offsets = std::move(compacted_offsets)](
-        const model::record_batch& b,
+        const model::record_batch_header& hdr,
         const model::record& r) -> ss::future<bool> {
-        const auto o = b.base_offset() + model::offset_delta(r.offset_delta());
+        const auto o = hdr.base_offset + model::offset_delta(r.offset_delta());
         const auto keep = compacted_offsets.contains(o);
         return ss::make_ready_future<bool>(keep);
     };
@@ -430,11 +430,11 @@ ss::future<storage::index_state> do_copy_segment_data(
                           &may_have_transaction_control_batches,
                           &may_have_transaction_data_or_fence_batches,
                           tx_batch_compaction_enabled](
-                           const model::record_batch& b,
+                           const model::record_batch_header& hdr,
                            const model::record& r,
                            bool is_last_record_in_batch) {
         return internal::should_keep(
-          b,
+          hdr,
           r,
           ntp,
           is_last_record_in_batch,

@@ -122,11 +122,11 @@ compacted_offset_list_reducer::operator()(compacted_index::entry&& e) {
 }
 
 ss::future<> copy_data_segment_reducer::maybe_keep_offset(
-  const model::record_batch& batch,
+  const model::record_batch_header& header,
   const model::record& r,
   bool is_last_record_in_batch,
   std::vector<int32_t>& offset_deltas) {
-    if (co_await _should_keep_fn(batch, r, is_last_record_in_batch)) {
+    if (co_await _should_keep_fn(header, r, is_last_record_in_batch)) {
         offset_deltas.push_back(r.offset_delta());
         co_return;
     }
@@ -179,7 +179,10 @@ copy_data_segment_reducer::filter(model::record_batch batch) {
       [this, &batch, &offset_deltas, &records_seen](const model::record& r) {
           ++records_seen;
           return maybe_keep_offset(
-            batch, r, batch.record_count() == records_seen, offset_deltas);
+            batch.header(),
+            r,
+            batch.record_count() == records_seen,
+            offset_deltas);
       });
 
     if (offset_deltas.empty() && _compaction_placeholder_enabled) {

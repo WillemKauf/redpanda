@@ -74,8 +74,10 @@ enum class keep_policy {
 /// Builds a should-keep filter function for the reducer.
 storage::internal::copy_data_segment_reducer::filter_t
 make_filter(keep_policy policy) {
-    return [policy](const model::record_batch&, const model::record& r, bool)
-             -> ss::future<bool> {
+    return [policy](
+             const model::record_batch_header&,
+             const model::record& r,
+             bool) -> ss::future<bool> {
         switch (policy) {
         case keep_policy::all:
             co_return true;

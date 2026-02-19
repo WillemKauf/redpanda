@@ -328,14 +328,14 @@ auto with_segment_reader_handle(segment_reader_handle handle, Func func) {
 //      `delete.retention.ms`
 // In all other cases, return `false`.
 inline bool can_discard(
-  const model::record_batch& b,
+  const model::record_batch_header& hdr,
   const model::record& r,
   const model::ntp& ntp,
   bool past_tombstone_delete_horizon,
   bool past_tx_delete_horizon,
   bool tx_batch_compaction_enabled) {
     if (compaction::is_removable_control_batch(
-          ntp, b.header().type, tx_batch_compaction_enabled)) {
+          ntp, hdr.type, tx_batch_compaction_enabled)) {
         return true;
     }
 
@@ -347,7 +347,7 @@ inline bool can_discard(
     // Deal with transactional control batch removal.
     // `tx_batch_compaction_enabled` is already considered in the variable
     // `past_tx_delete_horizon`, so it does not need to be queried again here.
-    if (b.header().attrs.is_control() && past_tx_delete_horizon) {
+    if (hdr.attrs.is_control() && past_tx_delete_horizon) {
         return true;
     }
 
@@ -356,7 +356,7 @@ inline bool can_discard(
 
 template<typename Func>
 ss::future<bool> should_keep(
-  const model::record_batch& b,
+  const model::record_batch_header& hdr,
   const model::record& r,
   const model::ntp& ntp,
   bool is_last_record_in_batch,
@@ -372,12 +372,12 @@ ss::future<bool> should_keep(
   bool tx_batch_compaction_enabled) {
     const auto compaction_placeholder_enabled = feature_table.local().is_active(
       features::feature::compaction_placeholder_batch);
-    const auto is_compactible = compaction::is_compactible(b.header());
-    const auto is_last_batch = b.last_offset() == segment_last_offset;
-    const auto is_tx_control_batch = b.header().attrs.is_control();
-    const auto is_tx_data_batch = (b.header().type == model::record_batch_type::raft_data
-         && b.header().attrs.is_transactional());
-    const auto is_tx_fence_batch = b.header().type
+    const auto is_compactible = compaction::is_compactible(hdr);
+    const auto is_last_batch = hdr.last_offset() == segment_last_offset;
+    const auto is_tx_control_batch = hdr.attrs.is_control();
+    const auto is_tx_data_batch
+      = (hdr.type == model::record_batch_type::raft_data && hdr.attrs.is_transactional());
+    const auto is_tx_fence_batch = hdr.type
                                    == model::record_batch_type::tx_fence;
     const auto is_tombstone = r.is_tombstone();
     // once compaction placeholder feature is enabled, we are not
@@ -390,7 +390,7 @@ ss::future<bool> should_keep(
           gclog.trace,
           "retaining last record: {} of segment from batch: {}",
           r,
-          b.header());
+          hdr);
         if (is_tombstone) {
             may_have_tombstone_records = true;
         }
@@ -410,7 +410,7 @@ ss::future<bool> should_keep(
     // records/batches which are always considered removable as well as expired
     // tombstone records/control batches.
     if (can_discard(
-          b,
+          hdr,
           r,
           ntp,
           past_tombstone_delete_horizon,
@@ -435,7 +435,7 @@ ss::future<bool> should_keep(
         co_return true;
     }
 
-    auto keep = co_await is_latest_key(b, r);
+    auto keep = co_await is_latest_key(hdr, r);
 
     if (is_tombstone && keep) {
         may_have_tombstone_records = true;

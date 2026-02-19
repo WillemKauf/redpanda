@@ -82,9 +82,9 @@ model::record_batch make_placeholder_batch(model::record_batch_header& hdr) {
 
 ss::future<bool> is_latest_record_for_key(
   const key_offset_map& map,
-  const model::record_batch& b,
+  const model::record_batch_header& hdr,
   const model::record& r) {
-    const auto o = b.base_offset() + model::offset_delta(r.offset_delta());
+    const auto o = hdr.base_offset + model::offset_delta(r.offset_delta());
     auto key = compaction_key{iobuf_to_bytes(r.key())};
 
     auto latest_offset_indexed = co_await map.get(key);
