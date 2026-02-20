@@ -17,6 +17,7 @@
 #include "serde/envelope.h"
 #include "serde/rw/enum.h"
 #include "serde/rw/envelope.h"
+#include "serde/rw/optional.h"
 
 #include <fmt/format.h>
 
@@ -207,16 +208,29 @@ struct get_size_request
     model::topic_id_partition tp;
 };
 
+struct extent_object_info
+  : serde::envelope<
+      extent_object_info,
+      serde::version<0>,
+      serde::compat_version<0>> {
+    auto serde_fields() { return std::tie(oid, footer_pos, object_size); }
+
+    object_id oid;
+    size_t footer_pos{0};
+    size_t object_size{0};
+};
+
 struct extent_metadata
   : serde::
-      envelope<extent_metadata, serde::version<0>, serde::compat_version<0>> {
+      envelope<extent_metadata, serde::version<1>, serde::compat_version<0>> {
     auto serde_fields() {
-        return std::tie(base_offset, last_offset, max_timestamp);
+        return std::tie(base_offset, last_offset, max_timestamp, obj_info);
     }
 
     kafka::offset base_offset;
     kafka::offset last_offset;
     model::timestamp max_timestamp;
+    std::optional<extent_object_info> obj_info;
 };
 
 struct get_compaction_info_reply
@@ -385,17 +399,23 @@ struct get_extent_metadata_reply
     // False when more extents may exist (hit max_num_extents limit).
     bool end_of_stream{true};
 };
+enum class extent_detail_level : int8_t {
+    offsets_only = 0,
+    include_object_info = 1,
+};
+
 struct get_extent_metadata_request
   : serde::envelope<
       get_extent_metadata_request,
-      serde::version<0>,
+      serde::version<1>,
       serde::compat_version<0>> {
     using resp_t = get_extent_metadata_reply;
 
     enum class order { forwards, backwards };
 
     auto serde_fields() {
-        return std::tie(tp, min_offset, max_offset, o, max_num_extents);
+        return std::tie(
+          tp, min_offset, max_offset, o, max_num_extents, detail_level);
     }
 
     model::topic_id_partition tp;
@@ -403,6 +423,7 @@ struct get_extent_metadata_request
     kafka::offset max_offset;
     order o;
     size_t max_num_extents;
+    extent_detail_level detail_level{extent_detail_level::offsets_only};
 };
 
 struct restore_domain_reply

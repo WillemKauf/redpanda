@@ -49,6 +49,12 @@ MATCHER_P2(MatchesRange, base, last, "") {
     return arg.base_offset == base && arg.last_offset == last;
 }
 
+MATCHER_P4(MatchesRangeWithObjInfo, base, last, oid, footer_pos, "") {
+    return arg.base_offset == base && arg.last_offset == last
+           && arg.obj_info.has_value() && arg.obj_info->oid == oid
+           && arg.obj_info->footer_pos == footer_pos;
+}
+
 ss::future<metastore::extent_metadata_vec>
 consume_reader_to_extent_metadata_vec(extent_metadata_reader rdr) {
     metastore::extent_metadata_vec vec;
@@ -306,6 +312,123 @@ TEST(SimpleMetastoreTest, TestReadExtentMetadataBackwards) {
           read_extents,
           testing::ElementsAre(
             MatchesRange(10_o, 19_o), MatchesRange(0_o, 9_o)));
+    }
+}
+
+TEST(SimpleMetastoreTest, TestReadExtentMetadataForwardsWithObjectInfo) {
+    simple_metastore m;
+    om_list_t os;
+    constexpr size_t data_size = 99;
+    constexpr size_t footer_pos = 100;
+    constexpr size_t object_size = 1100;
+    os.emplace_back(om_builder(oid1, footer_pos, object_size)
+                      .add(tid_a, 0_o, 9_o, 2000_t, 0, data_size)
+                      .build());
+    os.emplace_back(om_builder(oid2, footer_pos, object_size)
+                      .add(tid_a, 10_o, 19_o, 2000_t, 0, data_size)
+                      .build());
+    os.emplace_back(om_builder(oid3, footer_pos, object_size)
+                      .add(tid_a, 20_o, 29_o, 2000_t, 0, data_size)
+                      .build());
+    auto add_res
+      = m.add_objects(os, terms_builder().add(tid_a, 0_tm, 0_o).build()).get();
+    ASSERT_TRUE(add_res.has_value());
+
+    auto tp = model::topic_id_partition::from(tid_a);
+
+    using dl = metastore::extent_detail_level;
+
+    // With include_object_info, obj_info should be populated.
+    {
+        auto min_offset = kafka::offset{0};
+        auto max_offset = kafka::offset{100};
+        auto rdr = extent_metadata_reader(
+          &m,
+          tp,
+          min_offset,
+          max_offset,
+          iter_dir::forwards,
+          as,
+          std::nullopt,
+          dl::include_object_info);
+        auto read_extents
+          = consume_reader_to_extent_metadata_vec(std::move(rdr)).get();
+        ASSERT_EQ(read_extents.size(), 3);
+        EXPECT_THAT(
+          read_extents,
+          testing::ElementsAre(
+            MatchesRangeWithObjInfo(0_o, 9_o, oid1, footer_pos),
+            MatchesRangeWithObjInfo(10_o, 19_o, oid2, footer_pos),
+            MatchesRangeWithObjInfo(20_o, 29_o, oid3, footer_pos)));
+
+        for (const auto& e : read_extents) {
+            ASSERT_TRUE(e.obj_info.has_value());
+            EXPECT_EQ(e.obj_info->footer_pos, footer_pos);
+            EXPECT_EQ(e.obj_info->object_size, object_size);
+        }
+    }
+
+    // With offsets_only (default), obj_info should be nullopt.
+    {
+        auto min_offset = kafka::offset{0};
+        auto max_offset = kafka::offset{100};
+        auto rdr = extent_metadata_reader(
+          &m, tp, min_offset, max_offset, iter_dir::forwards, as);
+        auto read_extents
+          = consume_reader_to_extent_metadata_vec(std::move(rdr)).get();
+        ASSERT_EQ(read_extents.size(), 3);
+        for (const auto& e : read_extents) {
+            EXPECT_FALSE(e.obj_info.has_value());
+        }
+    }
+}
+
+TEST(SimpleMetastoreTest, TestReadExtentMetadataBackwardsWithObjectInfo) {
+    simple_metastore m;
+    om_list_t os;
+    constexpr size_t data_size = 99;
+    constexpr size_t footer_pos = 100;
+    constexpr size_t object_size = 1100;
+    os.emplace_back(om_builder(oid1, footer_pos, object_size)
+                      .add(tid_a, 0_o, 9_o, 2000_t, 0, data_size)
+                      .build());
+    os.emplace_back(om_builder(oid2, footer_pos, object_size)
+                      .add(tid_a, 10_o, 19_o, 2000_t, 0, data_size)
+                      .build());
+    os.emplace_back(om_builder(oid3, footer_pos, object_size)
+                      .add(tid_a, 20_o, 29_o, 2000_t, 0, data_size)
+                      .build());
+    auto add_res
+      = m.add_objects(os, terms_builder().add(tid_a, 0_tm, 0_o).build()).get();
+    ASSERT_TRUE(add_res.has_value());
+
+    auto tp = model::topic_id_partition::from(tid_a);
+
+    using dl = metastore::extent_detail_level;
+
+    // Backwards with include_object_info.
+    {
+        auto min_offset = kafka::offset{0};
+        auto max_offset = kafka::offset{100};
+        auto rdr = extent_metadata_reader(
+          &m,
+          tp,
+          min_offset,
+          max_offset,
+          iter_dir::backwards,
+          as,
+          std::nullopt,
+          dl::include_object_info);
+        auto read_extents
+          = consume_reader_to_extent_metadata_vec(std::move(rdr)).get();
+        ASSERT_EQ(read_extents.size(), 3);
+        // Backwards yields in descending order.
+        EXPECT_THAT(
+          read_extents,
+          testing::ElementsAre(
+            MatchesRangeWithObjInfo(20_o, 29_o, oid3, footer_pos),
+            MatchesRangeWithObjInfo(10_o, 19_o, oid2, footer_pos),
+            MatchesRangeWithObjInfo(0_o, 9_o, oid1, footer_pos)));
     }
 }
 

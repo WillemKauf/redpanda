@@ -443,18 +443,35 @@ public:
     virtual ss::future<std::expected<compaction_info_map, errc>>
     get_compaction_infos(const chunked_vector<compaction_info_spec>&) = 0;
 
+    // Controls the level of detail returned in extent metadata responses.
+    enum class extent_detail_level {
+        // Only offset/timestamp info (current default, used by compaction).
+        offsets_only,
+        // Also resolves and includes object identity/location (used by L1
+        // reader).
+        include_object_info,
+    };
+
     struct extent_metadata {
+        struct object_info {
+            object_id oid;
+            size_t footer_pos{0};
+            size_t object_size{0};
+        };
+
         kafka::offset base_offset;
         kafka::offset last_offset;
         model::timestamp max_timestamp;
+        std::optional<object_info> obj_info;
 
         fmt::iterator format_to(fmt::iterator it) const {
             return fmt::format_to(
               it,
-              "{{offsets:({}~{}), max_timestamp:{}}}",
+              "{{offsets:({}~{}), max_timestamp:{}, has_obj_info:{}}}",
               base_offset,
               last_offset,
-              max_timestamp);
+              max_timestamp,
+              obj_info.has_value());
         }
     };
 
@@ -476,7 +493,11 @@ public:
     // [10, 19]]`.
     virtual ss::future<std::expected<extent_metadata_response, errc>>
     get_extent_metadata_forwards(
-      const model::topic_id_partition&, kafka::offset, kafka::offset, size_t)
+      const model::topic_id_partition&,
+      kafka::offset,
+      kafka::offset,
+      size_t,
+      extent_detail_level = extent_detail_level::offsets_only)
       = 0;
 
     // Returns a number of extents in the offset range `[start, end]`
@@ -487,7 +508,11 @@ public:
     // 19], [0, 9]]`.
     virtual ss::future<std::expected<extent_metadata_response, errc>>
     get_extent_metadata_backwards(
-      const model::topic_id_partition&, kafka::offset, kafka::offset, size_t)
+      const model::topic_id_partition&,
+      kafka::offset,
+      kafka::offset,
+      size_t,
+      extent_detail_level = extent_detail_level::offsets_only)
       = 0;
 
     // Flushes all metastore partitions to cloud storage.

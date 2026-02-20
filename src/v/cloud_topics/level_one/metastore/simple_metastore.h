@@ -115,14 +115,16 @@ public:
       const model::topic_id_partition&,
       kafka::offset,
       kafka::offset,
-      size_t) override;
+      size_t,
+      extent_detail_level = extent_detail_level::offsets_only) override;
 
     ss::future<std::expected<extent_metadata_response, errc>>
     get_extent_metadata_backwards(
       const model::topic_id_partition&,
       kafka::offset,
       kafka::offset,
-      size_t) override;
+      size_t,
+      extent_detail_level = extent_detail_level::offsets_only) override;
 
     ss::future<std::expected<std::nullopt_t, errc>> flush() override {
         co_return std::unexpected(errc::transport_error);
@@ -169,14 +171,16 @@ private:
       const model::topic_id_partition&,
       kafka::offset,
       kafka::offset,
-      size_t);
+      size_t,
+      extent_detail_level = extent_detail_level::offsets_only);
     static std::expected<extent_metadata_response, errc>
     get_extent_metadata_backwards(
       const state&,
       const model::topic_id_partition&,
       kafka::offset,
       kafka::offset,
-      size_t);
+      size_t,
+      extent_detail_level = extent_detail_level::offsets_only);
 
     state state_;
 };

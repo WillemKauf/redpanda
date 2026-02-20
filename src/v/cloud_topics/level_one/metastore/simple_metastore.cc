@@ -761,9 +761,10 @@ simple_metastore::get_extent_metadata_forwards(
   const model::topic_id_partition& tp,
   kafka::offset min_offset,
   kafka::offset max_offset,
-  size_t max_num_extents) {
+  size_t max_num_extents,
+  extent_detail_level detail_level) {
     co_return get_extent_metadata_forwards(
-      state_, tp, min_offset, max_offset, max_num_extents);
+      state_, tp, min_offset, max_offset, max_num_extents, detail_level);
 }
 
 std::expected<metastore::extent_metadata_response, metastore::errc>
@@ -772,7 +773,8 @@ simple_metastore::get_extent_metadata_forwards(
   const model::topic_id_partition& tp,
   kafka::offset min_offset,
   kafka::offset max_offset,
-  size_t max_num_extents) {
+  size_t max_num_extents,
+  extent_detail_level detail_level) {
     auto prt_ref = state.partition_state(tp);
 
     if (!prt_ref.has_value()) {
@@ -788,15 +790,27 @@ simple_metastore::get_extent_metadata_forwards(
     auto min_it = std::ranges::lower_bound(
       prt.extents, min_offset, std::less<>{}, &extent::last_offset);
     for (auto it = min_it; it != prt.extents.end(); ++it) {
-        auto& extent = *it;
-        if (extent.base_offset > max_offset) {
+        auto& ext = *it;
+        if (ext.base_offset > max_offset) {
             break;
         }
 
-        extents.push_back(
-          {.base_offset = extent.base_offset,
-           .last_offset = extent.last_offset,
-           .max_timestamp = extent.max_timestamp});
+        extent_metadata em{
+          .base_offset = ext.base_offset,
+          .last_offset = ext.last_offset,
+          .max_timestamp = ext.max_timestamp};
+
+        if (detail_level == extent_detail_level::include_object_info) {
+            auto obj_it = state.objects.find(ext.oid);
+            if (obj_it != state.objects.end()) {
+                em.obj_info = extent_metadata::object_info{
+                  .oid = ext.oid,
+                  .footer_pos = obj_it->second.footer_pos,
+                  .object_size = obj_it->second.object_size};
+            }
+        }
+
+        extents.push_back(std::move(em));
 
         if (extents.size() >= max_num_extents) {
             end_of_stream = false;
@@ -813,9 +827,10 @@ simple_metastore::get_extent_metadata_backwards(
   const model::topic_id_partition& tp,
   kafka::offset min_offset,
   kafka::offset max_offset,
-  size_t max_num_extents) {
+  size_t max_num_extents,
+  extent_detail_level detail_level) {
     co_return get_extent_metadata_backwards(
-      state_, tp, min_offset, max_offset, max_num_extents);
+      state_, tp, min_offset, max_offset, max_num_extents, detail_level);
 }
 
 std::expected<metastore::extent_metadata_response, metastore::errc>
@@ -824,7 +839,8 @@ simple_metastore::get_extent_metadata_backwards(
   const model::topic_id_partition& tp,
   kafka::offset min_offset,
   kafka::offset max_offset,
-  size_t max_num_extents) {
+  size_t max_num_extents,
+  extent_detail_level detail_level) {
     auto prt_ref = state.partition_state(tp);
 
     if (!prt_ref.has_value()) {
@@ -851,15 +867,27 @@ simple_metastore::get_extent_metadata_backwards(
                      ? std::make_reverse_iterator(prt.extents.end())
                      : std::make_reverse_iterator(std::next(max_it));
     for (auto it = max_rit; it != prt.extents.rend(); ++it) {
-        auto& extent = *it;
-        if (extent.last_offset < min_offset) {
+        auto& ext = *it;
+        if (ext.last_offset < min_offset) {
             break;
         }
 
-        extents.push_back(
-          {.base_offset = extent.base_offset,
-           .last_offset = extent.last_offset,
-           .max_timestamp = extent.max_timestamp});
+        extent_metadata em{
+          .base_offset = ext.base_offset,
+          .last_offset = ext.last_offset,
+          .max_timestamp = ext.max_timestamp};
+
+        if (detail_level == extent_detail_level::include_object_info) {
+            auto obj_it = state.objects.find(ext.oid);
+            if (obj_it != state.objects.end()) {
+                em.obj_info = extent_metadata::object_info{
+                  .oid = ext.oid,
+                  .footer_pos = obj_it->second.footer_pos,
+                  .object_size = obj_it->second.object_size};
+            }
+        }
+
+        extents.push_back(std::move(em));
 
         if (extents.size() >= max_num_extents) {
             end_of_stream = false;

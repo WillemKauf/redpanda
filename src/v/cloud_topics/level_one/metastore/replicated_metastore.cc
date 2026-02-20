@@ -245,9 +245,29 @@ rpc_to_meta_extent_metadata(chunked_vector<rpc::extent_metadata> v) {
     metastore::extent_metadata_vec res;
     res.reserve(v.size());
     for (auto& e : v) {
-        res.emplace_back(e.base_offset, e.last_offset, e.max_timestamp);
+        metastore::extent_metadata em{
+          .base_offset = e.base_offset,
+          .last_offset = e.last_offset,
+          .max_timestamp = e.max_timestamp};
+        if (e.obj_info.has_value()) {
+            em.obj_info = metastore::extent_metadata::object_info{
+              .oid = e.obj_info->oid,
+              .footer_pos = e.obj_info->footer_pos,
+              .object_size = e.obj_info->object_size};
+        }
+        res.push_back(std::move(em));
     }
     return res;
+}
+
+rpc::extent_detail_level
+meta_to_rpc_detail_level(metastore::extent_detail_level dl) {
+    switch (dl) {
+    case metastore::extent_detail_level::offsets_only:
+        return rpc::extent_detail_level::offsets_only;
+    case metastore::extent_detail_level::include_object_info:
+        return rpc::extent_detail_level::include_object_info;
+    }
 }
 
 } // anonymous namespace
@@ -831,7 +851,8 @@ replicated_metastore::get_extent_metadata_forwards(
   const model::topic_id_partition& tidp,
   kafka::offset min_offset,
   kafka::offset max_offset,
-  size_t max_num_extents) {
+  size_t max_num_extents,
+  extent_detail_level detail_level) {
     static constexpr auto o = rpc::get_extent_metadata_request::order::forwards;
 
     rpc::get_extent_metadata_request req;
@@ -840,6 +861,7 @@ replicated_metastore::get_extent_metadata_forwards(
     req.max_offset = max_offset;
     req.max_num_extents = max_num_extents;
     req.o = o;
+    req.detail_level = meta_to_rpc_detail_level(detail_level);
 
     auto reply_fut = co_await ss::coroutine::as_future(
       fe_.get_extent_metadata(std::move(req)));
@@ -866,7 +888,8 @@ replicated_metastore::get_extent_metadata_backwards(
   const model::topic_id_partition& tidp,
   kafka::offset min_offset,
   kafka::offset max_offset,
-  size_t max_num_extents) {
+  size_t max_num_extents,
+  extent_detail_level detail_level) {
     static constexpr auto o
       = rpc::get_extent_metadata_request::order::backwards;
 
@@ -876,6 +899,7 @@ replicated_metastore::get_extent_metadata_backwards(
     req.max_offset = max_offset;
     req.max_num_extents = max_num_extents;
     req.o = o;
+    req.detail_level = meta_to_rpc_detail_level(detail_level);
 
     auto reply_fut = co_await ss::coroutine::as_future(
       fe_.get_extent_metadata(std::move(req)));

@@ -34,11 +34,10 @@ redpanda_cc_library(
         "//src/v/cloud_topics/level_one/common:object_id",
         "//src/v/cloud_topics/level_one/frontend_reader:level_one_reader_probe",
         "//src/v/cloud_topics/level_one/metastore",
-        "//src/v/cloud_topics/level_one/metastore:retry",
+        "//src/v/cloud_topics/level_one/metastore:extent_metadata_reader",
         "//src/v/model",
         "//src/v/model:timeout_clock",
         "//src/v/utils:prefix_logger",
-        "//src/v/utils:retry_chain_node",
         "@seastar",
     ],
 )

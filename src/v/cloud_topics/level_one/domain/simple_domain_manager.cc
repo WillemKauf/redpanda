@@ -54,13 +54,29 @@ meta_to_rpc_extent_metadata(metastore::extent_metadata_vec v) {
     chunked_vector<rpc::extent_metadata> res;
     res.reserve(v.size());
     for (auto& e : v) {
-        res.push_back(
-          rpc::extent_metadata{
-            .base_offset = e.base_offset,
-            .last_offset = e.last_offset,
-            .max_timestamp = e.max_timestamp});
+        rpc::extent_metadata em{
+          .base_offset = e.base_offset,
+          .last_offset = e.last_offset,
+          .max_timestamp = e.max_timestamp};
+        if (e.obj_info.has_value()) {
+            em.obj_info = rpc::extent_object_info{
+              .oid = e.obj_info->oid,
+              .footer_pos = e.obj_info->footer_pos,
+              .object_size = e.obj_info->object_size};
+        }
+        res.push_back(std::move(em));
     }
     return res;
+}
+
+metastore::extent_detail_level
+rpc_to_meta_detail_level(rpc::extent_detail_level dl) {
+    switch (dl) {
+    case rpc::extent_detail_level::offsets_only:
+        return metastore::extent_detail_level::offsets_only;
+    case rpc::extent_detail_level::include_object_info:
+        return metastore::extent_detail_level::include_object_info;
+    }
 }
 
 } // namespace
@@ -639,6 +655,7 @@ simple_domain_manager::get_extent_metadata(
     }
     auto& stm_state = stm_->state();
 
+    auto meta_detail_level = rpc_to_meta_detail_level(req.detail_level);
     auto get_res = [&]() {
         switch (req.o) {
         case rpc::get_extent_metadata_request::order::forwards:
@@ -647,14 +664,16 @@ simple_domain_manager::get_extent_metadata(
               req.tp,
               req.min_offset,
               req.max_offset,
-              req.max_num_extents);
+              req.max_num_extents,
+              meta_detail_level);
         case rpc::get_extent_metadata_request::order::backwards:
             return simple_metastore::get_extent_metadata_backwards(
               stm_state,
               req.tp,
               req.min_offset,
               req.max_offset,
-              req.max_num_extents);
+              req.max_num_extents,
+              meta_detail_level);
         }
     }();
 

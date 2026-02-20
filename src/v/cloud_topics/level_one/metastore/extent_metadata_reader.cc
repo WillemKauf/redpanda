@@ -22,7 +22,8 @@ extent_metadata_reader::extent_metadata_reader(
   kafka::offset max_offset,
   iteration_direction iter_dir,
   ss::abort_source& as,
-  std::optional<size_t> num_extents_per_request)
+  std::optional<size_t> num_extents_per_request,
+  metastore::extent_detail_level detail_level)
   : _metastore(metastore)
   , _tp(std::move(tp))
   , _min_offset(min_offset)
@@ -30,7 +31,8 @@ extent_metadata_reader::extent_metadata_reader(
   , _iter_dir(iter_dir)
   , _as(as)
   , _num_extents_per_request(
-      num_extents_per_request.value_or(default_num_extents_per_request)) {}
+      num_extents_per_request.value_or(default_num_extents_per_request))
+  , _detail_level(detail_level) {}
 
 extent_metadata_reader::extent_metadata_generator
 extent_metadata_reader::generator() {
@@ -50,7 +52,11 @@ extent_metadata_reader::forward_generator() {
         auto extent_md_res = co_await retry_metastore_op_with_default_rtc(
           [this, next_offset] {
               return _metastore->get_extent_metadata_forwards(
-                _tp, next_offset, _max_offset, _num_extents_per_request);
+                _tp,
+                next_offset,
+                _max_offset,
+                _num_extents_per_request,
+                _detail_level);
           },
           _as);
 
@@ -90,7 +96,11 @@ extent_metadata_reader::backward_generator() {
         auto extent_md_res = co_await retry_metastore_op_with_default_rtc(
           [this, next_offset] {
               return _metastore->get_extent_metadata_backwards(
-                _tp, _min_offset, next_offset, _num_extents_per_request);
+                _tp,
+                _min_offset,
+                next_offset,
+                _num_extents_per_request,
+                _detail_level);
           },
           _as);
 

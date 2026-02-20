@@ -887,12 +887,23 @@ db_domain_manager::get_extent_metadata(rpc::get_extent_metadata_request req) {
         }
         const auto& extent = row.value();
         auto key = extent_row_key::decode(extent.key);
-        extents.push_back(
-          rpc::extent_metadata{
-            .base_offset = key->base_offset,
-            .last_offset = extent.val.last_offset,
-            .max_timestamp = extent.val.max_timestamp,
-          });
+        rpc::extent_metadata em{
+          .base_offset = key->base_offset,
+          .last_offset = extent.val.last_offset,
+          .max_timestamp = extent.val.max_timestamp,
+        };
+        if (req.detail_level == rpc::extent_detail_level::include_object_info) {
+            auto obj_res = co_await reader.get_object(extent.val.oid);
+            if (obj_res.has_value() && obj_res->has_value()) {
+                const auto& obj = obj_res->value();
+                em.obj_info = rpc::extent_object_info{
+                  .oid = extent.val.oid,
+                  .footer_pos = obj.footer_pos,
+                  .object_size = obj.object_size,
+                };
+            }
+        }
+        extents.push_back(std::move(em));
         if (extents.size() >= req.max_num_extents) {
             end_of_stream = false;
             break;

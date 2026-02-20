@@ -51,7 +51,9 @@ public:
       kafka::offset,
       iteration_direction,
       ss::abort_source&,
-      std::optional<size_t> = std::nullopt);
+      std::optional<size_t> = std::nullopt,
+      metastore::extent_detail_level
+      = metastore::extent_detail_level::offsets_only);
 
     // Creates an `extent_metadata_generator`, which can be iterated over or
     // `co_await`'ed directly to retrieve extents.
@@ -71,6 +73,7 @@ private:
     iteration_direction _iter_dir;
     ss::abort_source& _as;
     size_t _num_extents_per_request;
+    metastore::extent_detail_level _detail_level;
 };
 
 } // namespace cloud_topics::l1
