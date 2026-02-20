@@ -14,6 +14,7 @@
 #include "model/fundamental.h"
 #include "model/timeout_clock.h"
 
+#include <seastar/core/when_all.hh>
 #include <seastar/coroutine/as_future.hh>
 
 #include <exception>
@@ -79,56 +80,8 @@ level_one_log_reader_impl::do_load_slice(
     }
 }
 
-ss::future<model::record_batch_reader::storage_t>
-level_one_log_reader_impl::read_some(
-  model::timeout_clock::time_point deadline) {
-    while (true) {
-        if (_next_offset > _config.max_offset) {
-            vlog(
-              _log.debug,
-              "L1 reader next_offset {} > max_offset {}: ending "
-              "stream",
-              _next_offset,
-              _config.max_offset);
-            set_end_of_stream();
-            co_return model::record_batch_reader::storage_t{};
-        }
-
-        auto object = co_await next_object(deadline);
-        if (!object.has_value()) {
-            set_end_of_stream();
-            co_return model::record_batch_reader::storage_t{};
-        }
-
-        auto batches = co_await materialize_batches_from_object_offset(
-          object.value(), _next_offset, deadline);
-
-        /*
-         * When EOS is reached this reader is done. So we don't need to worry
-         * about what is in batches. If it's empty, the reader will yield no
-         * batches. Otherwise the batches will be consumed but we don't need to
-         * worry about incrementing the next offset.
-         */
-        if (is_end_of_stream()) {
-            co_return batches;
-        }
-
-        /*
-         * If we didn't read any batches, then start again past the end of the
-         * object. Otherwise start again after the range that was read.
-         */
-        if (batches.empty()) {
-            _next_offset = kafka::next_offset(object.value().last_offset);
-        } else {
-            _next_offset = kafka::next_offset(
-              model::offset_cast(batches.back().last_offset()));
-            co_return batches;
-        }
-    }
-}
-
 ss::future<std::optional<level_one_log_reader_impl::object_info>>
-level_one_log_reader_impl::next_object(
+level_one_log_reader_impl::fetch_next_from_generator(
   model::timeout_clock::time_point /*deadline*/) {
     while (true) {
         auto extent_res_opt = co_await _extent_gen();
@@ -164,10 +117,15 @@ level_one_log_reader_impl::next_object(
             continue;
         }
 
-        vassert(
-          extent.obj_info.has_value(),
-          "extent_metadata must have obj_info when using "
-          "include_object_info detail level");
+        if (!extent.obj_info.has_value()) {
+            vlog(
+              _log.warn,
+              "Extent [{},{}] missing obj_info despite "
+              "include_object_info detail level, skipping",
+              extent.base_offset,
+              extent.last_offset);
+            continue;
+        }
 
         auto& oi = extent.obj_info.value();
         vlog(
@@ -178,21 +136,126 @@ level_one_log_reader_impl::next_object(
           oi.oid,
           _next_offset);
 
+        // Reuse the cached footer when consecutive extents belong to
+        // the same L1 object, avoiding a redundant S3 read.
+        if (_footer_cache.has_value() && _footer_cache->oid == oi.oid) {
+            vlog(_log.debug, "Reusing cached footer for object {}", oi.oid);
+            if (likely(_probe != nullptr)) {
+                _probe->register_footer_cache_hit();
+            }
+            co_return object_info{
+              .oid = oi.oid,
+              .footer = _footer_cache->footer,
+              .last_offset = extent.last_offset,
+            };
+        }
+
         auto footer = co_await read_footer(
           oi.oid, oi.footer_pos, oi.object_size);
 
-        co_return object_info{
+        _footer_cache = object_info{
           .oid = oi.oid,
-          .footer = std::move(footer),
+          .footer = ss::make_lw_shared<const l1::footer>(std::move(footer)),
           .last_offset = extent.last_offset,
         };
+        co_return object_info{
+          .oid = _footer_cache->oid,
+          .footer = _footer_cache->footer,
+          .last_offset = _footer_cache->last_offset,
+        };
+    }
+}
+
+ss::future<std::optional<level_one_log_reader_impl::object_info>>
+level_one_log_reader_impl::next_object(
+  model::timeout_clock::time_point deadline) {
+    // Consume a prefetched object if available.
+    if (_prefetched_object.has_value()) {
+        auto obj = std::move(_prefetched_object);
+        _prefetched_object.reset();
+        return ss::make_ready_future<std::optional<object_info>>(
+          std::move(obj));
+    }
+    return fetch_next_from_generator(deadline);
+}
+
+ss::future<> level_one_log_reader_impl::prefetch_next_object(
+  model::timeout_clock::time_point deadline) {
+    auto obj = co_await fetch_next_from_generator(deadline);
+    if (obj.has_value()) {
+        _prefetched_object = std::move(obj);
+    }
+}
+
+ss::future<model::record_batch_reader::storage_t>
+level_one_log_reader_impl::read_some(
+  model::timeout_clock::time_point deadline) {
+    while (true) {
+        if (_next_offset > _config.max_offset) {
+            vlog(
+              _log.debug,
+              "L1 reader next_offset {} > max_offset {}: ending "
+              "stream",
+              _next_offset,
+              _config.max_offset);
+            set_end_of_stream();
+            _prefetched_object.reset();
+            co_return model::record_batch_reader::storage_t{};
+        }
+
+        auto object = co_await next_object(deadline);
+        if (!object.has_value()) {
+            set_end_of_stream();
+            co_return model::record_batch_reader::storage_t{};
+        }
+
+        // Pipeline: materialize batches from the current extent while
+        // concurrently prefetching the next extent's footer.
+        auto [mat_fut, pre_fut] = co_await ss::when_all(
+          materialize_batches_from_object_offset(
+            object.value(), _next_offset, deadline),
+          prefetch_next_object(deadline));
+
+        if (pre_fut.failed()) {
+            pre_fut.ignore_ready_future();
+            _prefetched_object.reset();
+        }
+
+        if (mat_fut.failed()) {
+            _prefetched_object.reset();
+            std::rethrow_exception(mat_fut.get_exception());
+        }
+        auto batches = mat_fut.get();
+
+        /*
+         * When EOS is reached this reader is done. So we don't need to worry
+         * about what is in batches. If it's empty, the reader will yield no
+         * batches. Otherwise the batches will be consumed but we don't need to
+         * worry about incrementing the next offset.
+         */
+        if (is_end_of_stream()) {
+            _prefetched_object.reset();
+            co_return batches;
+        }
+
+        /*
+         * If we didn't read any batches, then start again past the end of the
+         * object. Otherwise start again after the range that was read.
+         */
+        if (batches.empty()) {
+            _next_offset = kafka::next_offset(object.value().last_offset);
+        } else {
+            _next_offset = kafka::next_offset(
+              model::offset_cast(batches.back().last_offset()));
+            co_return batches;
+        }
     }
 }
 
 ss::future<l1::footer> level_one_log_reader_impl::read_footer(
   l1::object_id oid, size_t footer_pos, size_t object_size) {
     size_t footer_total_size = object_size - footer_pos;
-    if (_probe != nullptr) {
+    if (likely(_probe != nullptr)) {
         _probe->register_footer_read(footer_total_size);
     }
 
@@ -299,7 +362,7 @@ level_one_log_reader_impl::read_batches(l1::object_reader& reader) {
         }
     }
 
-    if (_probe != nullptr) {
+    if (likely(_probe != nullptr)) {
         _probe->register_bytes_read(bytes_read);
         _probe->register_bytes_skipped(bytes_skipped);
     }
@@ -311,7 +374,7 @@ level_one_log_reader_impl::materialize_batches_from_object_offset(
   const object_info& object,
   kafka::offset offset,
   model::timeout_clock::time_point /*deadline*/) {
-    auto seek_res = object.footer.file_position_before_kafka_offset(
+    auto seek_res = object.footer->file_position_before_kafka_offset(
       _tidp, offset);
     if (seek_res == l1::footer::npos) {
         // Perhaps this object spans offsets in the metastore but has

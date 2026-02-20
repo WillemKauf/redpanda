@@ -19,6 +19,7 @@
 #include "utils/prefix_logger.h"
 
 #include <seastar/core/abort_source.hh>
+#include <seastar/core/shared_ptr.hh>
 
 namespace cloud_topics {
 
@@ -84,13 +85,15 @@ public:
 private:
     struct object_info {
         l1::object_id oid;
-        l1::footer footer;
+        ss::lw_shared_ptr<const l1::footer> footer;
         kafka::offset last_offset;
     };
 
     /*
-     * Advances the extent generator and returns the next extent's object
-     * info, reading the footer. Returns nullopt at end-of-stream.
+     * Returns the next object_info for reading, or nullopt at
+     * end-of-stream. Internally consumes any prefetched result and
+     * deduplicates footer reads for consecutive extents sharing the
+     * same L1 object.
      */
     ss::future<std::optional<object_info>>
     next_object(model::timeout_clock::time_point deadline);
@@ -131,6 +134,20 @@ private:
 
     ss::future<> close_reader_safe(l1::object_reader&);
 
+    /*
+     * Advances the generator and reads the footer (with dedup),
+     * returning a new object_info. Used by both next_object() and
+     * prefetch_next_object().
+     */
+    ss::future<std::optional<object_info>>
+    fetch_next_from_generator(model::timeout_clock::time_point deadline);
+
+    /// Prefetch the next object info in the background. Failures are
+    /// silently swallowed — the next iteration falls back to the
+    /// synchronous path.
+    ss::future<>
+    prefetch_next_object(model::timeout_clock::time_point deadline);
+
     void set_end_of_stream();
     bool _end_of_stream{false};
 
@@ -146,6 +163,16 @@ private:
     ss::abort_source _default_as;
     l1::extent_metadata_reader _extent_reader;
     l1::extent_metadata_reader::extent_metadata_generator _extent_gen;
+
+    // Caches the last footer read, keyed by object id. Consecutive
+    // extents within the same L1 object reuse this shared footer
+    // instead of re-reading it from S3.
+    std::optional<object_info> _footer_cache;
+
+    // Holds a prefetched object_info for the next call to
+    // next_object(), enabling S3 footer I/O to overlap with batch
+    // materialization.
+    std::optional<object_info> _prefetched_object;
 };
 
 } // namespace cloud_topics
