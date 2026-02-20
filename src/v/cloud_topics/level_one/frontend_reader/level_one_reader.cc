@@ -10,11 +10,9 @@
 #include "cloud_topics/level_one/frontend_reader/level_one_reader.h"
 
 #include "cloud_topics/level_one/frontend_reader/level_one_reader_probe.h"
-#include "cloud_topics/level_one/metastore/retry.h"
 #include "cloud_topics/logger.h"
 #include "model/fundamental.h"
 #include "model/timeout_clock.h"
-#include "utils/retry_chain_node.h"
 
 #include <seastar/coroutine/as_future.hh>
 
@@ -44,10 +42,19 @@ level_one_log_reader_impl::level_one_log_reader_impl(
   , _ntp(std::move(ntp))
   , _tidp(tidp)
   , _next_offset(cfg.start_offset)
-  , _metastore(metastore)
   , _io(io_interface)
   , _probe(probe)
-  , _log(cd_log, fmt::format("[{}/{}/{}]", fmt::ptr(this), _ntp, _tidp)) {
+  , _log(cd_log, fmt::format("[{}/{}/{}]", fmt::ptr(this), _ntp, _tidp))
+  , _extent_reader(
+      metastore,
+      tidp,
+      cfg.start_offset,
+      cfg.max_offset,
+      l1::extent_metadata_reader::iteration_direction::forwards,
+      cfg.abort_source ? cfg.abort_source.value().get() : _default_as,
+      std::nullopt,
+      l1::metastore::extent_detail_level::include_object_info)
+  , _extent_gen(_extent_reader.generator()) {
     vlog(_log.debug, "New reader created {}", _config);
 }
 
@@ -87,7 +94,7 @@ level_one_log_reader_impl::read_some(
             co_return model::record_batch_reader::storage_t{};
         }
 
-        auto object = co_await lookup_object_for_offset(_next_offset, deadline);
+        auto object = co_await next_object(deadline);
         if (!object.has_value()) {
             set_end_of_stream();
             co_return model::record_batch_reader::storage_t{};
@@ -121,50 +128,65 @@ level_one_log_reader_impl::read_some(
 }
 
 ss::future<std::optional<level_one_log_reader_impl::object_info>>
-level_one_log_reader_impl::lookup_object_for_offset(
-  kafka::offset offset, model::timeout_clock::time_point /*deadline*/) {
-    ss::abort_source default_abort_source;
-    auto* abort_source = _config.abort_source
-                           ? &_config.abort_source.value().get()
-                           : &default_abort_source;
-    retry_chain_node rtc = l1::make_default_metastore_rtc(*abort_source);
-    auto response = co_await l1::retry_metastore_op(
-      [this, offset]
-      -> ss::future<
-        std::expected<l1::metastore::object_response, l1::metastore::errc>> {
-          return _metastore->get_first_ge(_tidp, offset);
-      },
-      rtc);
-    if (!response.has_value()) {
-        switch (response.error()) {
-        case l1::metastore::errc::out_of_range:
-            vlog(
-              _log.debug, "No L1 objects found at offset {} or later", offset);
+level_one_log_reader_impl::next_object(
+  model::timeout_clock::time_point /*deadline*/) {
+    while (true) {
+        auto extent_res_opt = co_await _extent_gen();
+        if (!extent_res_opt.has_value()) {
+            // Generator exhausted — end of stream.
             co_return std::nullopt;
-
-        case l1::metastore::errc::missing_ntp:
-            vlog(_log.debug, "Partition not tracked in metastore");
-            co_return std::nullopt;
-
-        default:
-            throw std::runtime_error(_log.format(
-              "Metastore query failed offset {}: {}",
-              offset,
-              response.error()));
         }
+        auto& extent_res = extent_res_opt->get();
+        if (!extent_res.has_value()) {
+            // Metastore error. The generator already retries transport
+            // errors internally. Non-retryable errors (missing_ntp,
+            // out_of_range) mean we're done.
+            switch (extent_res.error()) {
+            case l1::metastore::errc::out_of_range:
+                vlog(
+                  _log.debug,
+                  "No L1 extents found at offset {} or later",
+                  _next_offset);
+                co_return std::nullopt;
+            case l1::metastore::errc::missing_ntp:
+                vlog(_log.debug, "Partition not tracked in metastore");
+                co_return std::nullopt;
+            default:
+                throw std::runtime_error(_log.format(
+                  "Metastore extent query failed: {}", extent_res.error()));
+            }
+        }
+
+        auto& extent = extent_res.value();
+
+        // Skip extents whose data is entirely before our current offset.
+        if (extent.last_offset < _next_offset) {
+            continue;
+        }
+
+        vassert(
+          extent.obj_info.has_value(),
+          "extent_metadata must have obj_info when using "
+          "include_object_info detail level");
+
+        auto& oi = extent.obj_info.value();
+        vlog(
+          _log.debug,
+          "Found L1 extent [{},{}] object {} at offset {}",
+          extent.base_offset,
+          extent.last_offset,
+          oi.oid,
+          _next_offset);
+
+        auto footer = co_await read_footer(
+          oi.oid, oi.footer_pos, oi.object_size);
+
+        co_return object_info{
+          .oid = oi.oid,
+          .footer = std::move(footer),
+          .last_offset = extent.last_offset,
+        };
     }
-
-    auto& obj = response.value();
-    vlog(_log.debug, "Found L1 object {} at offset {}", obj.oid, offset);
-
-    auto footer = co_await read_footer(
-      obj.oid, obj.footer_pos, obj.object_size);
-
-    co_return object_info{
-      .oid = obj.oid,
-      .footer = std::move(footer),
-      .last_offset = obj.last_offset,
-    };
 }
 
 ss::future<l1::footer> level_one_log_reader_impl::read_footer(

@@ -12,10 +12,13 @@
 #include "cloud_topics/level_one/common/abstract_io.h"
 #include "cloud_topics/level_one/common/object.h"
 #include "cloud_topics/level_one/common/object_id.h"
+#include "cloud_topics/level_one/metastore/extent_metadata_reader.h"
 #include "cloud_topics/level_one/metastore/metastore.h"
 #include "cloud_topics/log_reader_config.h"
 #include "model/record_batch_reader.h"
 #include "utils/prefix_logger.h"
+
+#include <seastar/core/abort_source.hh>
 
 namespace cloud_topics {
 
@@ -86,11 +89,11 @@ private:
     };
 
     /*
-     * Contacts the L1 metastore to retrieve metadata for an L1 object that
-     * contains the target offset.
+     * Advances the extent generator and returns the next extent's object
+     * info, reading the footer. Returns nullopt at end-of-stream.
      */
-    ss::future<std::optional<object_info>> lookup_object_for_offset(
-      kafka::offset, model::timeout_clock::time_point deadline);
+    ss::future<std::optional<object_info>>
+    next_object(model::timeout_clock::time_point deadline);
 
     /*
      * Materialize batches from the L1 object starting from the given offset.
@@ -135,11 +138,14 @@ private:
     model::ntp _ntp;
     model::topic_id_partition _tidp;
     kafka::offset _next_offset;
-    l1::metastore* _metastore;
     l1::io* _io;
     level_one_reader_probe* _probe;
     prefix_logger _log;
     size_t _bytes_consumed{0};
+
+    ss::abort_source _default_as;
+    l1::extent_metadata_reader _extent_reader;
+    l1::extent_metadata_reader::extent_metadata_generator _extent_gen;
 };
 
 } // namespace cloud_topics
