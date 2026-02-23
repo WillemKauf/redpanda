@@ -2140,6 +2140,27 @@ ss::future<chunked_vector<deletable_group_result>> group_manager::delete_groups(
 
         auto group = get_group(group_info.second);
         if (!group) {
+            // Check KIP-848 consumer groups.
+            auto cg_it = _consumer_groups.find(group_info.second);
+            if (cg_it != _consumer_groups.end()) {
+                // Consumer groups can only be deleted when empty.
+                if (!cg_it->second->is_empty()) {
+                    results.push_back(
+                      deletable_group_result{
+                        .group_id = std::move(group_info.second),
+                        .error_code = error_code::non_empty_group,
+                      });
+                } else {
+                    _consumer_groups.erase(cg_it);
+                    results.push_back(
+                      deletable_group_result{
+                        .group_id = std::move(group_info.second),
+                        .error_code = error_code::none,
+                      });
+                }
+                continue;
+            }
+
             results.push_back(
               deletable_group_result{
                 .group_id = std::move(group_info.second),
