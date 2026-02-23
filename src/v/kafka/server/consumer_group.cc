@@ -197,6 +197,57 @@ consumer_group::build_response_assignment(
 
 consumer_group_heartbeat_response
 consumer_group::handle_join(const consumer_group_heartbeat_request_data& req) {
+    auto instance_id = req.instance_id
+                         ? std::make_optional(
+                             kafka::group_instance_id(*req.instance_id))
+                         : std::nullopt;
+
+    // Static member rejoin: if instance_id is set and already tracked,
+    // replace the existing member rather than creating a new one.
+    if (instance_id) {
+        auto sm_it = _static_members.find(*instance_id);
+        if (sm_it != _static_members.end()) {
+            auto existing_it = _members.find(sm_it->second);
+            if (existing_it != _members.end()) {
+                auto& member = existing_it->second;
+                _ctxlog.info(
+                  "Static member {} rejoining with instance_id {}",
+                  sm_it->second,
+                  *instance_id);
+
+                // Update subscription if provided
+                if (req.subscribed_topic_names) {
+                    chunked_vector<ss::sstring> topics(
+                      req.subscribed_topic_names->begin(),
+                      req.subscribed_topic_names->end());
+                    member->set_subscribed_topic_names(std::move(topics));
+
+                    // Rebuild subscribed topics aggregate
+                    _subscribed_topics.clear();
+                    for (const auto& [_, m] : _members) {
+                        for (const auto& topic : m->subscribed_topic_names()) {
+                            _subscribed_topics.insert(topic);
+                        }
+                    }
+                }
+
+                // Refresh heartbeat
+                member->set_latest_heartbeat(clock_type::now());
+                schedule_heartbeat_expiration(member);
+
+                // Respond with existing member's state
+                consumer_group_heartbeat_response resp;
+                resp.data.error_code = error_code::none;
+                resp.data.member_id = member->id();
+                resp.data.member_epoch = member->member_epoch();
+                resp.data.heartbeat_interval_ms = static_cast<int32_t>(
+                  _conf.consumer_group_heartbeat_interval_ms().count());
+                resp.data.assignment = build_response_assignment(member);
+                return resp;
+            }
+        }
+    }
+
     // Check group max size
     if (
       static_cast<int32_t>(_members.size())
@@ -211,9 +262,7 @@ consumer_group::handle_join(const consumer_group_heartbeat_request_data& req) {
     // Create member
     auto member = ss::make_lw_shared<consumer_group_member>(
       new_member_id,
-      req.instance_id
-        ? std::make_optional(kafka::group_instance_id(*req.instance_id))
-        : std::nullopt,
+      instance_id,
       req.rack_id ? std::make_optional(*req.rack_id) : std::nullopt,
       req.rebalance_timeout_ms > std::chrono::milliseconds(0)
         ? req.rebalance_timeout_ms
@@ -237,8 +286,10 @@ consumer_group::handle_join(const consumer_group_heartbeat_request_data& req) {
         _subscribed_topics.insert(topic);
     }
 
-    // Set initial epoch
-    member->set_member_epoch(kafka::consumer_group_member_epoch(1));
+    // Set initial epoch to the current group epoch (will advance to
+    // target_assignment_epoch once converged)
+    member->set_member_epoch(
+      kafka::consumer_group_member_epoch(_group_epoch()));
 
     // Store member
     _members[new_member_id] = member;
@@ -247,7 +298,7 @@ consumer_group::handle_join(const consumer_group_heartbeat_request_data& req) {
 
     // Bump epoch and trigger assignment
     bump_group_epoch();
-    set_state(consumer_group_state::assigning);
+    maybe_update_state();
 
     // Schedule heartbeat expiration
     schedule_heartbeat_expiration(member);
@@ -278,6 +329,36 @@ consumer_group::handle_leave(const consumer_group_heartbeat_request_data& req) {
     resp.data.error_code = error_code::none;
     resp.data.member_id = kafka::member_id(req.member_id);
     resp.data.member_epoch = kafka::consumer_group_member_epoch(-1);
+    resp.data.heartbeat_interval_ms = 0;
+    return resp;
+}
+
+consumer_group_heartbeat_response consumer_group::handle_static_leave(
+  const consumer_group_heartbeat_request_data& req) {
+    auto member_id = kafka::member_id(req.member_id);
+    auto it = _members.find(member_id);
+    if (it == _members.end()) {
+        return consumer_group_heartbeat_response(error_code::unknown_member_id);
+    }
+
+    auto& member = it->second;
+    if (!member->instance_id()) {
+        // epoch -2 is only valid for static members
+        return consumer_group_heartbeat_response(error_code::unknown_member_id);
+    }
+
+    _ctxlog.info(
+      "Static member {} temporarily leaving (instance_id: {})",
+      member_id,
+      *member->instance_id());
+
+    // Cancel heartbeat timer but keep the member and its assignment
+    member->expire_timer().cancel();
+
+    consumer_group_heartbeat_response resp;
+    resp.data.error_code = error_code::none;
+    resp.data.member_id = kafka::member_id(req.member_id);
+    resp.data.member_epoch = kafka::consumer_group_member_epoch(-2);
     resp.data.heartbeat_interval_ms = 0;
     return resp;
 }
@@ -340,6 +421,14 @@ consumer_group_heartbeat_response consumer_group::handle_heartbeat(
             current[tp.topic_id] = std::move(parts);
         }
         member->set_current_assignment(std::move(current));
+
+        // Advance member epoch to target_assignment_epoch when the member
+        // has converged (current == target). This is the core KIP-848
+        // epoch advancement logic.
+        if (member->is_at_target()) {
+            member->set_member_epoch(
+              kafka::consumer_group_member_epoch(_target_assignment_epoch()));
+        }
     }
 
     if (subscription_changed) {
@@ -382,6 +471,8 @@ consumer_group::handle_consumer_group_heartbeat(
         resp = handle_join(data);
     } else if (data.member_epoch == kafka::consumer_group_member_epoch(-1)) {
         resp = handle_leave(data);
+    } else if (data.member_epoch == kafka::consumer_group_member_epoch(-2)) {
+        resp = handle_static_leave(data);
     } else {
         resp = handle_heartbeat(data);
     }
@@ -517,6 +608,11 @@ offset_commit_response
 consumer_group::handle_offset_commit(const offset_commit_request& req) {
     offset_commit_response resp;
 
+    if (_state == consumer_group_state::dead) {
+        return offset_commit_response(
+          req, error_code::coordinator_not_available);
+    }
+
     // Validate member if generation_id >= 0 (KIP-848 uses member_epoch
     // in the generation_id field for compatibility)
     if (req.data.generation_id >= 0) {
@@ -528,7 +624,7 @@ consumer_group::handle_offset_commit(const offset_commit_request& req) {
 
         // Validate epoch via generation_id field
         if (req.data.generation_id != it->second->member_epoch()()) {
-            return offset_commit_response(req, error_code::illegal_generation);
+            return offset_commit_response(req, error_code::fenced_member_epoch);
         }
 
         // Refresh heartbeat

@@ -132,6 +132,10 @@ private:
     consumer_group_heartbeat_response
     handle_leave(const consumer_group_heartbeat_request_data& req);
 
+    /// Handle a static member temporary leave (member_epoch == -2).
+    consumer_group_heartbeat_response
+    handle_static_leave(const consumer_group_heartbeat_request_data& req);
+
     /// Handle a regular heartbeat (member_epoch > 0).
     consumer_group_heartbeat_response
     handle_heartbeat(const consumer_group_heartbeat_request_data& req);

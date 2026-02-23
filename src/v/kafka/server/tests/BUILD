@@ -1041,6 +1041,7 @@ redpanda_cc_btest(
         "//src/v/kafka/protocol",
         "//src/v/kafka/server",
         "//src/v/model",
+        "//src/v/storage:record_batch_builder",
         "//src/v/test_utils:seastar_boost",
         "@abseil-cpp//absl/container:node_hash_map",
         "@boost//:test",
