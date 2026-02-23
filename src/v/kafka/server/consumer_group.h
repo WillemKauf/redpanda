@@ -20,6 +20,7 @@
 #include "kafka/protocol/offset_fetch.h"
 #include "kafka/protocol/types.h"
 #include "kafka/server/consumer_group_assignor.h"
+#include "kafka/server/group_metadata.h"
 #include "kafka/server/consumer_group_member.h"
 #include "kafka/server/consumer_group_state.h"
 #include "kafka/server/logger.h"
@@ -95,6 +96,15 @@ public:
     /// assignments.
     void notify_topic_metadata_changed(
       const absl::node_hash_set<model::topic>& changed_topics);
+
+    /// Recover state from persisted metadata (on leadership change).
+    void recover_from_metadata(consumer_group_metadata_value md);
+
+    /// Build a metadata value from current in-memory state for persistence.
+    consumer_group_metadata_value build_metadata_value() const;
+
+    /// Persist current state to the __consumer_offsets partition via raft.
+    ss::future<> checkpoint();
 
 private:
     /// Generate a new unique member ID.

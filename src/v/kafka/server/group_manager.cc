@@ -1234,6 +1234,28 @@ ss::future<> group_manager::recover_partition(
           return do_recover_group(
             term, p, std::move(pair.first), std::move(pair.second));
       });
+
+    // Recover KIP-848 consumer groups
+    for (auto& [gid, cg_kv] : ctx.consumer_groups) {
+        if (!cg_kv.value) {
+            continue;
+        }
+        vlog(
+          cg_klog.info,
+          "Recovering KIP-848 consumer group {} with epoch {}",
+          gid,
+          cg_kv.value->group_epoch);
+
+        auto cg = ss::make_lw_shared<consumer_group>(
+          gid,
+          _conf,
+          p->partition,
+          term,
+          _metadata_cache.local());
+        cg->recover_from_metadata(std::move(*cg_kv.value));
+        _consumer_groups[gid] = std::move(cg);
+    }
+
     p->group_blocks = std::move(ctx.group_blocks);
 }
 

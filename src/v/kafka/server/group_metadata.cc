@@ -72,6 +72,10 @@ group_metadata_type decode_metadata_type(protocol::decoder& key_reader) {
     if (version == group_metadata_version{2}) {
         return group_metadata_type::group_metadata;
     }
+
+    if (version == group_metadata_version{3}) {
+        return group_metadata_type::consumer_group_metadata;
+    }
     throw std::invalid_argument(
       fmt::format(
         "unexpected group metadata record with key versions {}", version));
@@ -370,6 +374,119 @@ void group_block::add_to_batch_builder(storage::record_batch_builder& b) const {
     b.add_raw_kv(std::move(key), serde::to_iobuf(info));
 }
 
+// --- KIP-848 consumer group metadata encode/decode ---
+
+void consumer_group_metadata_key::encode(
+  protocol::encoder& writer, const consumer_group_metadata_key& v) {
+    writer.write(v.version);
+    writer.write(v.group_id);
+}
+
+consumer_group_metadata_key
+consumer_group_metadata_key::decode(protocol::decoder& reader) {
+    consumer_group_metadata_key ret;
+    auto version = read_metadata_version(reader);
+    vassert(
+      version == consumer_group_metadata_key::version,
+      "Only valid version for consumer_group_metadata_key is 3. Read "
+      "version: {}",
+      version);
+    ret.group_id = kafka::group_id(reader.read_string());
+    return ret;
+}
+
+void consumer_group_member_state::encode(
+  protocol::encoder& writer, const consumer_group_member_state& v) {
+    writer.write(v.version);
+    writer.write(v.id);
+    writer.write(v.instance_id);
+    writer.write(v.rack_id);
+    writer.write(
+      static_cast<int32_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+          v.rebalance_timeout)
+          .count()));
+    writer.write(v.member_epoch);
+
+    // Write subscribed topic names as array
+    writer.write(static_cast<int32_t>(v.subscribed_topic_names.size()));
+    for (const auto& topic : v.subscribed_topic_names) {
+        writer.write(topic);
+    }
+    writer.write(v.subscribed_topic_regex);
+}
+
+consumer_group_member_state
+consumer_group_member_state::decode(protocol::decoder& reader) {
+    consumer_group_member_state ret;
+    auto version = read_metadata_version(reader);
+    validate_version_range(
+      version, "consumer_group_member_state", consumer_group_member_state::version);
+
+    ret.id = kafka::member_id(reader.read_string());
+    auto instance_id = reader.read_nullable_string();
+    if (instance_id) {
+        ret.instance_id = kafka::group_instance_id(std::move(*instance_id));
+    }
+    auto rack_id = reader.read_nullable_string();
+    if (rack_id) {
+        ret.rack_id = std::move(*rack_id);
+    }
+    ret.rebalance_timeout = std::chrono::milliseconds(reader.read_int32());
+    ret.member_epoch = reader.read_int32();
+
+    // Read subscribed topic names
+    auto num_topics = reader.read_int32();
+    ret.subscribed_topic_names.reserve(num_topics);
+    for (int32_t i = 0; i < num_topics; ++i) {
+        ret.subscribed_topic_names.push_back(reader.read_string());
+    }
+    auto regex = reader.read_nullable_string();
+    if (regex) {
+        ret.subscribed_topic_regex = std::move(*regex);
+    }
+    return ret;
+}
+
+void consumer_group_metadata_value::encode(
+  protocol::encoder& writer, const consumer_group_metadata_value& v) {
+    writer.write(v.version);
+    writer.write(v.group_epoch);
+    writer.write(v.target_assignment_epoch);
+    writer.write(v.assignor);
+    writer.write(v.state);
+    writer.write(v.state_timestamp());
+
+    // Members
+    writer.write(static_cast<int32_t>(v.members.size()));
+    for (const auto& m : v.members) {
+        consumer_group_member_state::encode(writer, m);
+    }
+}
+
+consumer_group_metadata_value
+consumer_group_metadata_value::decode(protocol::decoder& reader) {
+    consumer_group_metadata_value ret;
+    auto version = read_metadata_version(reader);
+    validate_version_range(
+      version,
+      "consumer_group_metadata_value",
+      consumer_group_metadata_value::version);
+
+    ret.group_epoch = reader.read_int32();
+    ret.target_assignment_epoch = reader.read_int32();
+    ret.assignor = reader.read_string();
+    ret.state = reader.read_int8();
+    ret.state_timestamp = model::timestamp(reader.read_int64());
+
+    auto num_members = reader.read_int32();
+    ret.members.reserve(num_members);
+    for (int32_t i = 0; i < num_members; ++i) {
+        ret.members.push_back(consumer_group_member_state::decode(reader));
+    }
+    return ret;
+}
+
 namespace group_metadata_serializer {
 group_metadata_type get_metadata_type(iobuf buffer) {
     auto reader = protocol::decoder(maybe_unwrap_from_iobuf(std::move(buffer)));
@@ -417,6 +534,27 @@ offset_metadata_kv decode_offset_metadata(model::record record) {
         ret.value = offset_metadata_value::decode(v_reader);
     }
 
+    return ret;
+}
+
+key_value to_kv(consumer_group_metadata_kv md) {
+    key_value ret;
+    ret.key = metadata_to_iobuf(md.key);
+    if (md.value) {
+        ret.value = metadata_to_iobuf(*md.value);
+    }
+    return ret;
+}
+
+consumer_group_metadata_kv
+decode_consumer_group_metadata(model::record record) {
+    consumer_group_metadata_kv ret;
+    protocol::decoder k_reader(maybe_unwrap_from_iobuf(record.release_key()));
+    ret.key = consumer_group_metadata_key::decode(k_reader);
+    if (record.has_value()) {
+        protocol::decoder v_reader(record.release_value());
+        ret.value = consumer_group_metadata_value::decode(v_reader);
+    }
     return ret;
 }
 } // namespace group_metadata_serializer

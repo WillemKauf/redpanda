@@ -196,6 +196,7 @@ ss::future<> group_tx_tracker_stm::handle_raft_data(model::record_batch batch) {
         switch (record_type) {
         case offset_commit:
         case noop:
+        case consumer_group_metadata:
             return;
         case group_metadata:
             handle_group_metadata(

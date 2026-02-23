@@ -28,6 +28,7 @@ enum group_metadata_type {
     offset_commit,
     group_metadata,
     noop,
+    consumer_group_metadata, // KIP-848
 };
 
 group_metadata_type decode_metadata_type(protocol::decoder& key_reader);
@@ -173,6 +174,64 @@ struct group_metadata_kv {
     group_metadata_kv copy() const;
 };
 
+/// KIP-848: Consumer group member state for persistence.
+struct consumer_group_member_state {
+    static constexpr group_metadata_version version{0};
+    kafka::member_id id;
+    std::optional<kafka::group_instance_id> instance_id;
+    std::optional<ss::sstring> rack_id;
+    std::chrono::milliseconds rebalance_timeout;
+    int32_t member_epoch;
+    std::vector<ss::sstring> subscribed_topic_names;
+    std::optional<ss::sstring> subscribed_topic_regex;
+
+    friend bool operator==(
+      const consumer_group_member_state&,
+      const consumer_group_member_state&)
+      = default;
+    static consumer_group_member_state decode(protocol::decoder&);
+    static void
+    encode(protocol::encoder&, const consumer_group_member_state&);
+};
+
+/// KIP-848: Consumer group metadata key (key version 3).
+struct consumer_group_metadata_key {
+    static constexpr group_metadata_version version{3};
+    kafka::group_id group_id;
+
+    friend bool operator==(
+      const consumer_group_metadata_key&,
+      const consumer_group_metadata_key&)
+      = default;
+    static consumer_group_metadata_key decode(protocol::decoder&);
+    static void
+    encode(protocol::encoder&, const consumer_group_metadata_key&);
+};
+
+/// KIP-848: Consumer group metadata value.
+struct consumer_group_metadata_value {
+    static constexpr group_metadata_version version{0};
+    int32_t group_epoch;
+    int32_t target_assignment_epoch;
+    ss::sstring assignor;
+    int8_t state; // consumer_group_state as int
+    model::timestamp state_timestamp{-1};
+    std::vector<consumer_group_member_state> members;
+
+    friend bool operator==(
+      const consumer_group_metadata_value&,
+      const consumer_group_metadata_value&)
+      = default;
+    static consumer_group_metadata_value decode(protocol::decoder&);
+    static void
+    encode(protocol::encoder&, const consumer_group_metadata_value&);
+};
+
+struct consumer_group_metadata_kv {
+    consumer_group_metadata_key key;
+    std::optional<consumer_group_metadata_value> value;
+};
+
 inline group_metadata_version read_metadata_version(protocol::decoder& reader) {
     return group_metadata_version{reader.read_int16()};
 }
@@ -209,8 +268,11 @@ struct key_value {
 group_metadata_type get_metadata_type(iobuf buf);
 key_value to_kv(group_metadata_kv md);
 key_value to_kv(offset_metadata_kv md);
+key_value to_kv(consumer_group_metadata_kv md);
 group_metadata_kv decode_group_metadata(model::record record);
 offset_metadata_kv decode_offset_metadata(model::record record);
+consumer_group_metadata_kv
+decode_consumer_group_metadata(model::record record);
 }; // namespace group_metadata_serializer
 
 namespace group_tx {

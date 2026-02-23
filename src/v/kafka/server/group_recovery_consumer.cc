@@ -201,6 +201,11 @@ void group_recovery_consumer::handle_record(model::record r) {
             handle_group_metadata(
               group_metadata_serializer::decode_group_metadata(std::move(r)));
             return;
+        case consumer_group_metadata:
+            handle_consumer_group_metadata(
+              group_metadata_serializer::decode_consumer_group_metadata(
+                std::move(r)));
+            return;
         case noop:
             // ignore noops, they are handled for backward compatibility
             return;
@@ -270,6 +275,25 @@ void group_recovery_consumer::handle_offset_metadata(offset_metadata_kv md) {
         if (group_it != _state.groups.end()) {
             group_it->second.remove_offset(tp);
         }
+    }
+}
+
+void group_recovery_consumer::handle_consumer_group_metadata(
+  consumer_group_metadata_kv md) {
+    if (md.value) {
+        vlog(
+          cg_klog.trace,
+          "[consumer group: {}] recovered consumer group metadata",
+          md.key.group_id);
+        // Last entry wins (deduplication on the group_id key)
+        _state.consumer_groups[md.key.group_id] = std::move(md);
+    } else {
+        // Tombstone: remove the consumer group
+        vlog(
+          cg_klog.trace,
+          "[consumer group: {}] recovered tombstone",
+          md.key.group_id);
+        _state.consumer_groups.erase(md.key.group_id);
     }
 }
 

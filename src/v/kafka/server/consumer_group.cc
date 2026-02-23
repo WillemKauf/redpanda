@@ -12,9 +12,13 @@
 #include "base/vassert.h"
 #include "cluster/metadata_cache.h"
 #include "cluster/partition.h"
+#include "cluster/simple_batch_builder.h"
 #include "container/chunked_vector.h"
+#include "kafka/server/group_metadata.h"
 #include "model/fundamental.h"
 #include "model/namespace.h"
+#include "raft/errc.h"
+#include "raft/fundamental.h"
 
 #include <seastar/core/sstring.hh>
 
@@ -370,16 +374,121 @@ consumer_group::handle_consumer_group_heartbeat(
     }
 
     // Dispatch based on member_epoch
+    consumer_group_heartbeat_response resp;
     if (data.member_epoch == kafka::consumer_group_member_epoch(0)) {
-        // Join
-        co_return handle_join(data);
+        resp = handle_join(data);
     } else if (data.member_epoch == kafka::consumer_group_member_epoch(-1)) {
-        // Leave
-        co_return handle_leave(data);
+        resp = handle_leave(data);
     } else {
-        // Regular heartbeat
-        co_return handle_heartbeat(data);
+        resp = handle_heartbeat(data);
     }
+
+    // Persist state after any successful mutation
+    if (resp.data.error_code == error_code::none) {
+        co_await checkpoint();
+    }
+    co_return resp;
+}
+
+ss::future<> consumer_group::checkpoint() {
+    auto kv = group_metadata_serializer::to_kv(consumer_group_metadata_kv{
+      .key = consumer_group_metadata_key{.group_id = _id},
+      .value = build_metadata_value(),
+    });
+
+    cluster::simple_batch_builder builder(
+      model::record_batch_type::raft_data, model::offset(0));
+    builder.add_raw_kv(std::move(kv.key), std::move(kv.value));
+
+    auto batch = std::move(builder).build();
+    auto result = co_await _partition->raft()->replicate(
+      std::move(batch),
+      raft::replicate_options(raft::consistency_level::quorum_ack, _term));
+    if (result) {
+        _ctxlog.trace(
+          "Checkpointed state at offset {}", result.value().last_offset);
+    } else if (result.error() == raft::errc::shutting_down) {
+        _ctxlog.debug("Cannot checkpoint state due to shutdown");
+    } else {
+        _ctxlog.warn(
+          "Error checkpointing state: {} ({})",
+          result.error().message(),
+          result.error());
+    }
+}
+
+consumer_group_metadata_value
+consumer_group::build_metadata_value() const {
+    consumer_group_metadata_value val;
+    val.group_epoch = _group_epoch();
+    val.target_assignment_epoch = _target_assignment_epoch();
+    val.assignor = _assignor.name()();
+    val.state = static_cast<int8_t>(_state);
+    val.state_timestamp = model::timestamp::now();
+
+    for (const auto& [_, member] : _members) {
+        consumer_group_member_state ms;
+        ms.id = member->id();
+        ms.instance_id = member->instance_id();
+        ms.rack_id = member->rack_id();
+        ms.rebalance_timeout = member->rebalance_timeout();
+        ms.member_epoch = member->member_epoch()();
+        for (const auto& t : member->subscribed_topic_names()) {
+            ms.subscribed_topic_names.push_back(t);
+        }
+        ms.subscribed_topic_regex = member->subscribed_topic_regex();
+        val.members.push_back(std::move(ms));
+    }
+    return val;
+}
+
+void consumer_group::recover_from_metadata(
+  consumer_group_metadata_value md) {
+    _group_epoch = kafka::consumer_group_epoch(md.group_epoch);
+    _target_assignment_epoch = kafka::consumer_group_epoch(
+      md.target_assignment_epoch);
+    _state = static_cast<consumer_group_state>(md.state);
+
+    for (auto& ms : md.members) {
+        chunked_vector<ss::sstring> topics;
+        topics.reserve(ms.subscribed_topic_names.size());
+        for (auto& t : ms.subscribed_topic_names) {
+            topics.push_back(std::move(t));
+        }
+
+        auto member = ss::make_lw_shared<consumer_group_member>(
+          ms.id,
+          ms.instance_id,
+          ms.rack_id,
+          ms.rebalance_timeout,
+          std::move(topics),
+          ms.subscribed_topic_regex,
+          std::nullopt);
+        member->set_member_epoch(
+          kafka::consumer_group_member_epoch(ms.member_epoch));
+
+        // Track static member
+        if (member->instance_id()) {
+            _static_members[*member->instance_id()] = ms.id;
+        }
+
+        // Rebuild subscribed topics
+        for (const auto& topic : member->subscribed_topic_names()) {
+            _subscribed_topics.insert(topic);
+        }
+
+        _members[ms.id] = std::move(member);
+    }
+
+    // Schedule heartbeat expiration for recovered members
+    for (auto& [_, member] : _members) {
+        schedule_heartbeat_expiration(member);
+    }
+
+    _ctxlog.info(
+      "Recovered {} members, group epoch {}",
+      _members.size(),
+      _group_epoch);
 }
 
 void consumer_group::notify_topic_metadata_changed(

@@ -24,6 +24,9 @@ namespace kafka {
 
 struct group_recovery_consumer_state {
     absl::node_hash_map<kafka::group_id, group_stm> groups;
+    // KIP-848 consumer group metadata recovered from log
+    absl::node_hash_map<kafka::group_id, consumer_group_metadata_kv>
+      consumer_groups;
     group_block_info_map group_blocks;
 
     /*
@@ -75,6 +78,7 @@ private:
     void handle_record(model::record);
     void handle_group_metadata(group_metadata_kv);
     void handle_offset_metadata(offset_metadata_kv);
+    void handle_consumer_group_metadata(consumer_group_metadata_kv);
     group_recovery_consumer_state _state;
     model::offset _batch_base_offset;
     ss::abort_source& _as;
