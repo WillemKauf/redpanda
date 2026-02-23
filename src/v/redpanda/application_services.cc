@@ -733,7 +733,8 @@ void application::wire_up_redpanda_services(
       std::ref(controller->get_topics_state()),
       std::ref(tx_gateway_frontend),
       std::ref(controller->get_feature_table()),
-      std::ref(controller->get_health_monitor()))
+      std::ref(controller->get_health_monitor()),
+      std::ref(metadata_cache))
       .get();
     construct_service(
       offsets_recoverer,

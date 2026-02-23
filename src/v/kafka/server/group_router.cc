@@ -255,6 +255,13 @@ group_router::heartbeat(heartbeat_request&& request) {
     return route(std::move(request), &group_manager::heartbeat);
 }
 
+ss::future<consumer_group_heartbeat_response>
+group_router::consumer_group_heartbeat(
+  consumer_group_heartbeat_request&& request) {
+    return route(
+      std::move(request), &group_manager::consumer_group_heartbeat);
+}
+
 ss::future<leave_group_response>
 group_router::leave_group(leave_group_request&& request) {
     return route(std::move(request), &group_manager::leave_group);

@@ -18,6 +18,8 @@
 #include "cluster/topic_table.h"
 #include "container/chunked_vector.h"
 #include "kafka/protocol/errors.h"
+#include "kafka/protocol/consumer_group_heartbeat.h"
+#include "kafka/server/consumer_group.h"
 #include "kafka/protocol/heartbeat.h"
 #include "kafka/protocol/join_group.h"
 #include "kafka/protocol/leave_group.h"
@@ -129,7 +131,8 @@ public:
       ss::sharded<cluster::topic_table>&,
       ss::sharded<cluster::tx_gateway_frontend>& tx_frontend,
       ss::sharded<features::feature_table>&,
-      ss::sharded<cluster::health_monitor_frontend>& hm_frontend);
+      ss::sharded<cluster::health_monitor_frontend>& hm_frontend,
+      ss::sharded<cluster::metadata_cache>& metadata_cache);
 
     ss::future<> start();
     ss::future<> stop();
@@ -149,6 +152,10 @@ public:
 
     /// \brief Handle a Heartbeat request
     ss::future<heartbeat_response> heartbeat(heartbeat_request&& request);
+
+    /// \brief Handle a ConsumerGroupHeartbeat request (KIP-848)
+    ss::future<consumer_group_heartbeat_response>
+    consumer_group_heartbeat(consumer_group_heartbeat_request&& request);
 
     /// \brief Handle a LeaveGroup request
     ss::future<leave_group_response> leave_group(leave_group_request&& request);
@@ -349,8 +356,11 @@ private:
     ss::sharded<cluster::tx_gateway_frontend>& _tx_frontend;
     ss::sharded<features::feature_table>& _feature_table;
     ss::sharded<cluster::health_monitor_frontend>& _hm_frontend;
+    ss::sharded<cluster::metadata_cache>& _metadata_cache;
     config::configuration& _conf;
     absl::node_hash_map<group_id, group_ptr> _groups;
+    absl::node_hash_map<group_id, ss::lw_shared_ptr<consumer_group>>
+      _consumer_groups;
     absl::node_hash_map<model::ntp, ss::lw_shared_ptr<attached_partition>>
       _partitions;
 

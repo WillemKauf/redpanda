@@ -80,7 +80,8 @@ group_manager::group_manager(
   ss::sharded<cluster::topic_table>& topic_table,
   ss::sharded<cluster::tx_gateway_frontend>& tx_frontend,
   ss::sharded<features::feature_table>& feature_table,
-  ss::sharded<cluster::health_monitor_frontend>& hm_frontend)
+  ss::sharded<cluster::health_monitor_frontend>& hm_frontend,
+  ss::sharded<cluster::metadata_cache>& metadata_cache)
   : _tp_ns(std::move(tp_ns))
   , _gm(gm)
   , _pm(pm)
@@ -88,6 +89,7 @@ group_manager::group_manager(
   , _tx_frontend(tx_frontend)
   , _feature_table(feature_table)
   , _hm_frontend(hm_frontend)
+  , _metadata_cache(metadata_cache)
   , _conf(config::shard_local_cfg())
   , _self(cluster::make_self_broker(config::node()))
   , _offset_retention_check(_conf.group_offset_retention_check_ms.bind())
@@ -1525,6 +1527,45 @@ ss::future<heartbeat_response> group_manager::heartbeat(heartbeat_request&& r) {
       r.data.group_id);
 
     return make_heartbeat_error(error_code::unknown_member_id);
+}
+
+ss::future<consumer_group_heartbeat_response>
+group_manager::consumer_group_heartbeat(
+  consumer_group_heartbeat_request&& r) {
+    auto error = validate_group_status(
+      r.ntp, r.data.group_id, consumer_group_heartbeat_api::key, false);
+    if (error != error_code::none) {
+        co_return consumer_group_heartbeat_response(error);
+    }
+
+    // Find or create the consumer group.
+    auto group_id = r.data.group_id;
+    auto it = _consumer_groups.find(group_id);
+    if (it == _consumer_groups.end()) {
+        // Only create on join (member_epoch == 0).
+        if (r.data.member_epoch != 0) {
+            co_return consumer_group_heartbeat_response(
+              error_code::group_id_not_found);
+        }
+
+        auto p = get_attached_partition(r.ntp);
+        if (!p || !p->partition) {
+            co_return consumer_group_heartbeat_response(
+              error_code::not_coordinator);
+        }
+
+        auto cg = ss::make_lw_shared<consumer_group>(
+          group_id,
+          _conf,
+          p->partition,
+          p->term,
+          _metadata_cache.local());
+        _consumer_groups[group_id] = cg;
+        it = _consumer_groups.find(group_id);
+    }
+
+    co_return co_await it->second->handle_consumer_group_heartbeat(
+      std::move(r));
 }
 
 ss::future<leave_group_response>

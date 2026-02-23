@@ -539,11 +539,9 @@ ss::future<response_ptr> consumer_group_heartbeat_handler::handle(
     request.decode(ctx.reader(), ctx.header().version);
     log_request(ctx.header(), request);
 
-    // KIP-848: Return UNSUPPORTED_VERSION until the feature is fully
-    // implemented. The feature flag check will gate this once the full
-    // implementation is in place.
-    co_return co_await ctx.respond(
-      consumer_group_heartbeat_response(error_code::unsupported_version));
+    auto resp = co_await ctx.groups().consumer_group_heartbeat(
+      std::move(request));
+    co_return co_await ctx.respond(std::move(resp));
 }
 
 ss::future<> server::revoke_credentials(std::string_view name) {
