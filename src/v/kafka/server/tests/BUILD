@@ -1028,3 +1028,23 @@ redpanda_cc_gtest(
         "@seastar",
     ],
 )
+
+redpanda_cc_btest(
+    name = "consumer_group_test",
+    timeout = "short",
+    srcs = [
+        "consumer_group_test.cc",
+    ],
+    deps = [
+        "//src/v/container:chunked_hash_map",
+        "//src/v/container:chunked_vector",
+        "//src/v/kafka/protocol",
+        "//src/v/kafka/server",
+        "//src/v/model",
+        "//src/v/test_utils:seastar_boost",
+        "@abseil-cpp//absl/container:node_hash_map",
+        "@boost//:test",
+        "@seastar",
+        "@seastar//:testing",
+    ],
+)
