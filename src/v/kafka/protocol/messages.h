@@ -14,6 +14,7 @@
 #include "kafka/protocol/schemata/add_partitions_to_txn_request.h"
 #include "kafka/protocol/schemata/alter_client_quotas_request.h"
 #include "kafka/protocol/schemata/alter_configs_request.h"
+#include "kafka/protocol/schemata/consumer_group_heartbeat_request.h"
 #include "kafka/protocol/schemata/alter_partition_reassignments_request.h"
 #include "kafka/protocol/schemata/alter_user_scram_credentials_request.h"
 #include "kafka/protocol/schemata/api_versions_request.h"
@@ -111,6 +112,7 @@ using request_types = make_request_types<
   describe_client_quotas_api,
   describe_cluster_api,
   describe_user_scram_credentials_api,
-  alter_user_scram_credentials_api>;
+  alter_user_scram_credentials_api,
+  consumer_group_heartbeat_api>;
 
 } // namespace kafka

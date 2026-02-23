@@ -31,6 +31,7 @@ redpanda_cc_library(
         "//src/v/kafka/protocol:alter_client_quotas",
         "//src/v/kafka/protocol:alter_configs",
         "//src/v/kafka/protocol:alter_partition_reassignments",
+        "//src/v/kafka/protocol:consumer_group_heartbeat",
         "//src/v/kafka/protocol:alter_user_scram_credentials",
         "//src/v/kafka/protocol:api_versions",
         "//src/v/kafka/protocol:create_acls",

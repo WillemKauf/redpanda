@@ -13,6 +13,7 @@
 #include "kafka/protocol/add_partitions_to_txn.h"
 #include "kafka/protocol/alter_client_quotas.h"
 #include "kafka/protocol/alter_configs.h"
+#include "kafka/protocol/consumer_group_heartbeat.h"
 #include "kafka/protocol/alter_partition_reassignments.h"
 #include "kafka/protocol/alter_user_scram_credentials.h"
 #include "kafka/protocol/api_versions.h"

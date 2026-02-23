@@ -46,6 +46,7 @@
 #include "kafka/server/handlers/end_txn.h"
 #include "kafka/server/handlers/fetch/replica_selector.h"
 #include "kafka/server/handlers/handler_interface.h"
+#include "kafka/server/handlers/consumer_group_heartbeat.h"
 #include "kafka/server/handlers/heartbeat.h"
 #include "kafka/server/handlers/init_producer_id.h"
 #include "kafka/server/handlers/join_group.h"
@@ -529,6 +530,20 @@ ss::future<response_ptr> heartbeat_handler::handle(
 
     auto resp = co_await ctx.groups().heartbeat(std::move(request));
     co_return co_await ctx.respond(resp);
+}
+
+template<>
+ss::future<response_ptr> consumer_group_heartbeat_handler::handle(
+  request_context ctx, [[maybe_unused]] ss::smp_service_group g) {
+    consumer_group_heartbeat_request request;
+    request.decode(ctx.reader(), ctx.header().version);
+    log_request(ctx.header(), request);
+
+    // KIP-848: Return UNSUPPORTED_VERSION until the feature is fully
+    // implemented. The feature flag check will gate this once the full
+    // implementation is in place.
+    co_return co_await ctx.respond(
+      consumer_group_heartbeat_response(error_code::unsupported_version));
 }
 
 ss::future<> server::revoke_credentials(std::string_view name) {

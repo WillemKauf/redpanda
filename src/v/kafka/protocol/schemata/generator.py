@@ -160,6 +160,23 @@ path_type_map = {
         "MemberId": ("kafka::member_id", "string"),
         "GroupInstanceId": ("kafka::group_instance_id", "string"),
     },
+    "ConsumerGroupHeartbeatRequestData": {
+        "MemberId": ("kafka::member_id", "string"),
+        "MemberEpoch": ("kafka::consumer_group_member_epoch", "int32"),
+        "InstanceId": ("kafka::group_instance_id", "string"),
+        "TopicPartitions": {
+            "TopicId": ("model::topic_id", "uuid"),
+            "Partitions": ("model::partition_id", "int32"),
+        },
+    },
+    "ConsumerGroupHeartbeatResponseData": {
+        "MemberId": ("kafka::member_id", "string"),
+        "MemberEpoch": ("kafka::consumer_group_member_epoch", "int32"),
+        "Assignment": {
+            "TopicId": ("model::topic_id", "uuid"),
+            "Partitions": ("model::partition_id", "int32"),
+        },
+    },
     "LeaveGroupRequestData": {
         "MemberId": ("kafka::member_id", "string"),
         "Members": {
@@ -549,6 +566,12 @@ struct_renames = {
 
     ("FetchResponseData", "Responses", "Partitions", "DivergingEpoch"):
         ("EpochEndOffset", "DivergingEpochEndOffset"),
+
+    ("ConsumerGroupHeartbeatRequestData", "TopicPartitions"):
+        ("TopicPartitions", "ConsumerGroupHeartbeatRequestTopicPartitions"),
+
+    ("ConsumerGroupHeartbeatResponseData", "Assignment"):
+        ("TopicPartitions", "ConsumerGroupHeartbeatResponseTopicPartitions"),
 }
 
 # extra header per type name
@@ -727,6 +750,7 @@ STRUCT_TYPES = [
     "ScramCredentialUpsertion",
     "AlterUserScramCredentialsResult",
     "Coordinator",
+    "TopicPartitions",
 ]
 
 # A list of StructTypes that are allowed to be not arrays in the schema.
