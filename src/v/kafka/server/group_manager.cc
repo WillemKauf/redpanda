@@ -457,6 +457,9 @@ ss::future<> group_manager::stop() {
     _lag_metrics_timer.cancel();
 
     return _gate.close().then([this]() {
+        // Clear KIP-848 consumer groups.
+        _consumer_groups.clear();
+
         /**
          * cancel all pending group opeartions
          */
@@ -1924,6 +1927,19 @@ group_manager::list_groups(const list_groups_filter_data& filter_data) const {
         }
     }
 
+    // Include KIP-848 consumer groups.
+    for (const auto& [gid, cg] : _consumer_groups) {
+        auto no_filter = filter_data.states_filter.empty();
+        if (no_filter) {
+            groups.push_back(listed_group{
+              .group_id = gid,
+              .protocol_type = kafka::protocol_type("consumer"),
+              .group_state = ss::sstring(
+                consumer_group_state_to_string(cg->state())),
+            });
+        }
+    }
+
     auto error = loading ? error_code::coordinator_load_in_progress
                          : error_code::none;
 
@@ -1939,6 +1955,19 @@ group_manager::describe_group(const model::ntp& ntp, const kafka::group_id& g) {
 
     auto group = get_group(g);
     if (!group) {
+        // Check KIP-848 consumer groups.
+        auto cg_it = _consumer_groups.find(g);
+        if (cg_it != _consumer_groups.end()) {
+            auto& cg = cg_it->second;
+            described_group desc{
+              .error_code = error_code::none,
+              .group_id = g,
+              .group_state = ss::sstring(
+                consumer_group_state_to_string(cg->state())),
+              .protocol_type = kafka::protocol_type("consumer"),
+            };
+            return desc;
+        }
         return describe_groups_response::make_dead_described_group(g);
     }
 
