@@ -17,6 +17,7 @@
 #include "kafka/protocol/consumer_group_heartbeat.h"
 #include "kafka/protocol/errors.h"
 #include "kafka/protocol/types.h"
+#include "kafka/server/consumer_group_assignor.h"
 #include "kafka/server/consumer_group_member.h"
 #include "kafka/server/consumer_group_state.h"
 #include "kafka/server/logger.h"
@@ -46,7 +47,8 @@ public:
       kafka::group_id id,
       config::configuration& conf,
       ss::lw_shared_ptr<cluster::partition> partition,
-      model::term_id term);
+      model::term_id term,
+      cluster::metadata_cache& metadata_cache);
 
     ~consumer_group() noexcept;
 
@@ -74,8 +76,11 @@ private:
     /// Generate a new unique member ID.
     kafka::member_id generate_member_id() const;
 
-    /// Bump the group epoch and trigger reassignment.
+    /// Bump the group epoch and run the assignor.
     void bump_group_epoch();
+
+    /// Run the assignor and apply target assignments to members.
+    void run_assignor();
 
     /// Set the group state.
     void set_state(consumer_group_state s);
@@ -155,6 +160,8 @@ private:
     config::configuration& _conf;
     ss::lw_shared_ptr<cluster::partition> _partition;
     model::term_id _term;
+    cluster::metadata_cache& _metadata_cache;
+    uniform_assignor _assignor;
 
     // Members
     using member_map

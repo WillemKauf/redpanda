@@ -10,9 +10,11 @@
 #include "kafka/server/consumer_group.h"
 
 #include "base/vassert.h"
+#include "cluster/metadata_cache.h"
 #include "cluster/partition.h"
 #include "container/chunked_vector.h"
 #include "model/fundamental.h"
+#include "model/namespace.h"
 
 #include <seastar/core/sstring.hh>
 
@@ -28,11 +30,13 @@ consumer_group::consumer_group(
   kafka::group_id id,
   config::configuration& conf,
   ss::lw_shared_ptr<cluster::partition> partition,
-  model::term_id term)
+  model::term_id term,
+  cluster::metadata_cache& metadata_cache)
   : _id(std::move(id))
   , _conf(conf)
   , _partition(std::move(partition))
   , _term(term)
+  , _metadata_cache(metadata_cache)
   , _ctxlog(*this) {}
 
 kafka::member_id consumer_group::generate_member_id() const {
@@ -51,6 +55,54 @@ void consumer_group::bump_group_epoch() {
     _group_epoch = kafka::consumer_group_epoch(_group_epoch() + 1);
     _target_assignment_epoch = _group_epoch;
     _ctxlog.debug("Bumped group epoch to {}", _group_epoch);
+    run_assignor();
+}
+
+void consumer_group::run_assignor() {
+    // Build the list of assignable topics from subscribed topic names.
+    std::vector<assignable_topic> topics;
+    for (const auto& topic_name : _subscribed_topics) {
+        auto tp_ns = model::topic_namespace(
+          model::kafka_namespace, model::topic(topic_name));
+        auto cfg = _metadata_cache.get_topic_cfg(tp_ns);
+        if (!cfg) {
+            _ctxlog.warn("Subscribed topic {} not found in metadata", topic_name);
+            continue;
+        }
+        if (!cfg->tp_id) {
+            _ctxlog.warn("Topic {} has no topic ID", topic_name);
+            continue;
+        }
+        topics.push_back(assignable_topic{
+          .id = *cfg->tp_id,
+          .name = topic_name,
+          .partition_count = cfg->partition_count,
+        });
+    }
+
+    if (topics.empty()) {
+        _ctxlog.debug("No assignable topics, clearing assignments");
+        for (auto& [_, member] : _members) {
+            member->set_target_assignment({});
+        }
+        return;
+    }
+
+    // Run the assignor.
+    auto result = _assignor.assign(topics, _members);
+
+    // Apply target assignments to members.
+    for (auto& [mid, assignment] : result) {
+        auto it = _members.find(mid);
+        if (it != _members.end()) {
+            it->second->set_target_assignment(std::move(assignment));
+        }
+    }
+
+    _ctxlog.debug(
+      "Assignor computed target assignments for {} members over {} topics",
+      result.size(),
+      topics.size());
 }
 
 bool consumer_group::all_members_at_target() const {
