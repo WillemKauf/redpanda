@@ -239,6 +239,13 @@ enum class error_code : int16_t {
     unknown_topic_id = 100,
     // The transactional_id could not be found for describe tx request.
     transactional_id_not_found = 105,
+    // The member epoch is fenced by the group coordinator.
+    unreleased_instance_id = 95,
+    // The member epoch is fenced by the group coordinator. The member epoch
+    // sent by the consumer is stale.
+    fenced_member_epoch = 110,
+    // The server-side assignor is not supported.
+    unsupported_assignor = 111,
 };
 
 std::ostream& operator<<(std::ostream&, error_code);

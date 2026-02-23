@@ -52,6 +52,17 @@ inline constexpr leader_epoch invalid_leader_epoch(-1);
 /// Kafka group generation identifier.
 using generation_id = named_type<int32_t, struct kafka_generation_id>;
 
+/// KIP-848: Consumer group member epoch.
+using consumer_group_member_epoch
+  = named_type<int32_t, struct kafka_consumer_group_member_epoch>;
+
+/// KIP-848: Consumer group epoch.
+using consumer_group_epoch
+  = named_type<int32_t, struct kafka_consumer_group_epoch>;
+
+/// KIP-848: Server-side assignor name.
+using server_assignor = named_type<ss::sstring, struct kafka_server_assignor>;
+
 /// Kafka group protocol type.
 using protocol_type = named_type<ss::sstring, struct kafka_protocol_type>;
 
@@ -63,6 +74,12 @@ using transactional_id = named_type<ss::sstring, struct kafka_transactional_id>;
 
 /// Kafka producer id identifier.
 using producer_id = named_type<int64_t, struct kafka_producer_id>;
+
+/// KIP-848: Group type distinguishing classic and consumer protocols.
+enum class group_type : int8_t {
+    classic = 0,
+    consumer = 1,
+};
 
 enum class config_resource_type : int8_t {
     topic = 2,

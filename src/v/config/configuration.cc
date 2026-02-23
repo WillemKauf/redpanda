@@ -27,6 +27,8 @@
 #include "storage/config.h"
 
 #include <seastar/core/reactor.hh>
+
+#include <limits>
 #include <seastar/core/thread.hh>
 
 #include <chrono>
@@ -660,6 +662,49 @@ configuration::configuration()
       "version, set this option to true.",
       {.needs_restart = needs_restart::no, .visibility = visibility::tunable},
       false)
+  , consumer_group_heartbeat_interval_ms(
+      *this,
+      "consumer_group_heartbeat_interval_ms",
+      "The heartbeat interval given to consumers using the new consumer group "
+      "protocol (KIP-848).",
+      {.needs_restart = needs_restart::no, .visibility = visibility::tunable},
+      5'000ms)
+  , consumer_group_session_timeout_ms(
+      *this,
+      "consumer_group_session_timeout_ms",
+      "The session timeout for consumers using the new consumer group "
+      "protocol (KIP-848).",
+      {.needs_restart = needs_restart::no, .visibility = visibility::tunable},
+      45'000ms)
+  , consumer_group_min_heartbeat_interval_ms(
+      *this,
+      "consumer_group_min_heartbeat_interval_ms",
+      "The minimum heartbeat interval for consumers using the new consumer "
+      "group protocol (KIP-848).",
+      {.needs_restart = needs_restart::no, .visibility = visibility::tunable},
+      5'000ms)
+  , consumer_group_max_session_timeout_ms(
+      *this,
+      "consumer_group_max_session_timeout_ms",
+      "The maximum session timeout for consumers using the new consumer "
+      "group protocol (KIP-848).",
+      {.needs_restart = needs_restart::no, .visibility = visibility::tunable},
+      60'000ms)
+  , consumer_group_max_size(
+      *this,
+      "consumer_group_max_size",
+      "The maximum number of members allowed in a single consumer group "
+      "using the new consumer group protocol (KIP-848).",
+      {.needs_restart = needs_restart::no, .visibility = visibility::tunable},
+      std::numeric_limits<int32_t>::max(),
+      {.min = 1})
+  , consumer_group_assignor(
+      *this,
+      "consumer_group_assignor",
+      "The server-side assignor to use for the new consumer group protocol "
+      "(KIP-848). Supported values: uniform, range.",
+      {.needs_restart = needs_restart::no, .visibility = visibility::tunable},
+      "uniform")
   , metadata_dissemination_interval_ms(
       *this,
       "metadata_dissemination_interval_ms",
