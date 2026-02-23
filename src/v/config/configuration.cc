@@ -27,12 +27,11 @@
 #include "storage/config.h"
 
 #include <seastar/core/reactor.hh>
-
-#include <limits>
 #include <seastar/core/thread.hh>
 
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <optional>
 
 namespace config {

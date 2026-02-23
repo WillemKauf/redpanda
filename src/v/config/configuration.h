@@ -194,14 +194,11 @@ struct configuration final : public config_store {
     property<std::chrono::milliseconds> group_offset_retention_check_ms;
     property<bool> legacy_group_offset_retention_enabled;
     // KIP-848: Consumer group protocol configuration
-    property<std::chrono::milliseconds>
-      consumer_group_heartbeat_interval_ms;
-    property<std::chrono::milliseconds>
-      consumer_group_session_timeout_ms;
+    property<std::chrono::milliseconds> consumer_group_heartbeat_interval_ms;
+    property<std::chrono::milliseconds> consumer_group_session_timeout_ms;
     property<std::chrono::milliseconds>
       consumer_group_min_heartbeat_interval_ms;
-    property<std::chrono::milliseconds>
-      consumer_group_max_session_timeout_ms;
+    property<std::chrono::milliseconds> consumer_group_max_session_timeout_ms;
     bounded_property<int32_t> consumer_group_max_size;
     property<ss::sstring> consumer_group_assignor;
     property<std::chrono::milliseconds> metadata_dissemination_interval_ms;

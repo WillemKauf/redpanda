@@ -10,6 +10,8 @@
  */
 #pragma once
 
+#include "absl/container/node_hash_map.h"
+#include "absl/container/node_hash_set.h"
 #include "base/seastarx.h"
 #include "cluster/fwd.h"
 #include "config/configuration.h"
@@ -20,18 +22,15 @@
 #include "kafka/protocol/offset_fetch.h"
 #include "kafka/protocol/types.h"
 #include "kafka/server/consumer_group_assignor.h"
-#include "kafka/server/group_metadata.h"
 #include "kafka/server/consumer_group_member.h"
 #include "kafka/server/consumer_group_state.h"
+#include "kafka/server/group_metadata.h"
 #include "kafka/server/logger.h"
 #include "model/fundamental.h"
 
 #include <seastar/core/future.hh>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/shared_ptr.hh>
-
-#include "absl/container/node_hash_map.h"
-#include "absl/container/node_hash_set.h"
 
 namespace kafka {
 
@@ -76,8 +75,8 @@ public:
     handle_offset_commit(const offset_commit_request& req);
 
     /// Handle an OffsetFetch request for this consumer group.
-    offset_fetch_response handle_offset_fetch(
-      const offset_fetch_request& req) const;
+    offset_fetch_response
+    handle_offset_fetch(const offset_fetch_request& req) const;
 
     /// Number of active members.
     size_t num_members() const { return _members.size(); }
@@ -170,8 +169,7 @@ private:
 
     private:
         template<typename... Args>
-        void log(
-          ss::log_level lvl, const char* format, Args&&... args) const {
+        void log(ss::log_level lvl, const char* format, Args&&... args) const {
             if (klog.is_enabled(lvl)) {
                 auto line = fmt::format(
                   "[N:{} S:{} E:{}] {}",

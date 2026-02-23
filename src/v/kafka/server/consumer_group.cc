@@ -70,18 +70,20 @@ void consumer_group::run_assignor() {
           model::kafka_namespace, model::topic(topic_name));
         auto cfg = _metadata_cache.get_topic_cfg(tp_ns);
         if (!cfg) {
-            _ctxlog.warn("Subscribed topic {} not found in metadata", topic_name);
+            _ctxlog.warn(
+              "Subscribed topic {} not found in metadata", topic_name);
             continue;
         }
         if (!cfg->tp_id) {
             _ctxlog.warn("Topic {} has no topic ID", topic_name);
             continue;
         }
-        topics.push_back(assignable_topic{
-          .id = *cfg->tp_id,
-          .name = topic_name,
-          .partition_count = cfg->partition_count,
-        });
+        topics.push_back(
+          assignable_topic{
+            .id = *cfg->tp_id,
+            .name = topic_name,
+            .partition_count = cfg->partition_count,
+          });
     }
 
     if (topics.empty()) {
@@ -216,9 +218,10 @@ consumer_group::handle_join(const consumer_group_heartbeat_request_data& req) {
       req.rebalance_timeout_ms > std::chrono::milliseconds(0)
         ? req.rebalance_timeout_ms
         : _conf.consumer_group_session_timeout_ms(),
-      req.subscribed_topic_names
-        ? chunked_vector<ss::sstring>(req.subscribed_topic_names->begin(), req.subscribed_topic_names->end())
-        : chunked_vector<ss::sstring>{},
+      req.subscribed_topic_names ? chunked_vector<ss::sstring>(
+                                     req.subscribed_topic_names->begin(),
+                                     req.subscribed_topic_names->end())
+                                 : chunked_vector<ss::sstring>{},
       req.subscribed_topic_regex,
       req.server_assignor
         ? std::make_optional(kafka::server_assignor(*req.server_assignor))
@@ -254,14 +257,14 @@ consumer_group::handle_join(const consumer_group_heartbeat_request_data& req) {
     resp.data.error_code = error_code::none;
     resp.data.member_id = new_member_id;
     resp.data.member_epoch = member->member_epoch();
-    resp.data.heartbeat_interval_ms
-      = static_cast<int32_t>(_conf.consumer_group_heartbeat_interval_ms().count());
+    resp.data.heartbeat_interval_ms = static_cast<int32_t>(
+      _conf.consumer_group_heartbeat_interval_ms().count());
     resp.data.assignment = build_response_assignment(member);
     return resp;
 }
 
-consumer_group_heartbeat_response consumer_group::handle_leave(
-  const consumer_group_heartbeat_request_data& req) {
+consumer_group_heartbeat_response
+consumer_group::handle_leave(const consumer_group_heartbeat_request_data& req) {
     auto member_id = kafka::member_id(req.member_id);
     auto it = _members.find(member_id);
     if (it == _members.end()) {
@@ -357,8 +360,8 @@ consumer_group_heartbeat_response consumer_group::handle_heartbeat(
     consumer_group_heartbeat_response resp;
     resp.data.error_code = error_code::none;
     resp.data.member_epoch = member->member_epoch();
-    resp.data.heartbeat_interval_ms
-      = static_cast<int32_t>(_conf.consumer_group_heartbeat_interval_ms().count());
+    resp.data.heartbeat_interval_ms = static_cast<int32_t>(
+      _conf.consumer_group_heartbeat_interval_ms().count());
     resp.data.assignment = build_response_assignment(member);
     return resp;
 }
@@ -391,10 +394,11 @@ consumer_group::handle_consumer_group_heartbeat(
 }
 
 ss::future<> consumer_group::checkpoint() {
-    auto kv = group_metadata_serializer::to_kv(consumer_group_metadata_kv{
-      .key = consumer_group_metadata_key{.group_id = _id},
-      .value = build_metadata_value(),
-    });
+    auto kv = group_metadata_serializer::to_kv(
+      consumer_group_metadata_kv{
+        .key = consumer_group_metadata_key{.group_id = _id},
+        .value = build_metadata_value(),
+      });
 
     cluster::simple_batch_builder builder(
       model::record_batch_type::raft_data, model::offset(0));
@@ -417,8 +421,7 @@ ss::future<> consumer_group::checkpoint() {
     }
 }
 
-consumer_group_metadata_value
-consumer_group::build_metadata_value() const {
+consumer_group_metadata_value consumer_group::build_metadata_value() const {
     consumer_group_metadata_value val;
     val.group_epoch = _group_epoch();
     val.target_assignment_epoch = _target_assignment_epoch();
@@ -442,8 +445,7 @@ consumer_group::build_metadata_value() const {
     return val;
 }
 
-void consumer_group::recover_from_metadata(
-  consumer_group_metadata_value md) {
+void consumer_group::recover_from_metadata(consumer_group_metadata_value md) {
     _group_epoch = kafka::consumer_group_epoch(md.group_epoch);
     _target_assignment_epoch = kafka::consumer_group_epoch(
       md.target_assignment_epoch);
@@ -486,9 +488,7 @@ void consumer_group::recover_from_metadata(
     }
 
     _ctxlog.info(
-      "Recovered {} members, group epoch {}",
-      _members.size(),
-      _group_epoch);
+      "Recovered {} members, group epoch {}", _members.size(), _group_epoch);
 }
 
 void consumer_group::notify_topic_metadata_changed(
@@ -523,16 +523,12 @@ consumer_group::handle_offset_commit(const offset_commit_request& req) {
         auto member_id = kafka::member_id(req.data.member_id);
         auto it = _members.find(member_id);
         if (it == _members.end()) {
-            return offset_commit_response(
-              req, error_code::unknown_member_id);
+            return offset_commit_response(req, error_code::unknown_member_id);
         }
 
         // Validate epoch via generation_id field
-        if (
-          req.data.generation_id
-          != it->second->member_epoch()()) {
-            return offset_commit_response(
-              req, error_code::illegal_generation);
+        if (req.data.generation_id != it->second->member_epoch()()) {
+            return offset_commit_response(req, error_code::illegal_generation);
         }
 
         // Refresh heartbeat
@@ -565,8 +561,7 @@ consumer_group::handle_offset_commit(const offset_commit_request& req) {
         resp.data.topics.push_back(std::move(t_resp));
     }
 
-    _ctxlog.debug(
-      "Committed offsets for {} topics", req.data.topics.size());
+    _ctxlog.debug("Committed offsets for {} topics", req.data.topics.size());
     return resp;
 }
 
@@ -602,16 +597,16 @@ consumer_group::handle_offset_fetch(const offset_fetch_request& req) const {
                   });
             }
             for (auto& [topic, partitions] : by_topic) {
-                g_res.topics.push_back(offset_fetch_response_topics{
-                  .name = topic,
-                  .partitions = std::move(partitions),
-                });
+                g_res.topics.push_back(
+                  offset_fetch_response_topics{
+                    .name = topic,
+                    .partitions = std::move(partitions),
+                  });
             }
         } else {
             // Return only requested topic-partitions
             for (const auto& topic_req : *g_req.topics) {
-                offset_fetch_response_topics t_resp{
-                  .name = topic_req.name};
+                offset_fetch_response_topics t_resp{.name = topic_req.name};
                 for (const auto& p_idx : topic_req.partition_indexes) {
                     auto tp = model::topic_partition(topic_req.name, p_idx);
                     auto it = _offsets.find(tp);
@@ -630,8 +625,7 @@ consumer_group::handle_offset_fetch(const offset_fetch_request& req) const {
                           offset_fetch_response_partitions{
                             .partition_index = p_idx,
                             .committed_offset = model::offset(-1),
-                            .committed_leader_epoch
-                            = kafka::leader_epoch{-1},
+                            .committed_leader_epoch = kafka::leader_epoch{-1},
                             .metadata = "",
                             .error_code = error_code::none,
                           });

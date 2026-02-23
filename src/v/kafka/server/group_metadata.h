@@ -186,12 +186,10 @@ struct consumer_group_member_state {
     std::optional<ss::sstring> subscribed_topic_regex;
 
     friend bool operator==(
-      const consumer_group_member_state&,
-      const consumer_group_member_state&)
+      const consumer_group_member_state&, const consumer_group_member_state&)
       = default;
     static consumer_group_member_state decode(protocol::decoder&);
-    static void
-    encode(protocol::encoder&, const consumer_group_member_state&);
+    static void encode(protocol::encoder&, const consumer_group_member_state&);
 };
 
 /// KIP-848: Consumer group metadata key (key version 3).
@@ -200,12 +198,10 @@ struct consumer_group_metadata_key {
     kafka::group_id group_id;
 
     friend bool operator==(
-      const consumer_group_metadata_key&,
-      const consumer_group_metadata_key&)
+      const consumer_group_metadata_key&, const consumer_group_metadata_key&)
       = default;
     static consumer_group_metadata_key decode(protocol::decoder&);
-    static void
-    encode(protocol::encoder&, const consumer_group_metadata_key&);
+    static void encode(protocol::encoder&, const consumer_group_metadata_key&);
 };
 
 /// KIP-848: Consumer group metadata value.
@@ -271,8 +267,7 @@ key_value to_kv(offset_metadata_kv md);
 key_value to_kv(consumer_group_metadata_kv md);
 group_metadata_kv decode_group_metadata(model::record record);
 offset_metadata_kv decode_offset_metadata(model::record record);
-consumer_group_metadata_kv
-decode_consumer_group_metadata(model::record record);
+consumer_group_metadata_kv decode_consumer_group_metadata(model::record record);
 }; // namespace group_metadata_serializer
 
 namespace group_tx {

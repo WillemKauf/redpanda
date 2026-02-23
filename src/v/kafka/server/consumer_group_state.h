@@ -63,8 +63,8 @@ template<>
 struct fmt::formatter<kafka::consumer_group_state> final
   : fmt::formatter<std::string_view> {
     template<typename FormatContext>
-    auto format(
-      const kafka::consumer_group_state& s, FormatContext& ctx) const {
+    auto
+    format(const kafka::consumer_group_state& s, FormatContext& ctx) const {
         return formatter<string_view>::format(
           kafka::consumer_group_state_to_string(s), ctx);
     }

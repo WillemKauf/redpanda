@@ -1247,11 +1247,7 @@ ss::future<> group_manager::recover_partition(
           cg_kv.value->group_epoch);
 
         auto cg = ss::make_lw_shared<consumer_group>(
-          gid,
-          _conf,
-          p->partition,
-          term,
-          _metadata_cache.local());
+          gid, _conf, p->partition, term, _metadata_cache.local());
         cg->recover_from_metadata(std::move(*cg_kv.value));
         _consumer_groups[gid] = std::move(cg);
     }
@@ -1584,8 +1580,7 @@ ss::future<heartbeat_response> group_manager::heartbeat(heartbeat_request&& r) {
 }
 
 ss::future<consumer_group_heartbeat_response>
-group_manager::consumer_group_heartbeat(
-  consumer_group_heartbeat_request&& r) {
+group_manager::consumer_group_heartbeat(consumer_group_heartbeat_request&& r) {
     auto error = validate_group_status(
       r.ntp, r.data.group_id, consumer_group_heartbeat_api::key, false);
     if (error != error_code::none) {
@@ -1615,15 +1610,13 @@ group_manager::consumer_group_heartbeat(
         }
 
         auto cg = ss::make_lw_shared<consumer_group>(
-          group_id,
-          _conf,
-          p->partition,
-          p->term,
-          _metadata_cache.local());
+          group_id, _conf, p->partition, p->term, _metadata_cache.local());
         _consumer_groups[group_id] = cg;
+        _consumer_group_probe.group_created();
         it = _consumer_groups.find(group_id);
     }
 
+    _consumer_group_probe.heartbeat_received();
     co_return co_await it->second->handle_consumer_group_heartbeat(
       std::move(r));
 }
@@ -2017,12 +2010,13 @@ group_manager::list_groups(const list_groups_filter_data& filter_data) const {
     for (const auto& [gid, cg] : _consumer_groups) {
         auto no_filter = filter_data.states_filter.empty();
         if (no_filter) {
-            groups.push_back(listed_group{
-              .group_id = gid,
-              .protocol_type = kafka::protocol_type("consumer"),
-              .group_state = ss::sstring(
-                consumer_group_state_to_string(cg->state())),
-            });
+            groups.push_back(
+              listed_group{
+                .group_id = gid,
+                .protocol_type = kafka::protocol_type("consumer"),
+                .group_state = ss::sstring(
+                  consumer_group_state_to_string(cg->state())),
+              });
         }
     }
 
@@ -2238,6 +2232,7 @@ ss::future<chunked_vector<deletable_group_result>> group_manager::delete_groups(
                       });
                 } else {
                     _consumer_groups.erase(cg_it);
+                    _consumer_group_probe.group_deleted();
                     results.push_back(
                       deletable_group_result{
                         .group_id = std::move(group_info.second),

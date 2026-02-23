@@ -17,9 +17,8 @@
 #include "cluster/offsets_snapshot.h"
 #include "cluster/topic_table.h"
 #include "container/chunked_vector.h"
-#include "kafka/protocol/errors.h"
 #include "kafka/protocol/consumer_group_heartbeat.h"
-#include "kafka/server/consumer_group.h"
+#include "kafka/protocol/errors.h"
 #include "kafka/protocol/heartbeat.h"
 #include "kafka/protocol/join_group.h"
 #include "kafka/protocol/leave_group.h"
@@ -32,6 +31,8 @@
 #include "kafka/protocol/sync_group.h"
 #include "kafka/protocol/txn_offset_commit.h"
 #include "kafka/protocol/types.h"
+#include "kafka/server/consumer_group.h"
+#include "kafka/server/consumer_group_probe.h"
 #include "kafka/server/fwd.h"
 #include "kafka/server/group.h"
 #include "kafka/server/group_recovery_consumer.h"
@@ -361,6 +362,7 @@ private:
     absl::node_hash_map<group_id, group_ptr> _groups;
     absl::node_hash_map<group_id, ss::lw_shared_ptr<consumer_group>>
       _consumer_groups;
+    consumer_group_probe _consumer_group_probe;
     absl::node_hash_map<model::ntp, ss::lw_shared_ptr<attached_partition>>
       _partitions;
 

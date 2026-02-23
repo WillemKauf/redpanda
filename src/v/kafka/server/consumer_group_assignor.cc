@@ -50,7 +50,8 @@ assignor_result uniform_assignor::assign(
 
         // Round-robin distribute partitions across subscribers.
         for (int32_t p = 0; p < topic.partition_count; ++p) {
-            auto& member_assignment = result[subscribers[p % subscribers.size()]];
+            auto& member_assignment
+              = result[subscribers[p % subscribers.size()]];
             member_assignment[topic.id].push_back(model::partition_id(p));
         }
     }

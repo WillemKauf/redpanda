@@ -154,6 +154,7 @@ redpanda_cc_library(
         "consumer_group.h",
         "consumer_group_assignor.h",
         "consumer_group_member.h",
+        "consumer_group_probe.h",
         "consumer_group_state.h",
         "coordinator_ntp_mapper.h",
         "data_migration_group_proxy_impl.h",

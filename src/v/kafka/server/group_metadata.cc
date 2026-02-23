@@ -421,7 +421,9 @@ consumer_group_member_state::decode(protocol::decoder& reader) {
     consumer_group_member_state ret;
     auto version = read_metadata_version(reader);
     validate_version_range(
-      version, "consumer_group_member_state", consumer_group_member_state::version);
+      version,
+      "consumer_group_member_state",
+      consumer_group_member_state::version);
 
     ret.id = kafka::member_id(reader.read_string());
     auto instance_id = reader.read_nullable_string();

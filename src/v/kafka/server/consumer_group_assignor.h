@@ -10,13 +10,12 @@
  */
 #pragma once
 
+#include "absl/container/node_hash_map.h"
 #include "container/chunked_hash_map.h"
 #include "kafka/protocol/types.h"
 #include "kafka/server/consumer_group_member.h"
 #include "model/fundamental.h"
 #include "model/metadata.h"
-
-#include "absl/container/node_hash_map.h"
 
 #include <vector>
 

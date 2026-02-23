@@ -44,8 +44,7 @@ SEASTAR_THREAD_TEST_CASE(member_basic_properties) {
     BOOST_TEST(member->id() == kafka::member_id("member-1"));
     BOOST_TEST(!member->instance_id().has_value());
     BOOST_TEST(!member->rack_id().has_value());
-    BOOST_TEST(
-      member->rebalance_timeout() == std::chrono::milliseconds(30000));
+    BOOST_TEST(member->rebalance_timeout() == std::chrono::milliseconds(30000));
     BOOST_TEST(member->member_epoch() == kafka::consumer_group_member_epoch(0));
     BOOST_TEST(member->subscribed_topic_names().size() == 2);
     BOOST_TEST(member->subscribed_topic_names()[0] == "topic-a");
@@ -70,8 +69,7 @@ SEASTAR_THREAD_TEST_CASE(member_assignment_tracking) {
 
     // Set target assignment.
     consumer_group_member::assignment_type target;
-    target[model::topic_id(uuid_t::create())].push_back(
-      model::partition_id(0));
+    target[model::topic_id(uuid_t::create())].push_back(model::partition_id(0));
     member->set_target_assignment(std::move(target));
 
     BOOST_TEST(!member->target_assignment().empty());
@@ -126,8 +124,7 @@ SEASTAR_THREAD_TEST_CASE(state_to_string) {
       consumer_group_state_to_string(consumer_group_state::reconciling)
       == "Reconciling");
     BOOST_TEST(
-      consumer_group_state_to_string(consumer_group_state::stable)
-      == "Stable");
+      consumer_group_state_to_string(consumer_group_state::stable) == "Stable");
     BOOST_TEST(
       consumer_group_state_to_string(consumer_group_state::dead) == "Dead");
 }
