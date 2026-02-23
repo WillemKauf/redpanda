@@ -90,6 +90,12 @@ public:
     /// Schedule heartbeat expiration timer for a member.
     void schedule_heartbeat_expiration(consumer_group_member_ptr member);
 
+    /// Notify the group about topic metadata changes. If any subscribed
+    /// topics were affected, bumps the group epoch and recomputes
+    /// assignments.
+    void notify_topic_metadata_changed(
+      const absl::node_hash_set<model::topic>& changed_topics);
+
 private:
     /// Generate a new unique member ID.
     kafka::member_id generate_member_id() const;

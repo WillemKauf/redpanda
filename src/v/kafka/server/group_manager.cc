@@ -559,13 +559,25 @@ ss::future<> group_manager::cleanup_removed_topic_partitions(
 void group_manager::handle_topic_delta(
   cluster::topic_table::ntp_delta_range_t deltas) {
     // topic-partition deletions in the kafka namespace are the only deltas that
-    // are relevant to the group manager
+    // are relevant to the group manager (for classic groups)
     chunked_vector<model::topic_partition> tps;
+    // Track topics that changed (added/removed partitions) for KIP-848 groups
+    absl::node_hash_set<model::topic> changed_topics;
     for (const auto& delta : deltas) {
-        if (
-          delta.type == cluster::topic_table_ntp_delta_type::removed
-          && delta.ntp.ns == model::kafka_namespace) {
+        if (delta.ntp.ns != model::kafka_namespace) {
+            continue;
+        }
+        if (delta.type == cluster::topic_table_ntp_delta_type::removed) {
             tps.emplace_back(delta.ntp.tp);
+        }
+        // Any partition add/remove signals a topic metadata change
+        changed_topics.insert(delta.ntp.tp.topic);
+    }
+
+    // Notify KIP-848 consumer groups about topic changes
+    if (!changed_topics.empty() && !_consumer_groups.empty()) {
+        for (auto& [_, cg] : _consumer_groups) {
+            cg->notify_topic_metadata_changed(changed_topics);
         }
     }
 
@@ -1402,6 +1414,12 @@ group::join_group_stages group_manager::join_group(join_group_request&& r) {
           make_join_error(r.data.member_id, error));
     }
 
+    // Reject classic protocol for KIP-848 consumer groups
+    if (_consumer_groups.contains(r.data.group_id)) {
+        return group::join_group_stages(
+          make_join_error(r.data.member_id, error_code::group_id_not_found));
+    }
+
     if (
       r.data.session_timeout_ms < _conf.group_min_session_timeout_ms()
       || r.data.session_timeout_ms > _conf.group_max_session_timeout_ms()) {
@@ -1491,6 +1509,12 @@ group::sync_group_stages group_manager::sync_group(sync_group_request&& r) {
         return group::sync_group_stages(sync_group_response(error));
     }
 
+    // Reject classic protocol for KIP-848 consumer groups
+    if (_consumer_groups.contains(r.data.group_id)) {
+        return group::sync_group_stages(
+          sync_group_response(error_code::group_id_not_found));
+    }
+
     auto group = get_group(r.data.group_id);
     if (group) {
         auto stages = group->handle_sync_group(std::move(r));
@@ -1519,6 +1543,11 @@ ss::future<heartbeat_response> group_manager::heartbeat(heartbeat_request&& r) {
         return make_heartbeat_error(error);
     }
 
+    // Reject classic heartbeat for KIP-848 consumer groups
+    if (_consumer_groups.contains(r.data.group_id)) {
+        return make_heartbeat_error(error_code::group_id_not_found);
+    }
+
     auto group = get_group(r.data.group_id);
     if (group) {
         return group->handle_heartbeat(std::move(r)).finally([group] {});
@@ -1539,6 +1568,12 @@ group_manager::consumer_group_heartbeat(
       r.ntp, r.data.group_id, consumer_group_heartbeat_api::key, false);
     if (error != error_code::none) {
         co_return consumer_group_heartbeat_response(error);
+    }
+
+    // Reject KIP-848 heartbeat for classic groups
+    if (_groups.contains(r.data.group_id)) {
+        co_return consumer_group_heartbeat_response(
+          error_code::group_id_not_found);
     }
 
     // Find or create the consumer group.
@@ -1577,6 +1612,11 @@ group_manager::leave_group(leave_group_request&& r) {
       r.ntp, r.data.group_id, leave_group_api::key, false);
     if (error != error_code::none) {
         return make_leave_error(error);
+    }
+
+    // Reject classic leave for KIP-848 consumer groups
+    if (_consumer_groups.contains(r.data.group_id)) {
+        return make_leave_error(error_code::group_id_not_found);
     }
 
     auto group = get_group(r.data.group_id);

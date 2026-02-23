@@ -382,6 +382,28 @@ consumer_group::handle_consumer_group_heartbeat(
     }
 }
 
+void consumer_group::notify_topic_metadata_changed(
+  const absl::node_hash_set<model::topic>& changed_topics) {
+    if (_state == consumer_group_state::dead || _members.empty()) {
+        return;
+    }
+
+    // Check if any changed topics intersect with our subscribed topics
+    bool affected = false;
+    for (const auto& topic : changed_topics) {
+        if (_subscribed_topics.contains(topic())) {
+            affected = true;
+            break;
+        }
+    }
+
+    if (affected) {
+        _ctxlog.info("Subscribed topic metadata changed, rebalancing");
+        bump_group_epoch();
+        maybe_update_state();
+    }
+}
+
 offset_commit_response
 consumer_group::handle_offset_commit(const offset_commit_request& req) {
     offset_commit_response resp;
