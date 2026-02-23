@@ -1790,6 +1790,13 @@ group_manager::offset_commit(offset_commit_request&& r) {
         return group::offset_commit_stages(offset_commit_response(r, error));
     }
 
+    // Check if this is a KIP-848 consumer group first
+    if (auto cg_it = _consumer_groups.find(r.data.group_id);
+        cg_it != _consumer_groups.end()) {
+        auto resp = cg_it->second->handle_offset_commit(r);
+        return group::offset_commit_stages(std::move(resp));
+    }
+
     auto group = get_group(r.data.group_id);
     if (!group) {
         if (r.data.generation_id < 0) {
@@ -1832,6 +1839,23 @@ group_manager::offset_fetch(offset_fetch_request r) {
         if (error != error_code::none) {
             g_res.group_id = std::move(g_req.group_id);
             g_res.error_code = error;
+            continue;
+        }
+
+        // Check KIP-848 consumer groups first
+        if (auto cg_it = _consumer_groups.find(g_req.group_id);
+            cg_it != _consumer_groups.end()) {
+            // Build a single-group offset_fetch_request for the consumer group
+            offset_fetch_request cg_req;
+            auto gid = g_req.group_id;
+            cg_req.data.groups.push_back(std::move(g_req));
+            auto cg_resp = cg_it->second->handle_offset_fetch(cg_req);
+            if (!cg_resp.data.groups.empty()) {
+                g_res = std::move(cg_resp.data.groups.front());
+            } else {
+                g_res.group_id = std::move(gid);
+                g_res.error_code = error_code::none;
+            }
             continue;
         }
 

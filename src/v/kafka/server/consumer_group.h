@@ -16,6 +16,8 @@
 #include "container/chunked_hash_map.h"
 #include "kafka/protocol/consumer_group_heartbeat.h"
 #include "kafka/protocol/errors.h"
+#include "kafka/protocol/offset_commit.h"
+#include "kafka/protocol/offset_fetch.h"
 #include "kafka/protocol/types.h"
 #include "kafka/server/consumer_group_assignor.h"
 #include "kafka/server/consumer_group_member.h"
@@ -43,6 +45,14 @@ class consumer_group {
 public:
     using clock_type = ss::lowres_clock;
 
+    /// Committed offset metadata for a single topic-partition.
+    struct offset_metadata {
+        model::offset offset;
+        kafka::leader_epoch committed_leader_epoch{-1};
+        ss::sstring metadata;
+        model::timestamp commit_timestamp;
+    };
+
     consumer_group(
       kafka::group_id id,
       config::configuration& conf,
@@ -59,6 +69,14 @@ public:
     /// Process a ConsumerGroupHeartbeat request.
     ss::future<consumer_group_heartbeat_response>
     handle_consumer_group_heartbeat(consumer_group_heartbeat_request req);
+
+    /// Handle an OffsetCommit request for this consumer group.
+    offset_commit_response
+    handle_offset_commit(const offset_commit_request& req);
+
+    /// Handle an OffsetFetch request for this consumer group.
+    offset_fetch_response handle_offset_fetch(
+      const offset_fetch_request& req) const;
 
     /// Number of active members.
     size_t num_members() const { return _members.size(); }
@@ -174,6 +192,9 @@ private:
 
     // Aggregate subscribed topics across all members
     absl::node_hash_set<ss::sstring> _subscribed_topics;
+
+    // Committed offsets
+    chunked_hash_map<model::topic_partition, offset_metadata> _offsets;
 
     ctx_log _ctxlog;
 };

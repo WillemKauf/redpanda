@@ -382,4 +382,136 @@ consumer_group::handle_consumer_group_heartbeat(
     }
 }
 
+offset_commit_response
+consumer_group::handle_offset_commit(const offset_commit_request& req) {
+    offset_commit_response resp;
+
+    // Validate member if generation_id >= 0 (KIP-848 uses member_epoch
+    // in the generation_id field for compatibility)
+    if (req.data.generation_id >= 0) {
+        auto member_id = kafka::member_id(req.data.member_id);
+        auto it = _members.find(member_id);
+        if (it == _members.end()) {
+            return offset_commit_response(
+              req, error_code::unknown_member_id);
+        }
+
+        // Validate epoch via generation_id field
+        if (
+          req.data.generation_id
+          != it->second->member_epoch()()) {
+            return offset_commit_response(
+              req, error_code::illegal_generation);
+        }
+
+        // Refresh heartbeat
+        it->second->set_latest_heartbeat(clock_type::now());
+        schedule_heartbeat_expiration(it->second);
+    }
+
+    // Store offsets and build response
+    auto now = model::timestamp::now();
+    for (const auto& topic : req.data.topics) {
+        offset_commit_response_topic t_resp{.name = topic.name};
+        for (const auto& partition : topic.partitions) {
+            auto tp = model::topic_partition(
+              topic.name, partition.partition_index);
+            _offsets[tp] = offset_metadata{
+              .offset = model::offset(partition.committed_offset()),
+              .committed_leader_epoch = kafka::leader_epoch(
+                partition.committed_leader_epoch),
+              .metadata = partition.committed_metadata
+                            ? *partition.committed_metadata
+                            : ss::sstring{},
+              .commit_timestamp = now,
+            };
+            t_resp.partitions.push_back(
+              offset_commit_response_partition{
+                .partition_index = partition.partition_index,
+                .error_code = error_code::none,
+              });
+        }
+        resp.data.topics.push_back(std::move(t_resp));
+    }
+
+    _ctxlog.debug(
+      "Committed offsets for {} topics", req.data.topics.size());
+    return resp;
+}
+
+offset_fetch_response
+consumer_group::handle_offset_fetch(const offset_fetch_request& req) const {
+    offset_fetch_response resp;
+
+    // If no groups in request, return empty
+    if (req.data.groups.empty()) {
+        return resp;
+    }
+
+    // Handle each group entry (typically just our own)
+    for (const auto& g_req : req.data.groups) {
+        auto& g_res = resp.data.groups.emplace_back();
+        g_res.group_id = g_req.group_id;
+        g_res.error_code = error_code::none;
+
+        if (!g_req.topics) {
+            // Return all offsets for this group
+            chunked_hash_map<
+              model::topic,
+              chunked_vector<offset_fetch_response_partitions>>
+              by_topic;
+            for (const auto& [tp, meta] : _offsets) {
+                by_topic[tp.topic].push_back(
+                  offset_fetch_response_partitions{
+                    .partition_index = tp.partition,
+                    .committed_offset = meta.offset,
+                    .committed_leader_epoch = meta.committed_leader_epoch,
+                    .metadata = meta.metadata,
+                    .error_code = error_code::none,
+                  });
+            }
+            for (auto& [topic, partitions] : by_topic) {
+                g_res.topics.push_back(offset_fetch_response_topics{
+                  .name = topic,
+                  .partitions = std::move(partitions),
+                });
+            }
+        } else {
+            // Return only requested topic-partitions
+            for (const auto& topic_req : *g_req.topics) {
+                offset_fetch_response_topics t_resp{
+                  .name = topic_req.name};
+                for (const auto& p_idx : topic_req.partition_indexes) {
+                    auto tp = model::topic_partition(topic_req.name, p_idx);
+                    auto it = _offsets.find(tp);
+                    if (it != _offsets.end()) {
+                        t_resp.partitions.push_back(
+                          offset_fetch_response_partitions{
+                            .partition_index = p_idx,
+                            .committed_offset = it->second.offset,
+                            .committed_leader_epoch
+                            = it->second.committed_leader_epoch,
+                            .metadata = it->second.metadata,
+                            .error_code = error_code::none,
+                          });
+                    } else {
+                        t_resp.partitions.push_back(
+                          offset_fetch_response_partitions{
+                            .partition_index = p_idx,
+                            .committed_offset = model::offset(-1),
+                            .committed_leader_epoch
+                            = kafka::leader_epoch{-1},
+                            .metadata = "",
+                            .error_code = error_code::none,
+                          });
+                    }
+                }
+                g_res.topics.push_back(std::move(t_resp));
+            }
+        }
+    }
+
+    return resp;
+}
+
 } // namespace kafka
