@@ -286,18 +286,18 @@ consumer_group::handle_join(const consumer_group_heartbeat_request_data& req) {
         _subscribed_topics.insert(topic);
     }
 
-    // Set initial epoch to the current group epoch (will advance to
-    // target_assignment_epoch once converged)
-    member->set_member_epoch(
-      kafka::consumer_group_member_epoch(_group_epoch()));
-
     // Store member
     _members[new_member_id] = member;
 
     _ctxlog.info("New member {} joined", new_member_id);
 
-    // Bump epoch and trigger assignment
+    // Bump epoch and trigger assignment. Must happen before setting the
+    // member epoch so the member starts at the new group epoch.
     bump_group_epoch();
+
+    member->set_member_epoch(
+      kafka::consumer_group_member_epoch(_group_epoch()));
+
     maybe_update_state();
 
     // Schedule heartbeat expiration

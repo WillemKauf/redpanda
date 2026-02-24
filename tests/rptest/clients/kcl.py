@@ -635,3 +635,26 @@ class RawKCL(KCL):
             input=json.dumps(body),
         )
         return json.loads(res)
+
+    def raw_consumer_group_heartbeat(
+        self, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Send a ConsumerGroupHeartbeat request (API key 68).
+
+        Finds the coordinator for the group first, then sends the heartbeat.
+        The body should use franz-go field naming (PascalCase), matching the
+        Kafka protocol schema for ConsumerGroupHeartbeatRequest.
+        """
+        res = self.raw_find_coordinator(
+            {
+                "Version": 3,
+                "CoordinatorKey": body["GroupId"],
+                "CoordinatorType": 0,
+            }
+        )
+
+        res = self._cmd(
+            ["misc", "raw-req", "-b", str(res["NodeID"]), "-k", "68"],
+            input=json.dumps(body),
+        )
+        return json.loads(res)
