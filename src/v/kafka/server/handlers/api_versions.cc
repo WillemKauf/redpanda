@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0
 
+#include "config/configuration.h"
 #include "features/feature_table.h"
 #include "kafka/protocol/types.h"
 #include "kafka/protocol/wire.h"
@@ -151,6 +152,23 @@ api_versions_response api_versions_handler::handle_raw(request_context& ctx) {
             topic_id_api_version_limiter(r);
         }
     }
+
+    // Filter out KIP-848 APIs when the feature is not active.
+    {
+        const auto& features = ctx.feature_table().local();
+        if (!features.is_active(features::feature::consumer_group_protocol)) {
+            auto it = std::remove_if(
+              r.data.api_keys.begin(),
+              r.data.api_keys.end(),
+              [](const api_versions_response_key& k) {
+                  return k.api_key == consumer_group_heartbeat_handler::api::key
+                         || k.api_key
+                              == consumer_group_describe_handler::api::key;
+              });
+            r.data.api_keys.erase_to_end(it);
+        }
+    }
+
     return r;
 }
 

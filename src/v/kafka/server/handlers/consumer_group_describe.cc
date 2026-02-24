@@ -10,6 +10,7 @@
  */
 #include "kafka/server/handlers/consumer_group_describe.h"
 
+#include "features/feature_table.h"
 #include "kafka/protocol/consumer_group_describe.h"
 #include "kafka/server/group_router.h"
 #include "kafka/server/handlers/handler_interface.h"
@@ -24,6 +25,18 @@ ss::future<response_ptr> consumer_group_describe_handler::handle(
     consumer_group_describe_request request;
     request.decode(ctx.reader(), ctx.header().version);
     log_request(ctx.header(), request);
+
+    if (!ctx.feature_table().local().is_active(
+          features::feature::consumer_group_protocol)) {
+        consumer_group_describe_response response;
+        for (const auto& gid : request.data.group_ids) {
+            kafka::consumer_group_describe_described_group grp;
+            grp.group_id = gid;
+            grp.error_code = error_code::unsupported_version;
+            response.data.groups.push_back(std::move(grp));
+        }
+        co_return co_await ctx.respond(std::move(response));
+    }
 
     if (unlikely(ctx.recovery_mode_enabled())) {
         consumer_group_describe_response response;

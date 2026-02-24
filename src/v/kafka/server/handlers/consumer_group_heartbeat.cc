@@ -10,6 +10,7 @@
  */
 #include "kafka/server/handlers/consumer_group_heartbeat.h"
 
+#include "features/feature_table.h"
 #include "kafka/protocol/consumer_group_heartbeat.h"
 #include "kafka/server/group_router.h"
 #include "kafka/server/handlers/handler_interface.h"
@@ -25,14 +26,19 @@ ss::future<response_ptr> consumer_group_heartbeat_handler::handle(
     request.decode(ctx.reader(), ctx.header().version);
     log_request(ctx.header(), request);
 
+    if (!ctx.feature_table().local().is_active(
+          features::feature::consumer_group_protocol)) {
+        co_return co_await ctx.respond(
+          consumer_group_heartbeat_response(error_code::unsupported_version));
+    }
+
     if (unlikely(ctx.recovery_mode_enabled())) {
         co_return co_await ctx.respond(
           consumer_group_heartbeat_response(error_code::policy_violation));
     }
 
     auto authz = ctx.authorized(
-      security::acl_operation::read,
-      group_id(request.data.group_id));
+      security::acl_operation::read, group_id(request.data.group_id));
 
     if (!ctx.audit()) {
         co_return co_await ctx.respond(
