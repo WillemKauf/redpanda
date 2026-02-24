@@ -421,6 +421,8 @@ std::ostream& operator<<(std::ostream& o, record_batch_type bt) {
         return o << "group_block";
     case record_batch_type::l1_stm:
         return o << "l1_stm";
+    case record_batch_type::consumer_group:
+        return o << "consumer_group";
     }
 
     return o << "batch_type::unknown{" << static_cast<int>(bt) << "}";
