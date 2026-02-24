@@ -53,8 +53,8 @@ struct consumer_group_describe_response final {
         data.decode(std::move(buf), version);
     }
 
-    friend std::ostream& operator<<(
-      std::ostream& os, const consumer_group_describe_response& r) {
+    friend std::ostream&
+    operator<<(std::ostream& os, const consumer_group_describe_response& r) {
         return os << r.data;
     }
 };

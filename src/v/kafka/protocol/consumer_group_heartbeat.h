@@ -66,8 +66,8 @@ struct consumer_group_heartbeat_response final {
         data.decode(std::move(buf), version);
     }
 
-    friend std::ostream& operator<<(
-      std::ostream& os, const consumer_group_heartbeat_response& r) {
+    friend std::ostream&
+    operator<<(std::ostream& os, const consumer_group_heartbeat_response& r) {
         return os << r.data;
     }
 };
