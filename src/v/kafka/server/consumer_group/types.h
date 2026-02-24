@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include "absl/container/node_hash_map.h"
 #include "base/format_to.h"
 #include "container/chunked_hash_map.h"
 #include "container/chunked_vector.h"
@@ -23,8 +24,6 @@
 #include "serde/rw/optional.h"
 #include "serde/rw/vector.h"
 #include "utils/named_type.h"
-
-#include "absl/container/node_hash_map.h"
 
 #include <vector>
 
@@ -61,10 +60,8 @@ std::ostream& operator<<(std::ostream& os, member_assignment_state s);
 
 /// A set of partitions for a single topic.
 struct topic_partitions
-  : serde::envelope<
-      topic_partitions,
-      serde::version<0>,
-      serde::compat_version<0>> {
+  : serde::
+      envelope<topic_partitions, serde::version<0>, serde::compat_version<0>> {
     model::topic_id topic_id;
     chunked_vector<model::partition_id> partitions;
 
@@ -89,10 +86,8 @@ struct topic_partitions
 
 /// Topic metadata tracked by the group.
 struct topic_metadata
-  : serde::envelope<
-      topic_metadata,
-      serde::version<0>,
-      serde::compat_version<0>> {
+  : serde::
+      envelope<topic_metadata, serde::version<0>, serde::compat_version<0>> {
     model::topic_id topic_id;
     model::topic topic_name;
     int32_t num_partitions{0};
@@ -101,8 +96,8 @@ struct topic_metadata
         return std::tie(topic_id, topic_name, num_partitions);
     }
 
-    friend bool
-    operator==(const topic_metadata&, const topic_metadata&) = default;
+    friend bool operator==(const topic_metadata&, const topic_metadata&)
+      = default;
 
     fmt::iterator format_to(fmt::iterator it) const {
         return fmt::format_to(
@@ -240,10 +235,8 @@ struct target_assignment_member
 
 /// The target assignment for the entire group.
 struct target_assignment
-  : serde::envelope<
-      target_assignment,
-      serde::version<0>,
-      serde::compat_version<0>> {
+  : serde::
+      envelope<target_assignment, serde::version<0>, serde::compat_version<0>> {
     assignment_epoch epoch{0};
     chunked_vector<target_assignment_member> members;
 
@@ -258,16 +251,14 @@ struct target_assignment
 
     auto serde_fields() { return std::tie(epoch, members); }
 
-    friend bool
-    operator==(const target_assignment&, const target_assignment&) = default;
+    friend bool operator==(const target_assignment&, const target_assignment&)
+      = default;
 };
 
 /// A committed offset for a single topic-partition.
 struct committed_offset
-  : serde::envelope<
-      committed_offset,
-      serde::version<0>,
-      serde::compat_version<0>> {
+  : serde::
+      envelope<committed_offset, serde::version<0>, serde::compat_version<0>> {
     model::topic topic;
     model::partition_id partition;
     kafka::offset offset;
@@ -280,8 +271,8 @@ struct committed_offset
           topic, partition, offset, leader_epoch, metadata, commit_timestamp);
     }
 
-    friend bool
-    operator==(const committed_offset&, const committed_offset&) = default;
+    friend bool operator==(const committed_offset&, const committed_offset&)
+      = default;
 };
 
 /// Key for offset lookups.
