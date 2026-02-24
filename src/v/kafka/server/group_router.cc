@@ -355,4 +355,32 @@ group_router::list_groups(group_manager::list_groups_filter_data filter_data) {
       });
 }
 
+ss::future<consumer_group_heartbeat_response>
+group_router::consumer_group_heartbeat(
+  consumer_group_heartbeat_request&& request) {
+    return route(std::move(request), &group_manager::consumer_group_heartbeat);
+}
+
+ss::future<kafka::consumer_group_describe_described_group>
+group_router::consumer_group_describe(kafka::group_id g) {
+    auto m = shard_for(g);
+    if (!m) {
+        kafka::consumer_group_describe_described_group resp;
+        resp.group_id = std::move(g);
+        resp.error_code = error_code::not_coordinator;
+        return ss::make_ready_future<
+          kafka::consumer_group_describe_described_group>(std::move(resp));
+    }
+    return with_scheduling_group(
+      _sg, [this, g = std::move(g), m = std::move(m)]() mutable {
+          return get_group_manager().invoke_on(
+            m->second,
+            _ssg,
+            [g = std::move(g),
+             ntp = std::move(m->first)](group_manager& mgr) mutable {
+                return mgr.consumer_group_describe(ntp, g);
+            });
+      });
+}
+
 } // namespace kafka

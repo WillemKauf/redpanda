@@ -26,8 +26,8 @@ topic_metadata make_topic(int32_t num_partitions) {
     return tm;
 }
 
-member make_member(
-  const char* id, const std::vector<model::topic_id>& subscriptions) {
+member
+make_member(const char* id, const std::vector<model::topic_id>& subscriptions) {
     member m;
     m.member_id = kafka::member_id{id};
     m.client_id = kafka::client_id{"client"};

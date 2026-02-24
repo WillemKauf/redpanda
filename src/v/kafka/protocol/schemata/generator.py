@@ -604,6 +604,10 @@ struct_renames = {
         ("Assignment", "ConsumerGroupDescribeMemberTargetAssignment"),
     ("ConsumerGroupDescribeResponseData", "Groups", "Members", "TargetAssignment", "TopicPartitions"):
         ("TopicPartitions", "ConsumerGroupDescribeTargetAssignmentTopicPartitions"),
+    ("ConsumerGroupDescribeResponseData", "Groups"):
+        ("DescribedGroup", "ConsumerGroupDescribeDescribedGroup"),
+    ("ConsumerGroupDescribeResponseData", "Groups", "Members"):
+        ("Member", "ConsumerGroupDescribeMember"),
 }
 
 # extra header per type name

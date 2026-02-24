@@ -33,6 +33,7 @@ redpanda_cc_library(
     visibility = ["//visibility:public"],
     deps = [
         ":types",
+        "//src/v/container:chunked_vector",
         "//src/v/serde",
         "//src/v/utils:named_type",
     ],

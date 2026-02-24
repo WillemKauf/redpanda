@@ -14,6 +14,8 @@
 #include "cluster/fwd.h"
 #include "cluster/shard_table.h"
 #include "container/chunked_vector.h"
+#include "kafka/protocol/consumer_group_describe.h"
+#include "kafka/protocol/consumer_group_heartbeat.h"
 #include "kafka/protocol/describe_groups.h"
 #include "kafka/protocol/heartbeat.h"
 #include "kafka/protocol/join_group.h"
@@ -91,6 +93,12 @@ public:
     list_groups(group_manager::list_groups_filter_data filter_data);
 
     ss::future<described_group> describe_group(kafka::group_id g);
+
+    ss::future<consumer_group_heartbeat_response>
+    consumer_group_heartbeat(consumer_group_heartbeat_request&& request);
+
+    ss::future<kafka::consumer_group_describe_described_group>
+    consumer_group_describe(kafka::group_id g);
 
     ss::future<std::vector<deletable_group_result>>
     delete_groups(chunked_vector<group_id> groups);

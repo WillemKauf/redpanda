@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include "absl/container/node_hash_map.h"
 #include "kafka/protocol/schemata/consumer_group_describe_response.h"
 #include "kafka/protocol/schemata/consumer_group_heartbeat_request.h"
 #include "kafka/protocol/schemata/consumer_group_heartbeat_response.h"
@@ -21,8 +22,6 @@
 #include <seastar/core/gate.hh>
 #include <seastar/core/lowres_clock.hh>
 #include <seastar/core/timer.hh>
-
-#include "absl/container/node_hash_map.h"
 
 namespace kafka::consumer_group {
 
@@ -42,10 +41,11 @@ public:
 
     /// Process a ConsumerGroupHeartbeat request.
     ss::future<kafka::consumer_group_heartbeat_response_data>
-    heartbeat(kafka::consumer_group_heartbeat_request_data);
+      heartbeat(kafka::consumer_group_heartbeat_request_data);
 
     /// Process a ConsumerGroupDescribe request for a single group.
-    kafka::described_group describe(const kafka::group_id&);
+    kafka::consumer_group_describe_described_group
+    describe(const kafka::group_id&);
 
     /// Start the session expiration timer.
     void start();
@@ -55,13 +55,13 @@ public:
 
 private:
     ss::future<kafka::consumer_group_heartbeat_response_data>
-    handle_join(kafka::consumer_group_heartbeat_request_data);
+      handle_join(kafka::consumer_group_heartbeat_request_data);
 
     ss::future<kafka::consumer_group_heartbeat_response_data>
-    handle_leave(kafka::consumer_group_heartbeat_request_data);
+      handle_leave(kafka::consumer_group_heartbeat_request_data);
 
     ss::future<kafka::consumer_group_heartbeat_response_data>
-    handle_heartbeat(kafka::consumer_group_heartbeat_request_data);
+      handle_heartbeat(kafka::consumer_group_heartbeat_request_data);
 
     ss::future<std::error_code> run_assignor(const kafka::group_id&);
 

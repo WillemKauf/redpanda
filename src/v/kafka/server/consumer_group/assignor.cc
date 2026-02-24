@@ -63,8 +63,7 @@ target_assignment compute_target_assignment(
 
         // Distribute partitions round-robin.
         for (int32_t p = 0; p < topic.num_partitions; ++p) {
-            const auto& target_member
-              = subscribers[p % subscribers.size()];
+            const auto& target_member = subscribers[p % subscribers.size()];
             auto& tam = assignment_map[target_member];
 
             // Find or create topic_partitions entry.

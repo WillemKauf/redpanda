@@ -285,9 +285,9 @@ coordinator::build_response(const kafka::group_id& gid, const member& m) {
     return resp;
 }
 
-kafka::described_group
+kafka::consumer_group_describe_described_group
 coordinator::describe(const kafka::group_id& gid) {
-    kafka::described_group grp;
+    kafka::consumer_group_describe_described_group grp;
     grp.group_id = gid;
 
     auto* group = _stm.find_group(gid);
@@ -319,7 +319,7 @@ coordinator::describe(const kafka::group_id& gid) {
     }
 
     for (const auto& [mid, m] : group->members) {
-        kafka::member resp_member;
+        kafka::consumer_group_describe_member resp_member;
         resp_member.member_id = m.member_id;
         resp_member.instance_id = m.instance_id;
         resp_member.rack_id = m.rack_id;

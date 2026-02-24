@@ -17,6 +17,7 @@
 #include "cluster/offsets_snapshot.h"
 #include "cluster/topic_table.h"
 #include "container/chunked_vector.h"
+#include "kafka/protocol/consumer_group_heartbeat.h"
 #include "kafka/protocol/errors.h"
 #include "kafka/protocol/heartbeat.h"
 #include "kafka/protocol/join_group.h"
@@ -24,12 +25,14 @@
 #include "kafka/protocol/offset_commit.h"
 #include "kafka/protocol/offset_delete.h"
 #include "kafka/protocol/offset_fetch.h"
+#include "kafka/protocol/schemata/consumer_group_describe_response.h"
 #include "kafka/protocol/schemata/delete_groups_response.h"
 #include "kafka/protocol/schemata/describe_producers_response.h"
 #include "kafka/protocol/schemata/list_groups_response.h"
 #include "kafka/protocol/sync_group.h"
 #include "kafka/protocol/txn_offset_commit.h"
 #include "kafka/protocol/types.h"
+#include "kafka/server/consumer_group/next_gen_consumer_group_manager.h"
 #include "kafka/server/fwd.h"
 #include "kafka/server/group.h"
 #include "kafka/server/group_recovery_consumer.h"
@@ -181,6 +184,14 @@ public:
     list_groups(const list_groups_filter_data& filter_data = {}) const;
 
     described_group describe_group(const model::ntp&, const kafka::group_id&);
+
+    /// \brief Handle a ConsumerGroupHeartbeat request (KIP-848)
+    ss::future<consumer_group_heartbeat_response>
+    consumer_group_heartbeat(consumer_group_heartbeat_request&& request);
+
+    /// \brief Handle a ConsumerGroupDescribe request (KIP-848)
+    kafka::consumer_group_describe_described_group
+    consumer_group_describe(const model::ntp&, const kafka::group_id&);
 
     using partition_producers = partition_response;
     partition_response describe_partition_producers(const model::ntp&);
@@ -350,6 +361,7 @@ private:
     ss::sharded<features::feature_table>& _feature_table;
     ss::sharded<cluster::health_monitor_frontend>& _hm_frontend;
     config::configuration& _conf;
+
     absl::node_hash_map<group_id, group_ptr> _groups;
     absl::node_hash_map<model::ntp, ss::lw_shared_ptr<attached_partition>>
       _partitions;
@@ -358,6 +370,8 @@ private:
     config::binding<std::chrono::milliseconds> _offset_retention_check;
     config::binding<std::vector<ss::sstring>> _enabled_metrics;
     config::binding<std::chrono::seconds> _lag_collection_interval;
+
+    consumer_group::next_gen_consumer_group_manager _consumer_group_mgr;
 };
 
 } // namespace kafka

@@ -38,6 +38,7 @@
 #include "model/limits.h"
 #include "model/namespace.h"
 #include "model/record.h"
+#include "raft/consensus.h"
 #include "raft/errc.h"
 #include "raft/fundamental.h"
 #include "ssx/async_algorithm.h"
@@ -439,7 +440,7 @@ ss::future<> group_manager::stop() {
      * during application shutdown
      */
     if (_gate.is_closed()) {
-        return ss::now();
+        co_return;
     }
     _pm.local().unregister_manage_notification(_manage_notify_handle);
     _pm.local().unregister_unmanage_notification(_unmanage_notify_handle);
@@ -454,14 +455,14 @@ ss::future<> group_manager::stop() {
     _expired_group_offset_timer.cancel();
     _lag_metrics_timer.cancel();
 
-    return _gate.close().then([this]() {
-        /**
-         * cancel all pending group opeartions
-         */
-        return ss::do_for_each(
-                 _groups, [](auto& p) { return p.second->shutdown(); })
-          .then([this] { _partitions.clear(); });
-    });
+    co_await _consumer_group_mgr.stop();
+    co_await _gate.close();
+    /**
+     * cancel all pending group opeartions
+     */
+    co_await ss::do_for_each(
+      _groups, [](auto& p) { return p.second->shutdown(); });
+    _partitions.clear();
 }
 
 void group_manager::detach_partition(const model::ntp& ntp) {
@@ -500,6 +501,7 @@ ss::future<> group_manager::do_detach_partition(model::ntp ntp) {
     _partitions.erase(ntp);
     _partitions.rehash(0);
 
+    co_await _consumer_group_mgr.detach_partition(ntp);
     co_await shutdown_groups(std::move(groups_for_shutdown));
 }
 
@@ -513,6 +515,7 @@ void group_manager::attach_partition(ss::lw_shared_ptr<cluster::partition> p) {
     vassert(
       res.second, "double registration of ntp in group manager {}", p->ntp());
     _partitions.rehash(0);
+    _consumer_group_mgr.attach_partition(p->ntp(), p);
 }
 
 ss::future<> group_manager::cleanup_removed_topic_partitions(
@@ -2394,6 +2397,18 @@ ss::future<> group_manager::collect_consumer_lag_metrics() {
     };
 
     co_await container().invoke_on_all(set_metrics);
+}
+
+ss::future<consumer_group_heartbeat_response>
+group_manager::consumer_group_heartbeat(
+  consumer_group_heartbeat_request&& request) {
+    return _consumer_group_mgr.heartbeat(std::move(request));
+}
+
+kafka::consumer_group_describe_described_group
+group_manager::consumer_group_describe(
+  const model::ntp& ntp, const kafka::group_id& group) {
+    return _consumer_group_mgr.describe(ntp, group);
 }
 
 } // namespace kafka
