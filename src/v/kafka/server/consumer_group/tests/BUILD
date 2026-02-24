@@ -30,3 +30,25 @@ redpanda_cc_gtest(
         "@googletest//:gtest",
     ],
 )
+
+redpanda_cc_gtest(
+    name = "consumer_group_stm_test",
+    timeout = "short",
+    srcs = [
+        "consumer_group_stm_test.cc",
+    ],
+    cpu = 3,
+    deps = [
+        "//src/v/kafka/server/consumer_group:commands",
+        "//src/v/kafka/server/consumer_group:consumer_group_stm",
+        "//src/v/kafka/server/consumer_group:types",
+        "//src/v/model",
+        "//src/v/raft/tests:raft_fixture",
+        "//src/v/raft/tests:raft_fixture_retry_policy",
+        "//src/v/serde",
+        "//src/v/storage:record_batch_builder",
+        "//src/v/test_utils:gtest",
+        "@googletest//:gtest",
+        "@seastar",
+    ],
+)
