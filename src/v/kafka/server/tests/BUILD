@@ -1049,3 +1049,36 @@ redpanda_cc_btest(
         "@seastar//:testing",
     ],
 )
+
+redpanda_cc_btest(
+    name = "consumer_group_integration_test",
+    timeout = "short",
+    srcs = [
+        "consumer_group_integration_test.cc",
+    ],
+    cpu = 1,
+    deps = [
+        "//src/v/cluster",
+        "//src/v/container:chunked_vector",
+        "//src/v/kafka/client:transport",
+        "//src/v/kafka/protocol",
+        "//src/v/kafka/protocol:consumer_group_heartbeat",
+        "//src/v/kafka/protocol:delete_groups",
+        "//src/v/kafka/protocol:describe_groups",
+        "//src/v/kafka/protocol:find_coordinator",
+        "//src/v/kafka/protocol:join_group",
+        "//src/v/kafka/protocol:list_groups",
+        "//src/v/kafka/protocol:offset_commit",
+        "//src/v/kafka/protocol:offset_fetch",
+        "//src/v/kafka/server",
+        "//src/v/model",
+        "//src/v/model:timeout_clock",
+        "//src/v/redpanda/tests:fixture",
+        "//src/v/test_utils:async",
+        "//src/v/test_utils:scoped_config",
+        "//src/v/test_utils:seastar_boost",
+        "@boost//:test",
+        "@seastar",
+        "@seastar//:testing",
+    ],
+)
