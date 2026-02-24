@@ -11,13 +11,12 @@
 
 #pragma once
 
+#include "absl/container/node_hash_map.h"
 #include "cluster/state_machine_registry.h"
 #include "container/chunked_vector.h"
 #include "kafka/server/consumer_group/commands.h"
 #include "kafka/server/consumer_group/types.h"
 #include "raft/persisted_stm.h"
-
-#include "absl/container/node_hash_map.h"
 
 namespace kafka::consumer_group {
 
@@ -38,7 +37,7 @@ public:
     apply_local_snapshot(raft::stm_snapshot_header, iobuf&&) override;
 
     ss::future<raft::stm_snapshot>
-    take_local_snapshot(ssx::semaphore_units) override;
+      take_local_snapshot(ssx::semaphore_units) override;
 
     raft::stm_initial_recovery_policy
     get_initial_recovery_policy() const final {
@@ -50,7 +49,7 @@ public:
 
     /// Replicate a command batch and wait for it to be applied.
     ss::future<std::error_code>
-    replicate_and_wait(model::record_batch, model::timeout_clock::duration);
+      replicate_and_wait(model::record_batch, model::timeout_clock::duration);
 
     /// Read-only access to group state.
     const consumer_group_data* find_group(const kafka::group_id&) const;
@@ -62,10 +61,7 @@ public:
 
     /// Snapshot type for serde serialization.
     struct snapshot
-      : serde::envelope<
-          snapshot,
-          serde::version<0>,
-          serde::compat_version<0>> {
+      : serde::envelope<snapshot, serde::version<0>, serde::compat_version<0>> {
         struct group_snapshot
           : serde::envelope<
               group_snapshot,
@@ -92,8 +88,8 @@ public:
                   offsets);
             }
 
-            friend bool
-            operator==(const group_snapshot&, const group_snapshot&) = default;
+            friend bool operator==(const group_snapshot&, const group_snapshot&)
+              = default;
         };
 
         chunked_vector<group_snapshot> groups;

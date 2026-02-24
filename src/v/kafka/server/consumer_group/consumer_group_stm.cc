@@ -40,13 +40,11 @@ ss::future<> consumer_group_stm::do_apply(const model::record_batch& b) {
             break;
         case upsert_member_cmd::key:
             apply_upsert_member(
-              serde::from_iobuf<upsert_member_cmd::value>(
-                r.release_value()));
+              serde::from_iobuf<upsert_member_cmd::value>(r.release_value()));
             break;
         case remove_member_cmd::key:
             apply_remove_member(
-              serde::from_iobuf<remove_member_cmd::value>(
-                r.release_value()));
+              serde::from_iobuf<remove_member_cmd::value>(r.release_value()));
             break;
         case update_topic_metadata_cmd::key:
             apply_update_topic_metadata(
@@ -65,13 +63,11 @@ ss::future<> consumer_group_stm::do_apply(const model::record_batch& b) {
             break;
         case commit_offset_cmd::key:
             apply_commit_offset(
-              serde::from_iobuf<commit_offset_cmd::value>(
-                r.release_value()));
+              serde::from_iobuf<commit_offset_cmd::value>(r.release_value()));
             break;
         case delete_group_cmd::key:
             apply_delete_group(
-              serde::from_iobuf<delete_group_cmd::value>(
-                r.release_value()));
+              serde::from_iobuf<delete_group_cmd::value>(r.release_value()));
             break;
         default:
             vlog(
@@ -191,8 +187,7 @@ ss::future<std::error_code> consumer_group_stm::replicate_and_wait(
     }
 
     auto applied = co_await wait_no_throw(
-      result.value().last_offset,
-      model::timeout_clock::now() + timeout);
+      result.value().last_offset, model::timeout_clock::now() + timeout);
     if (!applied) {
         co_return raft::errc::timeout;
     }

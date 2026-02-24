@@ -448,6 +448,46 @@ path_type_map = {
     "AlterUserScramCredentialsResponseData": {
         "Results": {"User": ("kafka::scram_user_name", "string")},
     },
+    "ConsumerGroupHeartbeatRequestData": {
+        "MemberId": ("kafka::member_id", "string"),
+        "InstanceId": ("kafka::group_instance_id", "string"),
+        "TopicPartitions": {
+            "TopicId": ("model::topic_id", "uuid"),
+            "Partitions": ("model::partition_id", "int32"),
+        },
+    },
+    "ConsumerGroupHeartbeatResponseData": {
+        "MemberId": ("kafka::member_id", "string"),
+        "Assignment": {
+            "TopicPartitions": {
+                "TopicId": ("model::topic_id", "uuid"),
+                "Partitions": ("model::partition_id", "int32"),
+            },
+        },
+    },
+    "ConsumerGroupDescribeRequestData": {
+        "GroupIds": ("kafka::group_id", "string"),
+    },
+    "ConsumerGroupDescribeResponseData": {
+        "Groups": {
+            "Members": {
+                "MemberId": ("kafka::member_id", "string"),
+                "InstanceId": ("kafka::group_instance_id", "string"),
+                "Assignment": {
+                    "TopicPartitions": {
+                        "TopicId": ("model::topic_id", "uuid"),
+                        "Partitions": ("model::partition_id", "int32"),
+                    },
+                },
+                "TargetAssignment": {
+                    "TopicPartitions": {
+                        "TopicId": ("model::topic_id", "uuid"),
+                        "Partitions": ("model::partition_id", "int32"),
+                    },
+                },
+            },
+        },
+    },
 }
 
 # a few kafka field types specify an entity type
@@ -549,6 +589,21 @@ struct_renames = {
 
     ("FetchResponseData", "Responses", "Partitions", "DivergingEpoch"):
         ("EpochEndOffset", "DivergingEpochEndOffset"),
+
+    ("ConsumerGroupHeartbeatRequestData", "TopicPartitions"):
+        ("TopicPartitions", "ConsumerGroupHeartbeatTopicPartitions"),
+    ("ConsumerGroupHeartbeatResponseData", "Assignment"):
+        ("Assignment", "ConsumerGroupHeartbeatAssignment"),
+    ("ConsumerGroupHeartbeatResponseData", "Assignment", "TopicPartitions"):
+        ("TopicPartitions", "ConsumerGroupHeartbeatAssignmentTopicPartitions"),
+    ("ConsumerGroupDescribeResponseData", "Groups", "Members", "Assignment"):
+        ("Assignment", "ConsumerGroupDescribeMemberAssignment"),
+    ("ConsumerGroupDescribeResponseData", "Groups", "Members", "Assignment", "TopicPartitions"):
+        ("TopicPartitions", "ConsumerGroupDescribeAssignmentTopicPartitions"),
+    ("ConsumerGroupDescribeResponseData", "Groups", "Members", "TargetAssignment"):
+        ("Assignment", "ConsumerGroupDescribeMemberTargetAssignment"),
+    ("ConsumerGroupDescribeResponseData", "Groups", "Members", "TargetAssignment", "TopicPartitions"):
+        ("TopicPartitions", "ConsumerGroupDescribeTargetAssignmentTopicPartitions"),
 }
 
 # extra header per type name
@@ -727,10 +782,12 @@ STRUCT_TYPES = [
     "ScramCredentialUpsertion",
     "AlterUserScramCredentialsResult",
     "Coordinator",
+    "TopicPartitions",
+    "Member",
 ]
 
 # A list of StructTypes that are allowed to be not arrays in the schema.
-ALLOWED_SINGULAR_STRUCT_TYPES = ["EpochEndOffset"]
+ALLOWED_SINGULAR_STRUCT_TYPES = ["EpochEndOffset", "Assignment"]
 
 DROP_STREAM_OPERATOR = [
     "metadata_response_data",
@@ -757,7 +814,14 @@ TAGGED_WITH_FIELDS = []
 # respective types are correctly not prefixed with [].
 # They must not be treated as ArrayTypes
 # This list is the names after struct_renames have been applied.
-SINGULAR_STRUCT_TYPES = ["DivergingEpochEndOffset", "LeaderIdAndEpoch", "SnapshotId"]
+SINGULAR_STRUCT_TYPES = [
+    "DivergingEpochEndOffset",
+    "LeaderIdAndEpoch",
+    "SnapshotId",
+    "ConsumerGroupHeartbeatAssignment",
+    "ConsumerGroupDescribeMemberAssignment",
+    "ConsumerGroupDescribeMemberTargetAssignment",
+]
 
 SCALAR_TYPES = list(basic_type_map.keys())
 ENTITY_TYPES = list(entity_type_map.keys())
@@ -1497,6 +1561,8 @@ if ({{ cond }}) {
     {{ writer }}.write(v);
 {%- endif %}
 });
+{%- elif field.type().is_struct -%}
+{{- struct_serde(field.type(), methods, fname, writer) -}}
 {%- elif flex and field.type().potentially_flexible_type %}
 {{ writer }}.write_flex({{ fname }});
 {%- else %}
@@ -1532,7 +1598,7 @@ if ({{ cond }}) {
 });
 {%- else %}
 {%- if field.type().is_struct -%}
-{{- struct_serde(field.type(), methods, "v." ~ field.name) -}}
+{{- struct_serde(field.type(), methods, fname) -}}
 {%- else -%}
 {%- set decoder, named_type = field.decoder(flex) %}
 {%- if named_type == None %}

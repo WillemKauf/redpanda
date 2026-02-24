@@ -9,11 +9,10 @@
  * by the Apache License, Version 2.0
  */
 
+#include "gtest/gtest.h"
 #include "kafka/server/consumer_group/commands.h"
 #include "kafka/server/consumer_group/types.h"
 #include "serde/rw/rw.h"
-
-#include "gtest/gtest.h"
 
 namespace kafka::consumer_group {
 
