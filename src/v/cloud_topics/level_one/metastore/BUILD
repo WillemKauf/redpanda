@@ -259,6 +259,7 @@ redpanda_cc_library(
         ":offset_interval_set",
         "//src/v/base",
         "//src/v/cloud_topics/level_one/common:object_id",
+        "//src/v/compaction:compaction_state",
         "//src/v/container:chunked_hash_map",
         "//src/v/model",
         "//src/v/serde",
@@ -315,18 +316,12 @@ redpanda_cc_library(
 
 redpanda_cc_library(
     name = "offset_interval_set",
-    srcs = [
-        "offset_interval_set.cc",
-    ],
     hdrs = [
         "offset_interval_set.h",
     ],
     deps = [
-        "//src/v/container:chunked_vector",
-        "//src/v/container:interval_set",
+        "//src/v/container:offset_interval_set",
         "//src/v/model",
-        "//src/v/serde",
-        "//src/v/serde:map",
     ],
 )
 

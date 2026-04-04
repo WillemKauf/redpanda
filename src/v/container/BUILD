@@ -119,3 +119,18 @@ redpanda_cc_library(
         "//src/v/ssx:async_algorithm",
     ],
 )
+
+redpanda_cc_library(
+    name = "offset_interval_set",
+    hdrs = [
+        "offset_interval_set.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":chunked_vector",
+        ":interval_set",
+        "//src/v/model",
+        "//src/v/serde",
+        "//src/v/serde:map",
+    ],
+)
