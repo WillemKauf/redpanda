@@ -9,6 +9,23 @@ redpanda_cc_library(
 )
 
 redpanda_cc_library(
+    name = "state",
+    hdrs = [
+        "state.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/v/container:offset_interval_set",
+        "//src/v/model",
+        "//src/v/serde",
+        "//src/v/serde:optional",
+        "//src/v/serde:set",
+        "@abseil-cpp//absl/container:btree",
+        "@seastar",
+    ],
+)
+
+redpanda_cc_library(
     name = "key",
     hdrs = [
         "key.h",

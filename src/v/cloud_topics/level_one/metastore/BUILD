@@ -259,7 +259,7 @@ redpanda_cc_library(
         ":offset_interval_set",
         "//src/v/base",
         "//src/v/cloud_topics/level_one/common:object_id",
-        "//src/v/compaction:compaction_state",
+        "//src/v/compaction:state",
         "//src/v/container:chunked_hash_map",
         "//src/v/model",
         "//src/v/serde",
