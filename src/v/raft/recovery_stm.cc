@@ -517,6 +517,10 @@ recovery_stm::take_on_demand_snapshot(model::offset last_included_offset) {
         _ptr->log()->offset_delta(model::next_offset(last_included_offset))),
     };
 
+    // Include compaction state if available, so recovering followers
+    // can skip re-compaction.
+    metadata.storage_metadata = _ptr->log()->serialize_compaction_state();
+
     co_await writer.write_metadata(reflection::to_iobuf(std::move(metadata)));
     co_await write_iobuf_to_output_stream(
       std::move(snapshot_data), writer.output());

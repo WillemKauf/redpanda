@@ -2420,6 +2420,12 @@ ss::future<> consensus::hydrate_snapshot() {
     // the offset translator changes in the snapshot are applied before
     // we move the commit index forward, so that any reads at or beyond
     // the commit index can be properly translated.
+    // Apply storage metadata from leader if available.
+    if (metadata->storage_metadata) {
+        co_await _log->apply_storage_metadata(
+          std::move(*metadata->storage_metadata));
+    }
+
     auto prev_commit_index = _commit_index;
     _commit_index = std::max(_commit_index, last_snapshot_index);
     maybe_update_last_visible_index(_commit_index);
@@ -2754,7 +2760,7 @@ consensus::open_snapshot() {
           });
 
     co_return opened_snapshot{
-      .metadata = metadata,
+      .metadata = std::move(metadata),
       .reader = std::move(*reader),
     };
 }

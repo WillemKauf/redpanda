@@ -333,7 +333,7 @@ struct snapshot_metadata {
     // we start snasphot metadata version at 64 to leave room for configuration
     // version updates
     static constexpr int8_t initial_version = 64;
-    static constexpr int8_t current_version = initial_version;
+    static constexpr int8_t current_version = 65;
 
     model::offset last_included_index;
     model::term_id last_included_term;
@@ -341,6 +341,11 @@ struct snapshot_metadata {
     group_configuration latest_configuration;
     ss::lowres_clock::time_point cluster_time;
     offset_translator_delta log_start_delta;
+
+    // Optional serialized storage metadata (e.g. compaction_state) to transfer
+    // during cross-node recovery. Not replicated state — purely a hint to avoid
+    // re-compaction on the receiving node.
+    std::optional<iobuf> storage_metadata;
     /**
      * Since snapshot metadata did not include a version field we are going to
      * use group configuration version field as a indicator of snapshot metadata

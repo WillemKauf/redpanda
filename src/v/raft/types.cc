@@ -449,12 +449,23 @@ raft::snapshot_metadata adl<raft::snapshot_metadata>::from(iobuf_parser& in) {
         log_start_delta = adl<raft::offset_translator_delta>{}.from(in);
     }
 
+    // v65: optional storage metadata
+    std::optional<iobuf> storage_metadata;
+    if (version >= 65 && in.bytes_left() > 0) {
+        auto has_storage_metadata = adl<bool>{}.from(in);
+        if (has_storage_metadata) {
+            storage_metadata = adl<iobuf>{}.from(in);
+        }
+    }
+
     return raft::snapshot_metadata{
       .last_included_index = last_included_index,
       .last_included_term = last_included_term,
       .latest_configuration = std::move(cfg),
       .cluster_time = cluster_time,
-      .log_start_delta = log_start_delta};
+      .log_start_delta = log_start_delta,
+      .storage_metadata = std::move(storage_metadata),
+    };
 }
 
 void adl<raft::snapshot_metadata>::to(
@@ -471,5 +482,14 @@ void adl<raft::snapshot_metadata>::to(
       std::chrono::duration_cast<std::chrono::milliseconds>(
         md.cluster_time.time_since_epoch()),
       md.log_start_delta);
+
+    // v65: optional storage metadata
+    if (md.version >= 65) {
+        bool has_storage_metadata = md.storage_metadata.has_value();
+        reflection::serialize(out, has_storage_metadata);
+        if (has_storage_metadata) {
+            reflection::serialize(out, std::move(*md.storage_metadata));
+        }
+    }
 }
 } // namespace reflection

@@ -36,7 +36,10 @@ TEST_F_CORO(raft_fixture, test_snapshot_recovery) {
       std::filesystem::path(n1.work_directory()),
       storage::simple_snapshot_manager::default_snapshot_filename);
 
-    co_await raft::details::persist_snapshot(snapshot_manager, md, iobuf{});
+    auto last_included_index = md.last_included_index;
+    auto last_included_term = md.last_included_term;
+    co_await raft::details::persist_snapshot(
+      snapshot_manager, std::move(md), iobuf{});
 
     co_await n0.init_and_start(all_vnodes());
     co_await n1.init_and_start(all_vnodes());
@@ -44,8 +47,8 @@ TEST_F_CORO(raft_fixture, test_snapshot_recovery) {
 
     auto leader_id = co_await wait_for_leader(30s);
     auto& leader_node = node(leader_id);
-    ASSERT_GT_CORO(leader_node.raft()->term(), md.last_included_term);
+    ASSERT_GT_CORO(leader_node.raft()->term(), last_included_term);
     ASSERT_EQ_CORO(
       leader_node.raft()->start_offset(),
-      model::next_offset(md.last_included_index));
+      model::next_offset(last_included_index));
 }
