@@ -21,6 +21,7 @@
 #include "model/timeout_clock.h"
 #include "model/timestamp.h"
 #include "reflection/adl.h"
+#include "serde/rw/rw.h"
 #include "ssx/abort_source.h"
 #include "ssx/future-util.h"
 #include "ssx/semaphore.h"
@@ -28,6 +29,8 @@
 #include "storage/api.h"
 #include "storage/chunk_cache.h"
 #include "storage/compacted_offset_list.h"
+#include "storage/compaction/compaction_state.h"
+#include "storage/compaction/compaction_worker.h"
 #include "storage/compaction_reducers.h"
 #include "storage/disk_log_appender.h"
 #include "storage/exceptions.h"
@@ -66,6 +69,7 @@
 #include <algorithm>
 #include <chrono>
 #include <exception>
+#include <filesystem>
 #include <iterator>
 #include <limits>
 #include <optional>
@@ -272,6 +276,28 @@ ss::future<> disk_log_impl::remove() {
       .finally([this] { _probe->clear_metrics(); });
 }
 
+ss::future<> disk_log_impl::load_compaction_state() {
+    if (!config().is_locally_compacted()) {
+        co_return;
+    }
+    auto path = std::filesystem::path(config().work_directory())
+                / "compaction_state";
+    auto exists = co_await ss::file_exists(path.string());
+    if (!exists) {
+        _compaction_state
+          = std::make_unique<local_compaction::compaction_state>();
+        co_return;
+    }
+    auto fd = co_await ss::open_file_dma(path.string(), ss::open_flags::ro);
+    auto size = co_await fd.size();
+    auto buf = co_await fd.dma_read_bulk<char>(0, size);
+    co_await fd.close();
+    iobuf iob;
+    iob.append(buf.get(), size);
+    _compaction_state = std::make_unique<local_compaction::compaction_state>(
+      serde::from_iobuf<local_compaction::compaction_state>(std::move(iob)));
+}
+
 ss::future<> disk_log_impl::start(
   std::optional<truncate_prefix_config> truncate_cfg, ss::abort_source& as) {
     auto is_new = is_new_log();
@@ -285,6 +311,7 @@ ss::future<> disk_log_impl::start(
     if (!is_new) {
         co_await offset_translator().sync_with_log(*this, as);
     }
+    co_await load_compaction_state();
 }
 
 ss::future<std::optional<ss::sstring>> disk_log_impl::close() {
@@ -1430,6 +1457,17 @@ ss::future<> disk_log_impl::do_compact(
         compact_cfg.asrc = &_compaction_as;
     }
 
+    // New compaction path using sliding window source/sink/filter
+    if (_compaction_state) {
+        if (!_compaction_worker) {
+            _compaction_worker
+              = std::make_unique<local_compaction::compaction_worker>();
+        }
+        co_await _compaction_worker->compact(
+          *this, *_compaction_state, compact_cfg);
+        co_return;
+    }
+
     auto compact_fut = ss::now();
 
     auto use_adjacent_merge
@@ -2159,6 +2197,10 @@ size_t disk_log_impl::max_segment_size() const {
     }
 
     return result;
+}
+
+size_t disk_log_impl::max_compacted_segment_size() const {
+    return _manager.config().max_compacted_segment_size();
 }
 
 uint64_t disk_log_impl::size_bytes_after_offset(model::offset o) const {
@@ -3801,6 +3843,17 @@ void disk_log_impl::wrote_stm_bytes(size_t byte_size) {
 
 storage_resources& disk_log_impl::resources() { return _manager.resources(); }
 
+ss::future<ss::lw_shared_ptr<segment>> disk_log_impl::make_segment(
+  model::offset base_offset, model::term_id term, size_t segment_size_hint) {
+    return _manager.make_log_segment(
+      config(),
+      base_offset,
+      term,
+      config::shard_local_cfg().storage_read_buffer_size(),
+      config::shard_local_cfg().storage_read_readahead_count(),
+      segment_size_hint);
+}
+
 std::ostream& disk_log_impl::print(std::ostream& o) const {
     fmt::print(
       o,
@@ -4670,6 +4723,162 @@ bool disk_log_impl::needs_compaction() const {
 
     auto dr = dirty_ratio();
     return dr >= config().min_cleanable_dirty_ratio() || exceed_compact_lag;
+}
+
+ss::future<> disk_log_impl::replace_offset_range(
+  model::offset start,
+  model::offset end,
+  ss::lw_shared_ptr<segment> replacement) {
+    // Important: acquire the segment rewrite lock before any segment locks to
+    // serialize against truncation and other compaction operations.
+    auto segment_modify_lock = co_await _segment_rewrite_lock.get_units();
+
+    // Find the first segment whose base_offset == start.
+    auto begin_it = _segs.lower_bound(start);
+    vassert(
+      begin_it != _segs.end()
+        && (*begin_it)->offsets().get_base_offset() == start,
+      "replace_offset_range: start offset {} must equal some segment's "
+      "base_offset in the log for ntp {}",
+      start,
+      config().ntp());
+
+    // Find the last segment whose dirty_offset == end.
+    auto end_it = begin_it;
+    while (end_it != _segs.end()
+           && (*end_it)->offsets().get_dirty_offset() != end) {
+        ++end_it;
+    }
+    vassert(
+      end_it != _segs.end() && (*end_it)->offsets().get_dirty_offset() == end,
+      "replace_offset_range: end offset {} must equal some segment's "
+      "dirty_offset in the log for ntp {}",
+      end,
+      config().ntp());
+
+    // end_it is inclusive; advance to make a half-open range [begin_it,
+    // past_end_it).
+    auto past_end_it = std::next(end_it);
+
+    // Collect the segments in the range.
+    chunked_vector<ss::lw_shared_ptr<segment>> affected_segments;
+    for (auto it = begin_it; it != past_end_it; ++it) {
+        affected_segments.push_back(*it);
+    }
+    vassert(
+      !affected_segments.empty(),
+      "replace_offset_range: no segments found in range [{}, {}] for ntp {}",
+      start,
+      end,
+      config().ntp());
+
+    auto target = affected_segments.front();
+    auto target_size_before = target->size_bytes();
+
+    // Evict readers for all affected segments and hold the range lock to
+    // prevent new readers from being added.
+    chunked_vector<ss::future<readers_cache::range_lock_holder>> holder_futs;
+    holder_futs.reserve(affected_segments.size());
+    for (auto& seg : affected_segments) {
+        holder_futs.push_back(_readers_cache->evict_segment_readers(seg));
+    }
+    auto holders = co_await ss::when_all_succeed(
+      holder_futs.begin(), holder_futs.end());
+
+    // Acquire write locks on all affected segments. Use retry with timeout
+    // to handle contention with readers.
+    auto locks = co_await internal::write_lock_segments(
+      affected_segments, 1s, 5);
+
+    // Close the replacement segment before transferring.
+    co_await replacement->close();
+
+    // --- Atomic commit point ---
+    // Drop old index data on the target segment.
+    co_await target->index().drop_all_data();
+
+    // Swap data file: close target reader, rename replacement data file to
+    // target's path, create a new reader for the target.
+    co_await target->reader().close();
+    auto from_path = replacement->reader().path();
+    co_await ss::rename_file(from_path.string(), target->reader().filename());
+    target->clear_cached_disk_usage();
+
+    auto new_reader = std::make_unique<segment_reader>(
+      target->reader().path(),
+      config::shard_local_cfg().storage_read_buffer_size(),
+      config::shard_local_cfg().storage_read_readahead_count(),
+      std::nullopt);
+    co_await new_reader->load_size();
+    target->set_cached_disk_usage(new_reader->file_size(), std::nullopt);
+    _probe->delete_segment(*target.get());
+    target->swap_reader(std::move(new_reader));
+    _probe->add_initial_segment(*target.get());
+
+    // Swap index state from replacement to target.
+    target->index().swap_index_state(
+      std::move(replacement->index()).release_index_state());
+    target->force_set_commit_offset_from_index();
+    co_await target->index().flush();
+
+    // Handle the compaction index: rename from replacement to target path.
+    auto from_cmp_path = from_path.to_compacted_index();
+    auto to_cmp_path = target->reader().path().to_compacted_index();
+    auto cmp_exists = co_await ss::file_exists(from_cmp_path.string());
+    if (cmp_exists) {
+        co_await ss::rename_file(from_cmp_path.string(), to_cmp_path.string());
+    } else {
+        // Remove any stale compaction index on the target.
+        co_await ss::remove_file(to_cmp_path.string())
+          .handle_exception([](std::exception_ptr) {});
+    }
+
+    // Clean up replacement segment's remaining persistent state.
+    co_await replacement->remove_persistent_state();
+
+    // Reset batch cache to avoid stale data.
+    co_await target->reset_batch_cache_index();
+
+    // Advance generation ID to signal that the segment has been mutated.
+    target->advance_generation();
+
+    // Release write locks and reader eviction holders.
+    locks.clear();
+    holders.clear();
+
+    // Remove segments 2..N from the segment set and delete them permanently.
+    // If a crash occurs here, startup recovery detects and resolves overlapping
+    // segments.
+    for (auto seg_it = std::next(affected_segments.begin());
+         seg_it != affected_segments.end();
+         ++seg_it) {
+        auto segment_to_remove = *seg_it;
+
+        auto it = std::find(_segs.begin(), _segs.end(), segment_to_remove);
+        if (it != _segs.end()) {
+            // The bytes are not being removed but moved to the replacement
+            // segment. add_segment_bytes before erase+remove to ensure net
+            // zero change, since remove_segment_permanently deducts bytes.
+            add_segment_bytes(
+              segment_to_remove, segment_to_remove->size_bytes());
+
+            _segs.erase(it, std::next(it));
+            co_await remove_segment_permanently(
+              segment_to_remove, "replace_offset_range");
+        }
+    }
+
+    // Update dirty/closed byte counters for the target segment's size change.
+    // The probe accounting was already handled by delete_segment/add_initial_
+    // segment above. Here we adjust the dirty/closed byte tracking.
+    auto target_size_after = target->size_bytes();
+    if (target_size_before > target_size_after) {
+        subtract_segment_bytes(
+          target, ssize_t(target_size_before) - ssize_t(target_size_after));
+    } else if (target_size_after > target_size_before) {
+        add_segment_bytes(
+          target, ssize_t(target_size_after) - ssize_t(target_size_before));
+    }
 }
 
 void disk_log_impl::throw_if_closed() const {
