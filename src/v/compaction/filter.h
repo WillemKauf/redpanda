@@ -27,10 +27,6 @@ namespace compaction {
 // 1. `compute_offset_deltas_to_keep(record_batch)`: This should iterate over
 // the records of the provided `record_batch` and populate a vector of offset
 // deltas of records which should be kept during compaction filtering.
-// 2. `filter_batch_with_offset_deltas(record_batch, vector<int32_t>)`: Likely a
-// pass through function to `do_filter_batch()`, but allows the `filter`
-// implementation to examine the produced `offset_deltas` before creating a new
-// `record_batch`.
 class filter {
 public:
     filter(sliding_window_reducer::sink& sink, model::ntp ntp)
@@ -41,6 +37,12 @@ public:
     stats end_of_stream() const { return _stats; }
 
 protected:
+    // For a given batch, this function returns a vector containing offset
+    // deltas from records in the batch which we intend on keeping when
+    // performing record batch filtering.
+    ss::future<std::vector<int32_t>>
+    compute_offset_deltas_to_keep(const model::record_batch& b) const;
+
     // Creates a new batch based on the provided batch and offset_deltas
     // indicated.
     ss::future<std::optional<model::record_batch>> do_filter_batch(
@@ -49,26 +51,18 @@ protected:
     mutable stats _stats;
 
 private:
-    // For a given batch, this function should return a vector containing offset
-    // deltas from records in the batch which we intend on keeping when
-    // performing record batch filtering.
-    virtual ss::future<std::vector<int32_t>>
-    compute_offset_deltas_to_keep(const model::record_batch& b) const = 0;
+    virtual ss::future<bool>
+    should_keep(const model::record_batch&, const model::record&) const = 0;
 
-    // For most implementations, this should serve as a pass through function to
-    // `do_filter_batch()`. However, it provides flexibility in examining the
-    // produced `offset_deltas` before creating a new `record_batch`. This is
-    // useful for e.g. local storage in which we may need to create a
-    // placeholder batch if `offset_deltas` is empty.
-    virtual ss::future<std::optional<model::record_batch>>
-    filter_batch_with_offset_deltas(
-      model::record_batch b, std::vector<int32_t> offset_deltas) const
-      = 0;
+    ss::future<> maybe_index_offset_delta(
+      const model::record_batch&,
+      const model::record&,
+      std::vector<int32_t>&) const;
 
     // Computes offset deltas from the batch to keep, and then filters the
     // provided batch.
-    ss::future<std::optional<model::record_batch>>
-    filter_batch(model::record_batch b) const;
+    virtual ss::future<std::optional<model::record_batch>>
+    filter_batch(model::record_batch b) const = 0;
 
     // Performs filtering over the entire batch, and then delegates the result
     // to `_sink` for writing.

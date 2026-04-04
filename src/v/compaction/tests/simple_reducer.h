@@ -34,33 +34,19 @@ public:
       , _map(map) {}
 
 private:
-    ss::future<> maybe_index_offset_delta(
-      const model::record_batch& b,
-      const model::record& r,
-      std::vector<int32_t>& offset_deltas) const {
-        if (co_await is_latest_record_for_key(_map, b, r)) {
-            offset_deltas.push_back(r.offset_delta());
-        }
-    }
-
-    ss::future<std::vector<int32_t>>
-    compute_offset_deltas_to_keep(const model::record_batch& b) const final {
-        std::vector<int32_t> offset_deltas;
-        offset_deltas.reserve(b.record_count());
-
-        co_await b.for_each_record_async(
-          [this, &b, &offset_deltas](const model::record& r) {
-              return maybe_index_offset_delta(b, r, offset_deltas);
-          });
-
-        co_return offset_deltas;
+    ss::future<bool>
+    should_keep(const model::record_batch& b, const model::record& r) const {
+        co_return co_await compaction::is_latest_record_for_key(_map, b, r);
     }
 
     ss::future<std::optional<model::record_batch>>
-    filter_batch_with_offset_deltas(
-      model::record_batch b, std::vector<int32_t> offset_deltas) const final {
-        co_return co_await do_filter_batch(
+    filter_batch(model::record_batch b) const {
+        std::vector<int32_t> offset_deltas
+          = co_await compute_offset_deltas_to_keep(b);
+
+        auto ret = co_await do_filter_batch(
           std::move(b), std::move(offset_deltas));
+        co_return ret;
     }
 
     const key_offset_map& _map;

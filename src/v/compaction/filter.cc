@@ -29,20 +29,26 @@ ss::future<ss::stop_iteration> filter::operator()(model::record_batch b) {
     co_return co_await filter_and_rewrite_with_sink(comp, std::move(batch));
 }
 
-ss::future<std::optional<model::record_batch>>
-filter::filter_batch(model::record_batch b) const {
-    // do not filter non-removable batch types under any circumstances
-    if (!is_filterable(b.header().type)) {
-        co_return std::move(b);
+ss::future<> filter::maybe_index_offset_delta(
+  const model::record_batch& b,
+  const model::record& r,
+  std::vector<int32_t>& offset_deltas) const {
+    if (co_await should_keep(b, r)) {
+        offset_deltas.push_back(r.offset_delta());
     }
+}
 
-    // compute which records to keep
-    std::vector<int32_t> offset_deltas = co_await compute_offset_deltas_to_keep(
-      b);
+ss::future<std::vector<int32_t>>
+filter::compute_offset_deltas_to_keep(const model::record_batch& b) const {
+    std::vector<int32_t> offset_deltas;
+    offset_deltas.reserve(b.record_count());
 
-    auto ret = co_await filter_batch_with_offset_deltas(
-      std::move(b), std::move(offset_deltas));
-    co_return ret;
+    co_await b.for_each_record_async(
+      [this, &b, &offset_deltas](const model::record& r) {
+          return maybe_index_offset_delta(b, r, offset_deltas);
+      });
+
+    co_return offset_deltas;
 }
 
 ss::future<std::optional<model::record_batch>> filter::do_filter_batch(
@@ -137,6 +143,9 @@ ss::future<ss::stop_iteration> filter::filter_and_rewrite_with_sink(
         co_return co_await _sink(std::move(to_copy).value(), original);
     } else {
         ++_stats.batches_discarded;
+        if (b.header().attrs.is_control()) {
+            ++_stats.control_batches_discarded;
+        }
         _stats.records_discarded += record_count_before;
     }
 

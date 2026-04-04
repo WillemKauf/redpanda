@@ -61,6 +61,9 @@ redpanda_cc_library(
     hdrs = [
         "logger.h",
     ],
+    visibility = [
+        "//src/v/storage:__subpackages__",
+    ],
     deps = [
         "//src/v/base",
         "@seastar",

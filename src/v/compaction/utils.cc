@@ -30,6 +30,14 @@ bool is_tx_batch_compaction_enabled(
       features::feature::coordinated_compaction);
 }
 
+bool is_removable_control_batch(const model::record_batch_type batch_type) {
+    return batch_type == model::record_batch_type::tx_fence
+           || batch_type == model::record_batch_type::group_fence_tx
+           || batch_type == model::record_batch_type::group_prepare_tx
+           || batch_type == model::record_batch_type::group_abort_tx
+           || batch_type == model::record_batch_type::group_commit_tx;
+}
+
 bool is_removable_control_batch(
   const model::ntp& ntp,
   const model::record_batch_type batch_type,
