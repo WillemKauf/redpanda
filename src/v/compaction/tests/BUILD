@@ -34,6 +34,21 @@ redpanda_cc_gtest(
 )
 
 redpanda_cc_gtest(
+    name = "compaction_state_test",
+    timeout = "short",
+    srcs = [
+        "compaction_state_test.cc",
+    ],
+    deps = [
+        "//src/v/compaction:compaction_state",
+        "//src/v/model",
+        "//src/v/serde",
+        "//src/v/test_utils:gtest",
+        "@googletest//:gtest",
+    ],
+)
+
+redpanda_cc_gtest(
     name = "reducer_test",
     timeout = "short",
     srcs = [
