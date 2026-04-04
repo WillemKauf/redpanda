@@ -1364,6 +1364,13 @@ bytes clean_segment_key(model::ntp ntp) {
     return iobuf_to_bytes(buf);
 }
 
+bytes compaction_state_key(model::ntp ntp) {
+    iobuf buf;
+    reflection::serialize(
+      buf, kvstore_key_type::compaction_state, std::move(ntp));
+    return iobuf_to_bytes(buf);
+}
+
 offset_delta_time should_apply_delta_time_offset(
   ss::sharded<features::feature_table>& feature_table) {
     return offset_delta_time{

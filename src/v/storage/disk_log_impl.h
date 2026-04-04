@@ -16,6 +16,7 @@
 #include "features/feature_table.h"
 #include "model/fundamental.h"
 #include "ssx/mutex.h"
+#include "storage/compaction/compaction_state.h"
 #include "storage/disk_log_appender.h"
 #include "storage/failure_probes.h"
 #include "storage/lock_manager.h"
@@ -33,6 +34,9 @@
 
 struct storage_e2e_fixture;
 struct reupload_fixture;
+namespace storage::local_compaction {
+class compaction_worker;
+} // namespace storage::local_compaction
 namespace storage {
 
 /// \brief offset boundary type
@@ -231,7 +235,22 @@ public:
 
     readers_cache& readers() { return *_readers_cache; }
 
+    /// Atomically replaces a range of segments [start, end] with a single
+    /// replacement segment. The first segment in the range is swapped to the
+    /// replacement via the transfer_segment pattern, and remaining segments
+    /// are removed permanently. If a crash occurs after the swap but before
+    /// all removals complete, startup recovery handles overlapping segments.
+    ss::future<> replace_offset_range(
+      model::offset start,
+      model::offset end,
+      ss::lw_shared_ptr<segment> replacement);
+
     storage_resources& resources();
+
+    /// Create a new segment via the log manager. Used by compaction to create
+    /// staging segments for writing compacted output.
+    ss::future<ss::lw_shared_ptr<segment>> make_segment(
+      model::offset base_offset, model::term_id term, size_t segment_size_hint);
 
     // Self compacts a segment.
     ss::future<compaction_result> segment_self_compact(
@@ -272,6 +291,12 @@ public:
     remove_kvstore_state(const model::ntp&, storage::kvstore&);
 
     size_t max_segment_size() const;
+    size_t max_compacted_segment_size() const;
+
+    std::optional<iobuf> serialize_compaction_state() const override;
+    ss::future<> apply_storage_metadata(iobuf) override;
+
+    class kvstore& kv_store() { return _kvstore; }
 
     ssize_t dirty_segment_bytes() const final { return _dirty_segment_bytes; }
 
@@ -525,6 +550,11 @@ private:
     // can skip segments above this offset, if no new segments have been created
     // since last window compaction.
     std::optional<model::offset> _last_compaction_window_start_offset;
+
+    std::unique_ptr<storage::local_compaction::compaction_state>
+      _compaction_state;
+
+    ss::future<> load_compaction_state();
 
     size_t _reclaimable_size_bytes{0};
 

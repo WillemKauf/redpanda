@@ -255,6 +255,12 @@ void probe::setup_metrics(const model::ntp& ntp) {
             "Number of segments that have been compacted away "
             "during adjacent merge compaction."),
           labels),
+        sm::make_histogram(
+          "compaction_duration_microseconds",
+          [this] { return _compaction_runs.internal_histogram_logform(); },
+          sm::description(
+            "Duration of a compaction run for this partition."),
+          labels),
       },
       {},
       {sm::shard_label, metrics::partition_label});

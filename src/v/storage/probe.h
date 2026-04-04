@@ -14,6 +14,7 @@
 #include "model/fundamental.h"
 #include "storage/disk.h"
 #include "storage/fwd.h"
+#include "utils/log_hist.h"
 
 #include <seastar/core/metrics_registration.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -111,6 +112,11 @@ public:
         ++_num_rounds_window_compaction;
     }
 
+    using hist_t = log_hist_internal;
+    std::unique_ptr<hist_t::measurement> auto_compaction_measurement() {
+        return _compaction_runs.auto_measure();
+    }
+
     void add_chunked_compaction_run() { ++_num_chunked_compaction_runs; }
     auto get_chunked_compaction_runs() const {
         return _num_chunked_compaction_runs;
@@ -177,6 +183,8 @@ private:
     ssize_t _closed_segment_bytes = 0;
 
     ssize_t _compaction_removed_bytes = 0;
+
+    hist_t _compaction_runs;
 
     metrics::internal_metric_groups _metrics;
 };

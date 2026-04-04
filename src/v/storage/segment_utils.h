@@ -240,10 +240,12 @@ float random_jitter(jitter_percents);
 enum class kvstore_key_type : int8_t {
     start_offset = 0,
     clean_segment = 1,
+    compaction_state = 2,
 };
 
 bytes start_offset_key(model::ntp ntp);
 bytes clean_segment_key(model::ntp ntp);
+bytes compaction_state_key(model::ntp ntp);
 
 struct clean_segment_value
   : serde::envelope<

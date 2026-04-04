@@ -273,6 +273,14 @@ public:
 
     virtual bool needs_compaction() const = 0;
 
+    /// Serialize compaction state for transfer during cross-node recovery.
+    virtual std::optional<iobuf> serialize_compaction_state() const {
+        return std::nullopt;
+    }
+
+    /// Apply storage metadata received from the leader during recovery.
+    virtual ss::future<> apply_storage_metadata(iobuf) { co_return; }
+
 private:
     ntp_config _config;
 
