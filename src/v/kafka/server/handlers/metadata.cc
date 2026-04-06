@@ -16,6 +16,7 @@
 #include "config/configuration.h"
 #include "config/node_config.h"
 #include "container/chunked_vector.h"
+#include "kafka/protocol/errors.h"
 #include "kafka/protocol/schemata/metadata_response.h"
 #include "kafka/protocol/types.h"
 #include "kafka/server/errors.h"
@@ -89,13 +90,13 @@ std::optional<cluster::leader_term> get_leader_term(
   const std::vector<model::node_id>& replicas) {
     auto leader_term = md_cache.get_leader_term(tp_ns, p_id);
     /**
-     * If current broker do not yet have any information about leadership we
-     * fallback to leader guesstimating. We return first replica from the
-     * replica without the leader epoch.
+     * If current broker does not yet have any leadership information,
+     * return nullopt. The caller will set leader_not_available so clients
+     * retry metadata, matching Kafka's behavior of never exposing a
+     * partition without a known epoch.
      */
     if (!leader_term) {
-        leader_term.emplace(replicas[0]);
-        return leader_term;
+        return std::nullopt;
     }
     if (!leader_term->leader.has_value()) {
         const auto previous = md_cache.get_previous_leader_id(tp_ns, p_id);
@@ -155,7 +156,15 @@ metadata_response::topic make_topic_response_from_topic_metadata(
         p.partition_index = p_as.id;
         p.leader_id = no_leader;
         auto lt = get_leader_term(tp_ns, p_as.id, md_cache, replicas);
-        if (lt && !is_node_isolated && p.error_code == error_code::none) {
+        if (!lt && p.error_code == error_code::none) {
+            // No leadership info available yet. Return the partition
+            // with leader_not_available so clients retry metadata.
+            // leader_id and leader_epoch remain at defaults (-1). This
+            // matches Kafka which never exposes a partition without a
+            // known epoch.
+            p.error_code = error_code::leader_not_available;
+        } else if (
+          lt && !is_node_isolated && p.error_code == error_code::none) {
             p.leader_id = lt->leader.value_or(no_leader);
             p.leader_epoch = leader_epoch_from_term(lt->term);
         }
