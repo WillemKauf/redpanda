@@ -16,6 +16,7 @@
 #include "model/record.h"
 #include "model/record_batch_types.h"
 #include "serde/rw/bool_class.h"
+#include "serde/rw/enum.h"
 #include "serde/rw/map.h"
 #include "serde/rw/rw.h"
 #include "serde/rw/uuid.h"
@@ -156,18 +157,31 @@ void transform_offset_options::serde_write(iobuf& out) const {
     serde::write(out, position);
 }
 
+std::ostream& operator<<(std::ostream& os, transform_mode m) {
+    switch (m) {
+    case transform_mode::sidecar:
+        fmt::print(os, "sidecar");
+        break;
+    case transform_mode::produce_path:
+        fmt::print(os, "produce_path");
+        break;
+    }
+    return os;
+}
+
 std::ostream& operator<<(std::ostream& os, const transform_metadata& meta) {
     fmt::print(
       os,
       "{{name: \"{}\", input: {}, outputs: {}, "
-      "env: <redacted>, uuid: {}, source_ptr: {}, is_paused: {} }}",
+      "env: <redacted>, uuid: {}, source_ptr: {}, is_paused: {}, mode: {} }}",
       meta.name,
       meta.input_topic,
       meta.output_topics,
       // skip env becuase of pii
       meta.uuid,
       meta.source_ptr,
-      meta.paused);
+      meta.paused,
+      meta.mode);
     return os;
 }
 
@@ -189,10 +203,15 @@ void transform_metadata::serde_write(iobuf& out) const {
       [this, &out](auto) { serde::write(out, offset_options); });
     serde::write(out, paused);
     serde::write(out, compression_mode);
+    serde::write(out, mode);
 }
 
 void transform_metadata::serde_read(iobuf_parser& in, const serde::header& h) {
     using serde::read_nested;
+
+    // Pre-v3 payloads lack a mode field; default to sidecar since those
+    // transforms were created before produce_path existed.
+    mode = transform_mode::sidecar;
 
     name = read_nested<decltype(name)>(in, h._bytes_left_limit);
     input_topic = read_nested<decltype(input_topic)>(in, h._bytes_left_limit);
@@ -210,6 +229,9 @@ void transform_metadata::serde_read(iobuf_parser& in, const serde::header& h) {
         paused = read_nested<decltype(paused)>(in, h._bytes_left_limit);
         compression_mode = read_nested<decltype(compression_mode)>(
           in, h._bytes_left_limit);
+    }
+    if (h._version >= 3) {
+        mode = read_nested<decltype(mode)>(in, h._bytes_left_limit);
     }
 }
 
