@@ -178,3 +178,14 @@ func (r *RWBuf) ReadAll() []byte {
 	b, _ := r.ReadSlice(r.ReaderLen())
 	return b
 }
+
+// ReadVarint reads a varint-encoded int64 using the same (signed,
+// zigzag) encoding as WriteVarint.
+func (r *RWBuf) ReadVarint() (int64, error) {
+	return binary.ReadVarint(r)
+}
+
+// Remaining reports the number of bytes available to the reader.
+func (r *RWBuf) Remaining() int {
+	return r.ReaderLen()
+}

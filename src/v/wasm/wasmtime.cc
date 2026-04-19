@@ -823,8 +823,9 @@ private:
 
             ss::future<write_success> emit(
               std::optional<model::topic_view> topic,
+              std::optional<model::partition_id> partition,
               model::transformed_data data) final {
-                return _cb(topic, std::move(data));
+                return _cb(topic, partition, std::move(data));
             }
 
             void post_record() final { _measurement = nullptr; }
@@ -1261,6 +1262,7 @@ void register_transform_module(
     REG_HOST_FN(check_abi_version_1);
     REG_HOST_FN(check_abi_version_2);
     REG_HOST_FN(check_abi_version_3);
+    REG_HOST_FN(check_abi_version_4);
     REG_HOST_FN(read_batch_header);
     REG_HOST_FN(read_next_record);
     REG_HOST_FN(read_batch_metadata);

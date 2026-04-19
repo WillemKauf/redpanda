@@ -140,10 +140,16 @@ impl<'a> From<&'a WrittenRecord<'a>> for BorrowedRecord<'a> {
 
 /// Allows you to customize a [`RecordWriter`]'s write.
 ///
-/// For example, use [`WriteOptions`] to customize the output topic to write to.
+/// For example, use [`WriteOptions`] to customize the output topic to
+/// write to, or the specific partition within that topic.
 #[derive(Default, PartialEq, Eq, Clone, Debug)]
 pub struct WriteOptions<'a> {
     pub topic: Option<&'a str>,
+    /// Optional partition id override within the output topic. When
+    /// `None`, the broker picks a partition using its normal routing.
+    /// A negative value is rejected by the broker as an invalid
+    /// partition.
+    pub partition: Option<i32>,
 }
 
 impl<'a> WriteOptions<'a> {
@@ -152,12 +158,24 @@ impl<'a> WriteOptions<'a> {
     /// If `topic` is `None`, the record will be written to the first
     /// output topic listed in the configuration.
     pub fn new(topic: Option<&'a str>) -> Self {
-        Self { topic }
+        Self {
+            topic,
+            partition: None,
+        }
     }
 
     /// Create a new options struct with the [`Record`]'s destination to `topic`.
     pub fn to_topic(topic: &'a str) -> Self {
         Self::new(Some(topic))
+    }
+
+    /// Create a new options struct targeting a specific `partition` of
+    /// the default output topic.
+    pub fn to_partition(partition: i32) -> Self {
+        Self {
+            topic: None,
+            partition: Some(partition),
+        }
     }
 }
 
@@ -194,12 +212,29 @@ impl<'a> RecordWriter<'a> {
     ) -> Result<(), WriteError> {
         self.sink.write(r.into(), opts)
     }
+
+    /// Write a record to a specific partition of the default output topic.
+    ///
+    /// Returns [`WriteError::InvalidPartition`] if the partition id is
+    /// negative; out-of-range positive ids are reported as
+    /// [`WriteError::Unknown`] by the producer path.
+    pub fn write_to<'b>(
+        &mut self,
+        r: impl Into<BorrowedRecord<'b>>,
+        partition: i32,
+    ) -> Result<(), WriteError> {
+        self.sink
+            .write(r.into(), WriteOptions::to_partition(partition))
+    }
 }
 
 /// An error that can occur when writing records to the output topic.
 #[derive(Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WriteError {
+    /// The caller specified a negative partition id in [`WriteOptions`]
+    /// or via [`RecordWriter::write_to`]. Broker error code `-4`.
+    InvalidPartition,
     /// Unknown error from the broker with the corresponding error code.
     Unknown(i32),
 }
@@ -207,6 +242,7 @@ pub enum WriteError {
 impl std::fmt::Display for WriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            WriteError::InvalidPartition => write!(f, "invalid output partition"),
             WriteError::Unknown(errno) => write!(f, "writing record failed with errno: {}", errno),
         }
     }

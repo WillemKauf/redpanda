@@ -185,6 +185,16 @@ struct write_event {
 };
 
 /**
+ * Strong typedef for a target output partition id. Constructed
+ * explicitly by the caller of record_writer::write_to.
+ */
+struct output_partition {
+    int32_t value;
+    explicit output_partition(int32_t v)
+      : value(v) {}
+};
+
+/**
  * A writer for transformed records that are output to the destination topic.
  */
 class record_writer {
@@ -200,6 +210,14 @@ public:
      * Write a record to the output topic, returning any errors.
      */
     virtual std::error_code write(record_view) = 0;
+
+    /**
+     * Write a record to a specific partition of the output topic.
+     * Returns errc::invalid_argument if the partition id is
+     * negative; an out-of-range positive id is reported by the
+     * producer path as errc::io_error.
+     */
+    virtual std::error_code write_to(record_view, output_partition) = 0;
 };
 
 /**

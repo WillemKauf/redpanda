@@ -78,7 +78,7 @@ extern "C" {
 #define WASM_IMPORT(mod, name)                                                 \
     __attribute__((import_module(#mod), import_name(#name)))
 
-WASM_IMPORT(redpanda_transform, check_abi_version_1)
+WASM_IMPORT(redpanda_transform, check_abi_version_2)
 void redpanda_transform_check();
 constexpr auto check = redpanda_transform_check;
 
@@ -108,6 +108,15 @@ constexpr auto read_next_record = redpanda_transform_read_next_record;
 WASM_IMPORT(redpanda_transform, write_record)
 int32_t redpanda_transform_write_record(uint8_t* buf, uint32_t len);
 constexpr auto write_record = redpanda_transform_write_record;
+
+WASM_IMPORT(redpanda_transform, write_record_with_options)
+int32_t redpanda_transform_write_record_with_options(
+  uint8_t* payload,
+  uint32_t payload_len,
+  uint8_t* options,
+  uint32_t options_len);
+constexpr auto write_record_with_options
+  = redpanda_transform_write_record_with_options;
 
 /**
  * Schema Registry ABI
@@ -189,6 +198,14 @@ int32_t read_next_record(
 
 int32_t write_record(const uint8_t* /*unused*/, uint32_t /*unused*/) {
     abort("write_record - stub");
+}
+
+int32_t write_record_with_options(
+  const uint8_t* /*unused*/,
+  uint32_t /*unused*/,
+  const uint8_t* /*unused*/,
+  uint32_t /*unused*/) {
+    abort("write_record_with_options - stub");
 }
 
 namespace sr {
@@ -503,8 +520,52 @@ public:
         return {};
     }
 
+    std::error_code
+    write_to(record_view record, output_partition part) final {
+        _output_buffer.clear();
+        decode::write_record(&_output_buffer, record);
+
+        // Build the options buffer. Today the broker rejects unknown
+        // keys, and we don't override the output topic here, so we
+        // emit only key 0x02 (output partition).
+        _options_buffer.clear();
+        constexpr uint8_t options_key_output_partition = 0x02;
+        _options_buffer.push_back(options_key_output_partition);
+        // Zigzag-encode the signed int32, then emit as unsigned LEB128.
+        // The broker's ffi::reader::read_varint() delegates to
+        // vint::deserialize which is zigzag-signed (see
+        // src/v/utils/vint.h: "class is actually zigzag vint; always
+        // signed ints"), so a plain unsigned LEB128 of partition=1
+        // would decode as -1 and be rejected as INVALID_PARTITION.
+        uint32_t u = (static_cast<uint32_t>(part.value) << 1U)
+                     ^ static_cast<uint32_t>(part.value >> 31);
+        constexpr uint32_t continuation_bit = 0x80;
+        constexpr uint32_t payload_mask = 0x7F;
+        while (u >= continuation_bit) {
+            _options_buffer.push_back(
+              static_cast<uint8_t>((u & payload_mask) | continuation_bit));
+            u >>= 7U;
+        }
+        _options_buffer.push_back(static_cast<uint8_t>(u));
+
+        const int32_t rc = abi::write_record_with_options(
+          _output_buffer.data(),
+          static_cast<uint32_t>(_output_buffer.size()),
+          _options_buffer.data(),
+          static_cast<uint32_t>(_options_buffer.size()));
+
+        if (rc >= 0) {
+            return {};
+        }
+        if (rc == -4) {
+            return std::make_error_code(std::errc::invalid_argument);
+        }
+        return std::make_error_code(std::errc::io_error);
+    }
+
 private:
     bytes _output_buffer;
+    bytes _options_buffer;
 };
 
 void process_batch(const on_record_written_callback& callback) {

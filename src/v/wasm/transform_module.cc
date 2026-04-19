@@ -35,23 +35,31 @@ namespace {
 constexpr int32_t NO_ACTIVE_TRANSFORM = -1;
 constexpr int32_t INVALID_BUFFER = -2;
 constexpr int32_t INVALID_WRITE = -3;
+constexpr int32_t INVALID_PARTITION = -4;
 
 struct write_options {
     std::optional<model::topic_view> topic;
+    std::optional<model::partition_id> partition;
 
     static std::optional<write_options> parse(ffi::array<uint8_t> buffer) {
         constexpr uint8_t output_topic_key = 0x01;
+        constexpr uint8_t output_partition_key = 0x02;
 
         ffi::reader r(buffer);
         write_options opts;
-        if (r.remaining_bytes() > 0) {
-            if (r.read_byte() != output_topic_key) {
+        while (r.remaining_bytes() > 0) {
+            uint8_t key = r.read_byte();
+            switch (key) {
+            case output_topic_key:
+                opts.topic = model::topic_view(r.read_sized_string_view());
+                break;
+            case output_partition_key:
+                opts.partition = model::partition_id(
+                  static_cast<int32_t>(r.read_varint()));
+                break;
+            default:
                 return std::nullopt;
             }
-            opts.topic = model::topic_view(r.read_sized_string_view());
-        }
-        if (r.remaining_bytes() > 0) {
-            return std::nullopt;
         }
         return opts;
     }
@@ -128,6 +136,14 @@ void transform_module::check_abi_version_2() {
 void transform_module::check_abi_version_3() {
     // This function does nothing at runtime, it's only an opportunity for
     // static analysis of the module to determine which ABI version to use.
+}
+
+void transform_module::check_abi_version_4() {
+    // ABI v4: adds support for output_partition_key (0x02) in the
+    // write_options buffer passed to write_record_with_options.
+    // No new host functions are introduced at this level; this is a
+    // version marker SDKs use to advertise that they understand the
+    // new TLV key.
 }
 
 ss::future<int32_t>
@@ -310,8 +326,9 @@ ss::future<int32_t> transform_module::write_record(ffi::array<uint8_t> buf) {
         co_return INVALID_BUFFER;
     }
     auto success = co_await _call_ctx->callback->emit(
-      std::nullopt, *std::move(d));
-    co_return success ? int32_t(buf.size()) : INVALID_WRITE;
+      std::nullopt, std::nullopt, *std::move(d));
+    co_return success == write_success::yes ? int32_t(buf.size())
+                                            : INVALID_WRITE;
 }
 
 // NOLINTBEGIN(bugprone-easily-swappable-parameters)
@@ -331,9 +348,17 @@ ss::future<int32_t> transform_module::write_record_with_options(
     if (!options) {
         co_return INVALID_BUFFER;
     }
+    // Reject obviously-invalid partition ids early. Out-of-range
+    // positives fall through and surface as INVALID_WRITE from the
+    // producer path, since we can't cheaply inspect the target topic's
+    // partition count from here.
+    if (options->partition && options->partition->operator()() < 0) {
+        co_return INVALID_PARTITION;
+    }
     auto success = co_await _call_ctx->callback->emit(
-      options->topic, *std::move(d));
-    co_return success ? int32_t(buf.size()) : INVALID_WRITE;
+      options->topic, options->partition, *std::move(d));
+    co_return success == write_success::yes ? int32_t(buf.size())
+                                            : INVALID_WRITE;
 }
 
 void transform_module::start() {

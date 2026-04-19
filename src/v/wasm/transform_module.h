@@ -70,8 +70,11 @@ public:
     // Called before surfacing a record to the VM.
     virtual void pre_record() = 0;
     // Called for each record output from the VM.
-    virtual ss::future<write_success>
-      emit(std::optional<model::topic_view>, model::transformed_data) = 0;
+    virtual ss::future<write_success> emit(
+      std::optional<model::topic_view>,
+      std::optional<model::partition_id>,
+      model::transformed_data)
+      = 0;
     // Called after a VM specifies it's done with a record.
     virtual void post_record() = 0;
 };
@@ -167,6 +170,8 @@ public:
 
     ss::future<int32_t>
     read_batch_metadata(int32_t key, ffi::array<uint8_t> buf);
+
+    void check_abi_version_4();
 
     // End ABI exports
 

@@ -58,24 +58,34 @@ type recordWriter struct {
 }
 
 func (w *recordWriter) Write(r Record, opts ...WriteOpt) error {
-	// Serialize the record
-	w.outbuf.Reset()
-	r.serializePayload(w.outbuf)
-	b := w.outbuf.ReadAll()
-
 	// Apply write options
 	wo := writeOpts{}
 	for _, opt := range opts {
 		opt.apply(&wo)
 	}
+	return w.writeRecord(r, wo)
+}
 
-	// Do the write
+// WriteTo writes a record to a specific partition of the default
+// output topic.
+func (w *recordWriter) WriteTo(r Record, partition int32) error {
+	return w.writeRecord(r, writeOpts{partition: partition, hasPart: true})
+}
+
+func (w *recordWriter) writeRecord(r Record, wo writeOpts) error {
+	// Serialize the record payload.
+	w.outbuf.Reset()
+	r.serializePayload(w.outbuf)
+	b := w.outbuf.ReadAll()
+
+	// Do the write.
 	var amt int32
-	if wo.topic == "" {
-		// Directly write the record to the default output topic.
+	if !wo.hasTopic && !wo.hasPart {
+		// Fast path: the record goes to the default output topic and
+		// the broker picks the partition.
 		amt = writeRecord(unsafe.Pointer(&b[0]), int32(len(b)))
 	} else {
-		// Serialize the options
+		// Serialize the options into the TLV buffer the broker expects.
 		w.optbuf.Reset()
 		wo.serialize(w.optbuf)
 		o := w.optbuf.ReadAll()
@@ -86,10 +96,13 @@ func (w *recordWriter) Write(r Record, opts ...WriteOpt) error {
 			int32(len(o)),
 		)
 	}
-	if int(amt) != len(b) {
-		return errors.New("writing record failed with errno: " + strconv.Itoa(int(amt)))
+	if int(amt) == len(b) {
+		return nil
 	}
-	return nil
+	if amt == -4 {
+		return ErrInvalidPartition
+	}
+	return errors.New("writing record failed with errno: " + strconv.Itoa(int(amt)))
 }
 
 // Cache a bunch of objects to not GC

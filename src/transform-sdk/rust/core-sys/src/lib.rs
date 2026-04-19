@@ -86,31 +86,57 @@ impl AbiRecordWriter {
     }
 }
 
+/// Unsigned LEB128 encoding of `v` appended to `buf`. The broker's
+/// `ffi::reader::read_varint()` is zigzag-signed, so callers encoding a
+/// signed int32 must zigzag-fold first before invoking this helper.
+fn write_leb128_u32(buf: &mut Vec<u8>, mut v: u32) {
+    while v >= 0x80 {
+        buf.push((v as u8) | 0x80);
+        v >>= 7;
+    }
+    buf.push(v as u8);
+}
+
 impl RecordSink for AbiRecordWriter {
     fn write(&mut self, r: BorrowedRecord, opts: WriteOptions) -> Result<(), WriteError> {
         self.output_buffer.clear();
         serde::write_record_payload(r, &mut self.output_buffer);
-        let errno_or_amt = match opts.topic {
-            Some(topic) => {
-                self.options_buffer.clear();
-                // Encode the options buffer:
+        let errno_or_amt = if opts.topic.is_some() || opts.partition.is_some() {
+            self.options_buffer.clear();
+            // TLV key 0x01: output topic (length-prefixed bytes).
+            if let Some(topic) = opts.topic {
                 self.options_buffer.push(0x01);
                 varint::write_sized_buffer(&mut self.options_buffer, Some(topic.as_bytes()));
-                unsafe {
-                    abi::write_record_with_options(
-                        self.output_buffer.as_ptr(),
-                        self.output_buffer.len() as u32,
-                        self.options_buffer.as_ptr(),
-                        self.options_buffer.len() as u32,
-                    )
-                }
             }
-            None => unsafe {
+            // TLV key 0x02: output partition. The broker's
+            // read_varint is zigzag-signed (see src/v/utils/vint.h),
+            // so we zigzag-encode the int32 partition id before
+            // emitting as unsigned LEB128. `partition >> 31` on i32
+            // is an arithmetic shift that produces 0 for non-negative
+            // values or -1 (0xFFFFFFFF) for negative values; cast to
+            // u32 that's the sign mask zigzag expects.
+            if let Some(partition) = opts.partition {
+                let z = ((partition as u32) << 1) ^ ((partition >> 31) as u32);
+                self.options_buffer.push(0x02);
+                write_leb128_u32(&mut self.options_buffer, z);
+            }
+            unsafe {
+                abi::write_record_with_options(
+                    self.output_buffer.as_ptr(),
+                    self.output_buffer.len() as u32,
+                    self.options_buffer.as_ptr(),
+                    self.options_buffer.len() as u32,
+                )
+            }
+        } else {
+            unsafe {
                 abi::write_record(self.output_buffer.as_ptr(), self.output_buffer.len() as u32)
-            },
+            }
         };
         if errno_or_amt == self.output_buffer.len() as i32 {
             Ok(())
+        } else if errno_or_amt == -4 {
+            Err(WriteError::InvalidPartition)
         } else {
             Err(WriteError::Unknown(errno_or_amt))
         }

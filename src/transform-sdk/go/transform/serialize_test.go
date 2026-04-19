@@ -88,7 +88,7 @@ func TestRecordRoundTrip(t *testing.T) {
 }
 
 func TestWriteOptionsRoundTrip(t *testing.T) {
-	original := writeOpts{topic: "foobar"}
+	original := writeOpts{topic: "foobar", hasTopic: true}
 	b := rwbuf.New(0)
 	original.serialize(b)
 	got := writeOpts{}

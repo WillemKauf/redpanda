@@ -319,7 +319,9 @@ ss::future<> processor::run_transform_loop() {
           _probe,
           [this](
             std::optional<model::topic_view> topic,
+            std::optional<model::partition_id> /*partition*/,
             model::transformed_data data) {
+              // TODO: honor partition override once producer supports it.
               if (!topic) {
                   return _default_output->queue.push({std::move(data)}, &_as)
                     .then([] { return wasm::write_success::yes; });

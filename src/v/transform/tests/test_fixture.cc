@@ -152,13 +152,15 @@ ss::future<> fake_wasm_engine::transform(
     while (it.has_next()) {
         auto transformed = model::transformed_data::from_record(it.next());
         if (!_output_topics.has_value()) {
-            auto success = co_await cb(std::nullopt, std::move(transformed));
+            auto success = co_await cb(
+              std::nullopt, std::nullopt, std::move(transformed));
             if (!success) {
                 throw std::runtime_error("transform write failed!");
             }
         } else {
             for (const auto& topic : _output_topics.value()) {
-                auto success = co_await cb(topic, transformed.copy());
+                auto success = co_await cb(
+                  topic, std::nullopt, transformed.copy());
                 if (!success) {
                     throw std::runtime_error("transform write failed!");
                 }

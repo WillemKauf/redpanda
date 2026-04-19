@@ -15,8 +15,15 @@
 package transform
 
 import (
+	"errors"
 	"time"
 )
+
+// ErrInvalidPartition is returned from RecordWriter.WriteTo (or Write
+// with ToPartition) when the broker rejects the request because the
+// caller supplied a negative partition id. It maps to the host error
+// code -4.
+var ErrInvalidPartition = errors.New("invalid output partition")
 
 // OnRecordWritten registers a callback to be fired when a record is written to the input topic.
 //
@@ -41,9 +48,14 @@ type WriteEvent interface {
 }
 
 type (
-	// writeOps is the internal struct carrying the options available for writes.
+	// writeOpts is the internal struct carrying the options available
+	// for writes. Each field is paired with a has-flag so that the
+	// zero-value of the payload is distinguishable from "unset".
 	writeOpts struct {
-		topic string
+		topic     string
+		hasTopic  bool
+		partition int32
+		hasPart   bool
 	}
 	// WriteOpt is an option to modify a Write.
 	WriteOpt interface{ apply(*writeOpts) }
@@ -60,6 +72,17 @@ func (f writeOptFunc) apply(opts *writeOpts) {
 func ToTopic(topic string) WriteOpt {
 	return writeOptFunc(func(o *writeOpts) {
 		o.topic = topic
+		o.hasTopic = true
+	})
+}
+
+// ToPartition specifies the partition of the output topic that the
+// record will be written to. A negative partition id causes the host
+// to return ErrInvalidPartition.
+func ToPartition(partition int32) WriteOpt {
+	return writeOptFunc(func(o *writeOpts) {
+		o.partition = partition
+		o.hasPart = true
 	})
 }
 
@@ -73,6 +96,11 @@ type RecordWriter interface {
 	//
 	// WriteOpts can be added to control where records go, for example to another topic.
 	Write(Record, ...WriteOpt) error
+
+	// WriteTo writes a record to a specific partition of the default
+	// output topic. Returns ErrInvalidPartition if the supplied
+	// partition id is negative.
+	WriteTo(record Record, partition int32) error
 }
 
 // Headers are optional key/value pairs that are passed along with

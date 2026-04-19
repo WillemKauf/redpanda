@@ -37,7 +37,9 @@ using write_success = ss::bool_class<struct write_success_t>;
  * be assumed.
  */
 using transform_callback = ss::noncopyable_function<ss::future<write_success>(
-  std::optional<model::topic_view>, model::transformed_data)>;
+  std::optional<model::topic_view>,
+  std::optional<model::partition_id>,
+  model::transformed_data)>;
 
 /**
  * A wasm engine is a running VM loaded with a user module and capable of

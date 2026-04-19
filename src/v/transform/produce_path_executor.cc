@@ -63,7 +63,9 @@ ss::future<execute_result> produce_path_executor::execute(
         [&input_records, &output_records, &entry](
           this auto,
           std::optional<model::topic_view> topic,
+          std::optional<model::partition_id> /*partition*/,
           model::transformed_data data) -> ss::future<wasm::write_success> {
+            // TODO: honor partition override once producer supports it.
             if (!topic) {
                 input_records.push_back(std::move(data));
                 co_return wasm::write_success::yes;

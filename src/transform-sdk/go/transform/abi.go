@@ -25,7 +25,7 @@ import (
 
 // An imported function to ensure that the broker supports this ABI version.
 //
-//go:wasmimport redpanda_transform check_abi_version_3
+//go:wasmimport redpanda_transform check_abi_version_4
 func checkAbiVersion()
 
 // readBatchMetadata reads a metadata value for the current batch.
@@ -108,9 +108,7 @@ func writeRecord(data unsafe.Pointer, length int32) int32
 // The data buffer here is the same format as `writeRecord`, but additionally it is
 // possible to pass options for the write.
 //
-// At the time of writing the options that are supported are only setting a different
-// output topic. The format for this options object is a series of keys with key specific
-// data.
+// The format for this options object is a series of keys with key specific data.
 //
 // Supported Options:
 //
@@ -118,6 +116,10 @@ func writeRecord(data unsafe.Pointer, length int32) int32
 //     The value is as follows:
 //     topicNameLength: varint
 //     topicName: byte[]
+//
+//   - key=0x02 - Set output partition (ABI v4+).
+//     The value is a varint-encoded int32. A negative value causes the
+//     host to return -4 (INVALID_PARTITION).
 //
 //go:wasmimport redpanda_transform write_record_with_options
 func writeRecordWithOptions(

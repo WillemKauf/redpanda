@@ -80,20 +80,45 @@ func (r Record) serializePayload(b *rwbuf.RWBuf) {
 	}
 }
 
-// Serialize the output topic option into an options buffer.
+// Serialize emits a TLV buffer understood by the broker:
+//
+//	0x01 <sized string>  = output topic
+//	0x02 <varint int32>  = output partition
 func (o writeOpts) serialize(b *rwbuf.RWBuf) {
-	_ = b.WriteByte(0x01)
-	b.WriteStringWithSize(o.topic)
+	if o.hasTopic {
+		_ = b.WriteByte(0x01)
+		b.WriteStringWithSize(o.topic)
+	}
+	if o.hasPart {
+		_ = b.WriteByte(0x02)
+		b.WriteVarint(int64(o.partition))
+	}
 }
 
 func (o *writeOpts) deserialize(b *rwbuf.RWBuf) error {
-	k, err := b.ReadByte()
-	if err != nil {
-		return err
+	for b.Remaining() > 0 {
+		k, err := b.ReadByte()
+		if err != nil {
+			return err
+		}
+		switch k {
+		case 0x01:
+			t, err := b.ReadSizedStringCopy()
+			if err != nil {
+				return err
+			}
+			o.topic = t
+			o.hasTopic = true
+		case 0x02:
+			v, err := b.ReadVarint()
+			if err != nil {
+				return err
+			}
+			o.partition = int32(v)
+			o.hasPart = true
+		default:
+			return errors.New("unknown options key")
+		}
 	}
-	if k != 0x01 {
-		return errors.New("unknown options key")
-	}
-	o.topic, err = b.ReadSizedStringCopy()
-	return err
+	return nil
 }
