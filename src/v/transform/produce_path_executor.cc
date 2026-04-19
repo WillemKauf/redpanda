@@ -25,6 +25,10 @@
 #include <seastar/core/chunked_fifo.hh>
 #include <seastar/coroutine/as_future.hh>
 
+#include <utility>
+
+#include "absl/container/flat_hash_map.h"
+
 namespace transform {
 
 produce_path_executor::produce_path_executor(service& svc)
@@ -51,28 +55,47 @@ ss::future<execute_result> produce_path_executor::execute(
     auto orig_header = batch->header();
 
     ss::chunked_fifo<model::transformed_data> input_records;
-    chunked_hash_map<
-      model::topic_namespace,
-      ss::chunked_fifo<model::transformed_data>>
+    // Key by (topic, partition_id_or_-1) so fan-out writes honor the
+    // partition TLV key (0x02) from write_record_with_options. We
+    // encode "no override" as -1 because that value is already a
+    // sentinel the producer path rejects (INVALID_PARTITION -4 is
+    // caught in write_record_with_options, so -1 here just means
+    // "fall back to default").
+    using fanout_key = std::pair<model::topic_namespace, int32_t>;
+    absl::flat_hash_map<fanout_key, ss::chunked_fifo<model::transformed_data>>
       output_records;
+    constexpr int32_t no_partition_override = -1;
+    (void)no_partition_override;
 
     auto transform_fut = co_await ss::coroutine::as_future(
       entry->engine->transform(
         std::move(*batch),
         entry->probe.get(),
-        [&input_records, &output_records, &entry](
+        [&input_records, &output_records, &entry, no_partition_override](
           this auto,
           std::optional<model::topic_view> topic,
-          std::optional<model::partition_id> /*partition*/,
+          std::optional<model::partition_id> partition,
           model::transformed_data data) -> ss::future<wasm::write_success> {
-            // TODO: honor partition override once producer supports it.
+            const int32_t p_key = partition ? (*partition)()
+                                            : no_partition_override;
             if (!topic) {
+                // If partition override is set AND there's an output
+                // topic configured, route to that output topic's
+                // specified partition instead of back to the input.
+                // This is the main path the partition-targeting ABI
+                // exercises when only a partition is specified (no
+                // topic override).
+                if (partition && !entry->output_topics.empty()) {
+                    const auto& out = entry->output_topics.front();
+                    output_records[{out, p_key}].push_back(std::move(data));
+                    co_return wasm::write_success::yes;
+                }
                 input_records.push_back(std::move(data));
                 co_return wasm::write_success::yes;
             }
             for (const auto& out : entry->output_topics) {
                 if (std::string_view{out.tp()} == topic.value()()) {
-                    output_records[out].push_back(std::move(data));
+                    output_records[{out, p_key}].push_back(std::move(data));
                     co_return wasm::write_success::yes;
                 }
             }
@@ -128,10 +151,11 @@ ss::future<execute_result> produce_path_executor::execute(
     // like audit logging where fan-out delivery is part of the
     // produce contract. Strict mode has to stay fan-out-first (can't
     // un-commit an input write), so we keep that ordering here.
-    for (auto& [topic_ns, recs] : output_records) {
+    for (auto& [key, recs] : output_records) {
         if (recs.empty()) {
             continue;
         }
+        const auto& [topic_ns, partition_raw] = key;
         auto fanout_batch = model::transformed_data::make_batch(
           model::timestamp::now(), std::move(recs));
         if (entry->compression_mode != model::compression::none) {
@@ -142,23 +166,26 @@ ss::future<execute_result> produce_path_executor::execute(
         ss::chunked_fifo<model::record_batch> batches;
         batches.push_back(std::move(fanout_batch));
 
-        // TODO: route fan-out writes across output partitions instead
-        // of always targeting partition 0. The sidecar path does linear
-        // probing from the input partition to find a non-disabled
-        // candidate (see compute_output_partition in api.cc). Until we
-        // replicate that logic, fan-out writes will fail if partition 0
-        // of the output topic is disabled, and all fan-out traffic from
-        // every input partition funnels into a single output partition.
+        // Honor the ABI-level partition override if set; otherwise
+        // fall back to partition 0 (same behavior as before). Out-of-
+        // range positive partition ids surface as produce errors from
+        // the rpc client, matching the semantics documented in the
+        // C++ SDK comment for write_to (INVALID_WRITE -> I/O error).
+        model::partition_id target_partition
+          = (partition_raw == no_partition_override)
+              ? model::partition_id(0)
+              : model::partition_id(partition_raw);
         auto ec = co_await _svc.rpc_client().produce(
-          model::topic_partition(topic_ns.tp, model::partition_id(0)),
+          model::topic_partition(topic_ns.tp, target_partition),
           std::move(batches));
 
         if (ec != cluster::errc::success) {
             entry->probe->fanout_error();
             vlog(
               tlog.warn,
-              "produce-path fan-out write to {} failed: {}",
+              "produce-path fan-out write to {}/{} failed: {}",
               topic_ns,
+              target_partition,
               cluster::error_category().message(int(ec)));
         }
     }
