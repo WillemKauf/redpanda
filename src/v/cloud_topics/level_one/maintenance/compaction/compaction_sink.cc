@@ -10,20 +10,15 @@
 
 #include "cloud_topics/level_one/maintenance/compaction/compaction_sink.h"
 
-#include "cloud_storage_clients/multipart_upload.h"
 #include "cloud_topics/level_one/common/object.h"
 #include "cloud_topics/level_one/maintenance/compaction/compaction_source.h"
 #include "cloud_topics/level_one/maintenance/l1_object_sink.h"
-#include "cloud_topics/level_one/maintenance/logger.h"
 #include "cloud_topics/level_one/metastore/offset_interval_set.h"
 #include "cloud_topics/level_one/metastore/retry.h"
 #include "compaction/reducer.h"
 #include "model/fundamental.h"
 #include "model/timestamp.h"
-#include "ssx/future-util.h"
 #include "utils/prefix_logger.h"
-
-#include <seastar/coroutine/as_future.hh>
 
 namespace cloud_topics::l1 {
 

@@ -9,13 +9,11 @@
 
 #pragma once
 
-#include "compaction/types.h"
 #include "model/record.h"
 
 #include <seastar/core/loop.hh>
 
 #include <memory>
-#include <ostream>
 #include <utility>
 
 namespace compaction {

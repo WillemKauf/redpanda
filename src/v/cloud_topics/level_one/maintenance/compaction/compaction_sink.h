@@ -10,16 +10,13 @@
 
 #pragma once
 
-#include "cloud_storage_clients/multipart_upload.h"
 #include "cloud_topics/level_one/common/abstract_io.h"
 #include "cloud_topics/level_one/common/object.h"
-#include "cloud_topics/level_one/common/object_id.h"
 #include "cloud_topics/level_one/maintenance/l1_object_sink.h"
 #include "cloud_topics/level_one/metastore/metastore.h"
 #include "config/property.h"
 #include "container/chunked_vector.h"
 #include "model/fundamental.h"
-#include "model/timestamp.h"
 #include "utils/prefix_logger.h"
 
 namespace cloud_topics::l1 {

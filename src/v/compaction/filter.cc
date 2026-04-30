@@ -16,8 +16,6 @@
 
 #include <seastar/core/coroutine.hh>
 
-#include <vector>
-
 namespace compaction {
 
 ss::future<ss::stop_iteration> filter::operator()(model::record_batch b) {
