@@ -17,6 +17,35 @@ redpanda_cc_library(
 )
 
 redpanda_cc_library(
+    name = "l1_object_sink",
+    srcs = [
+        "l1_object_sink.cc",
+    ],
+    hdrs = [
+        "l1_object_sink.h",
+    ],
+    visibility = [
+        "//src/v/cloud_topics/level_one:__subpackages__",
+    ],
+    deps = [
+        ":logger",
+        "//src/v/cloud_storage_clients",
+        "//src/v/cloud_topics/level_one/common:abstract_io",
+        "//src/v/cloud_topics/level_one/common:object",
+        "//src/v/cloud_topics/level_one/common:object_id",
+        "//src/v/cloud_topics/level_one/metastore",
+        "//src/v/cloud_topics/level_one/metastore:offset_interval_set",
+        "//src/v/cloud_topics/level_one/metastore:retry",
+        "//src/v/compaction:reducer",
+        "//src/v/config",
+        "//src/v/model",
+        "//src/v/ssx:future_util",
+        "//src/v/utils:prefix_logger",
+        "@seastar",
+    ],
+)
+
+redpanda_cc_library(
     name = "worker",
     srcs = [
         "worker.cc",
