@@ -54,6 +54,7 @@ redpanda_cc_library(
         "//src/v/resource_mgmt:memory_groups",
         "//src/v/ssx:future_util",
         "//src/v/ssx:work_queue",
+        "//src/v/utils:prefix_logger",
         "@seastar",
     ],
 )

@@ -23,6 +23,7 @@
 #include "model/metadata.h"
 #include "resource_mgmt/memory_groups.h"
 #include "ssx/future-util.h"
+#include "utils/prefix_logger.h"
 
 #include <seastar/coroutine/as_future.hh>
 
@@ -112,7 +113,7 @@ ss::future<> compaction_worker::work_loop() {
 
             auto work = std::move(maybe_work).value();
 
-            auto tidp = work->tidp;
+            auto ntp = work->ntp;
 
             auto compact_fut = co_await ss::coroutine::as_future(
               compact_log(work.get()));
@@ -128,7 +129,7 @@ ss::future<> compaction_worker::work_loop() {
                   log_lvl,
                   "Caught exception {} while compacting CTP {}.",
                   eptr,
-                  tidp);
+                  ntp);
             }
         }
     }
@@ -166,16 +167,17 @@ ss::future<> compaction_worker::compact_log(log_compaction_meta* log) {
     auto tidp = log->tidp;
     auto ntp = log->ntp;
 
+    auto ctxlog = prefix_logger(compaction_log, fmt::format("{}", ntp));
+
     if (!log->info_and_ts.has_value()) {
         vlog(
-          compaction_log.error,
-          "Log {} in compaction process did not have metastore information "
-          "set. Concurrency issue?",
-          tidp);
+          ctxlog.error,
+          "Log in compaction process did not have metastore information "
+          "set. Concurrency issue?");
         co_return;
     }
 
-    vlog(compaction_log.info, "Compacting CTP {}", tidp);
+    vlog(ctxlog.info, "Compacting CTP");
 
     _job_state = compaction_job_state::running;
     _inflight_ntp = ntp;
@@ -227,7 +229,8 @@ ss::future<> compaction_worker::compact_log(log_compaction_meta* log) {
       _as,
       _job_state,
       _probe,
-      _l1_reader_probe);
+      _l1_reader_probe,
+      ctxlog);
     auto sink = std::make_unique<compaction_sink>(
       tidp,
       dirty_range_intervals,
@@ -239,6 +242,7 @@ ss::future<> compaction_worker::compact_log(log_compaction_meta* log) {
       _as,
       config::shard_local_cfg().cloud_topics_compaction_max_object_size.bind(),
       _upload_part_size,
+      ctxlog,
       l1::object_builder::options{
         .indexing_interval
         = config::shard_local_cfg().cloud_topics_l1_indexing_interval(),
@@ -257,16 +261,12 @@ ss::future<> compaction_worker::compact_log(log_compaction_meta* log) {
         auto log_lvl = ssx::is_shutdown_exception(eptr) ? ss::log_level::debug
                                                         : ss::log_level::warn;
         vlogl(
-          compaction_log,
-          log_lvl,
-          "Caught exception {} while compacting CTP {}.",
-          eptr,
-          tidp);
+          ctxlog, log_lvl, "Caught exception {} while compacting CTP.", eptr);
 
         // Don't let failed compaction runs contribute to the histogram.
         m->cancel();
     } else {
-        vlog(compaction_log.info, "Finished compacting CTP {}", tidp);
+        vlog(ctxlog.info, "Finished compacting CTP");
     }
 
     _job_state = compaction_job_state::idle;

@@ -20,6 +20,7 @@
 #include "model/fundamental.h"
 #include "model/timestamp.h"
 #include "ssx/future-util.h"
+#include "utils/prefix_logger.h"
 
 #include <seastar/coroutine/as_future.hh>
 
@@ -82,6 +83,7 @@ compaction_sink::compaction_sink(
   ss::abort_source& as,
   config::binding<size_t> max_object_size,
   size_t upload_part_size,
+  prefix_logger& ctxlog,
   object_builder::options opts)
   : _max_object_size(std::move(max_object_size))
   , _upload_part_size(upload_part_size)
@@ -93,6 +95,7 @@ compaction_sink::compaction_sink(
   , _io(io)
   , _metastore(metastore)
   , _as(as)
+  , _ctxlog(ctxlog)
   , _opts(opts) {}
 
 ss::future<bool>
@@ -111,13 +114,11 @@ compaction_sink::initialize(compaction::sliding_window_reducer::source& src) {
       = co_await l1::retry_metastore_op_with_default_rtc(
         [this]() { return _metastore->object_builder(); }, _as);
     if (!metadata_builder_res.has_value()) {
-        vlog(
-          compaction_log.warn,
-          "Could not create object metadata builder for compaction of tidp {}: "
-          "{}. Aborting.",
-          _tp,
+        auto msg = fmt::format(
+          "Could not create object metadata builder: {}. Aborting operation",
           metadata_builder_res.error());
-        throw std::runtime_error("Couldn't begin compaction");
+        vlog(_ctxlog.warn, "{}", msg);
+        throw std::runtime_error(msg);
     }
     _metadata_builder = std::move(metadata_builder_res).value();
 
@@ -126,8 +127,8 @@ compaction_sink::initialize(compaction::sliding_window_reducer::source& src) {
     _new_cleaned_ranges = std::move(new_cleaned_ranges);
 
     vlog(
-      compaction_log.debug,
-      "Built compaction map for tidp {} with {} keys (max allowed {})",
+      _ctxlog.debug,
+      "Built compaction map with {} keys (max allowed {})",
       _tp,
       ct_src._map->size(),
       ct_src._map->capacity());
@@ -139,12 +140,9 @@ ss::future<>
 compaction_sink::initialize_builder(kafka::offset object_base_offset) {
     auto oid_res = co_await _metadata_builder->create_object_for(_tp);
     if (!oid_res.has_value()) {
-        vlog(
-          compaction_log.warn,
-          "Failed to create object for tidp {}: {}",
-          _tp,
-          oid_res.error());
-        throw std::runtime_error("Failed to create object for compaction");
+        auto msg = fmt::format("Failed to create object: {}", oid_res.error());
+        vlog(_ctxlog.warn, "{}", msg);
+        throw std::runtime_error(msg);
     }
     auto oid = std::move(oid_res).value();
 
@@ -153,14 +151,12 @@ compaction_sink::initialize_builder(kafka::offset object_base_offset) {
 
     if (!upload_res.has_value()) {
         std::ignore = _metadata_builder->remove_pending_object(oid);
-        vlog(
-          compaction_log.warn,
-          "Failed to create multipart upload for object {}, tidp {}: {}",
+        auto msg = fmt::format(
+          "Failed to create multipart upload for object {}: {}",
           oid,
-          _tp,
           static_cast<int>(upload_res.error()));
-        throw std::runtime_error(
-          "Failed to create multipart upload for compaction");
+        vlog(_ctxlog.warn, "{}", msg);
+        throw std::runtime_error(msg);
     }
 
     auto upload = std::move(upload_res).value();
@@ -199,7 +195,7 @@ ss::future<> compaction_sink::flush(kafka::offset object_last_offset) {
     if (object_info_fut.failed()) {
         auto e = object_info_fut.get_exception();
         vlogl(
-          compaction_log,
+          _ctxlog,
           ssx::is_shutdown_exception(e) ? ss::log_level::debug
                                         : ss::log_level::warn,
           "Exception creating object_info: {}.",
@@ -213,7 +209,7 @@ ss::future<> compaction_sink::flush(kafka::offset object_last_offset) {
     if (close_fut.failed()) {
         auto e = close_fut.get_exception();
         vlogl(
-          compaction_log,
+          _ctxlog,
           ssx::is_shutdown_exception(e) ? ss::log_level::debug
                                         : ss::log_level::warn,
           "Exception closing object builder: {}.",
@@ -230,12 +226,11 @@ ss::future<> compaction_sink::flush(kafka::offset object_last_offset) {
     auto object_info = object_info_fut.get();
 
     vlog(
-      compaction_log.trace,
-      "Completed multipart upload for object {} ({}~{}) for tidp {}",
+      _ctxlog.trace,
+      "Completed multipart upload for object {} ({}~{})",
       oid,
       object_base_offset,
-      object_last_offset,
-      _tp);
+      object_last_offset);
 
     auto [first, last] = object_info.index.partitions.equal_range(_tp);
     vassert(
@@ -259,7 +254,7 @@ ss::future<> compaction_sink::flush(kafka::offset object_last_offset) {
     auto add_res = _metadata_builder->add(oid, std::move(ntp_md));
     if (!add_res.has_value()) {
         vlog(
-          compaction_log.warn,
+          _ctxlog.warn,
           "Failed to add object {} to metadata builder: {}",
           oid,
           add_res.error());
@@ -272,7 +267,7 @@ ss::future<> compaction_sink::flush(kafka::offset object_last_offset) {
       oid, object_info.footer_offset, object_info.size_bytes);
     if (!finish_res.has_value()) {
         vlog(
-          compaction_log.warn,
+          _ctxlog.warn,
           "Failed to finish object {} in metadata builder: {}",
           oid,
           finish_res.error());
@@ -346,16 +341,9 @@ ss::future<> compaction_sink::compact_objects_without_update() {
     auto replace_res = co_await do_compact_objects(std::move(compact_map));
     if (replace_res.has_value()) {
         vlog(
-          compaction_log.info,
-          "Finalized compaction of tidp {} without a compaction metadata "
-          "update",
-          _tp);
+          _ctxlog.info, "Finalized job without a compaction metadata update");
     } else {
-        vlog(
-          compaction_log.warn,
-          "Could not commit object update during compaction of tidp {}: {}.",
-          _tp,
-          replace_res.error());
+        vlog(_ctxlog.warn, "Could not finalize job: {}.", replace_res.error());
     }
 }
 
@@ -376,17 +364,15 @@ ss::future<> compaction_sink::compact_objects_with_update(
 
     if (commit_res.has_value()) {
         vlog(
-          compaction_log.info,
-          "Finalized compaction of tidp {} with compaction metadata update {}",
-          _tp,
+          _ctxlog.info,
+          "Finalized job with compaction metadata update: {}",
           compaction_update_str);
     } else {
         vlog(
-          compaction_log.warn,
-          "Could not commit metadata update {} for compaction of tidp {}: {}. "
+          _ctxlog.warn,
+          "Could not finalize job with compaction metadata update {}: {}. "
           "Retrying object update without metadata.",
           compaction_update_str,
-          _tp,
           commit_res.error());
         co_return co_await compact_objects_without_update();
     }
@@ -431,9 +417,8 @@ ss::future<> compaction_sink::finalize(bool success) {
 
     if (_metadata_builder->is_empty()) {
         vlog(
-          compaction_log.debug,
-          "No built or uploaded objects for tidp {}.",
-          _tp);
+          _ctxlog.debug,
+          "Finalized job without any built or uploaded objects.");
         co_return;
     }
 

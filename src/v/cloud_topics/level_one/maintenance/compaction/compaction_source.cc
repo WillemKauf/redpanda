@@ -23,6 +23,7 @@
 #include "model/fundamental.h"
 #include "model/record_batch_reader.h"
 #include "model/timeout_clock.h"
+#include "utils/prefix_logger.h"
 
 namespace cloud_topics::l1 {
 
@@ -138,7 +139,8 @@ compaction_source::compaction_source(
   ss::abort_source& as,
   compaction_job_state& state,
   compaction_worker_probe& probe,
-  level_one_reader_probe* level_one_reader_probe)
+  level_one_reader_probe* level_one_reader_probe,
+  prefix_logger& ctxlog)
   : _ntp(std::move(ntp))
   , _tp(tp)
   , _dirty_range_intervals(dirty_range_intervals)
@@ -161,7 +163,8 @@ compaction_source::compaction_source(
   , _as(as)
   , _state(state)
   , _probe(probe)
-  , _l1_reader_probe(level_one_reader_probe) {}
+  , _l1_reader_probe(level_one_reader_probe)
+  , _ctxlog(ctxlog) {}
 
 ss::future<> compaction_source::initialize() { co_return; }
 
@@ -193,7 +196,7 @@ ss::future<ss::stop_iteration> compaction_source::map_building_iteration() {
         auto& extent_res = extent_res_opt->get();
         if (!extent_res.has_value()) {
             vlog(
-              compaction_log.warn,
+              _ctxlog.warn,
               "Error fetching extent metadata during map building iteration: "
               "{}",
               extent_res.error());
@@ -258,7 +261,7 @@ ss::future<ss::stop_iteration> compaction_source::deduplication_iteration(
     if (!extent_res.has_value()) {
         // We received an error from the metastore.
         vlog(
-          compaction_log.warn,
+          _ctxlog.warn,
           "Error fetching extent metadata during deduplication iteration: {}",
           extent_res.error());
         co_return ss::stop_iteration::yes;
@@ -288,19 +291,17 @@ ss::future<ss::stop_iteration> compaction_source::deduplication_iteration(
         co_await sink.finish_iteration(start_offset, last_offset);
         if (stats.has_removed_data()) {
             vlog(
-              compaction_log.info,
-              "L1 compaction removing data from CTP {}, offset range ({}~{}), "
-              "stats: {}",
-              _ntp,
+              _ctxlog.info,
+              "L1 compaction removing data from offset range ({}~{}), stats: "
+              "{}",
               start_offset,
               last_offset,
               stats);
         } else {
             vlog(
-              compaction_log.debug,
-              "L1 compaction not removing data from CTP {}, offset range "
-              "({}~{}), stats: {}",
-              _ntp,
+              _ctxlog.debug,
+              "L1 compaction not removing data from offset range ({}~{}), "
+              "stats: {}",
               start_offset,
               last_offset,
               stats);

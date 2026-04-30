@@ -21,6 +21,7 @@
 #include "container/chunked_vector.h"
 #include "model/fundamental.h"
 #include "model/timestamp.h"
+#include "utils/prefix_logger.h"
 
 namespace cloud_topics::l1 {
 
@@ -35,8 +36,9 @@ public:
       l1::io*,
       l1::metastore*,
       ss::abort_source&,
-      config::binding<size_t> max_object_size,
-      size_t upload_part_size,
+      config::binding<size_t>,
+      size_t,
+      prefix_logger&,
       object_builder::options = {});
 
     ss::future<bool>
@@ -111,6 +113,8 @@ private:
     io* _io;
     metastore* _metastore;
     ss::abort_source& _as;
+
+    prefix_logger& _ctxlog;
 
     const object_builder::options _opts;
 

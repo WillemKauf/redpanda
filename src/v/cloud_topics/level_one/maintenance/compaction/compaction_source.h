@@ -20,6 +20,7 @@
 #include "cloud_topics/level_one/metastore/offset_interval_set.h"
 #include "compaction/key_offset_map.h"
 #include "compaction/reducer.h"
+#include "utils/prefix_logger.h"
 
 namespace cloud_topics::l1 {
 
@@ -41,7 +42,8 @@ public:
       ss::abort_source&,
       compaction_job_state&,
       compaction_worker_probe&,
-      level_one_reader_probe*);
+      level_one_reader_probe*,
+      prefix_logger&);
     ss::future<> initialize() final;
     ss::future<ss::stop_iteration> map_building_iteration() final;
     ss::future<ss::stop_iteration>
@@ -102,6 +104,7 @@ private:
     compaction_job_state& _state;
     compaction_worker_probe& _probe;
     level_one_reader_probe* _l1_reader_probe;
+    prefix_logger& _ctxlog;
 
     // Dirty ranges returned by the `metastore` that were indexed during
     // `map_deduplication_iteration`.

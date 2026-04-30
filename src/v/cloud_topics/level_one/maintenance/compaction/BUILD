@@ -63,6 +63,7 @@ redpanda_cc_library(
         "//src/v/model",
         "//src/v/model:batch_compression",
         "//src/v/ssx:future_util",
+        "//src/v/utils:prefix_logger",
         "@seastar",
     ],
 )

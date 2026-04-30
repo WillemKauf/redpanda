@@ -18,6 +18,7 @@
 #include "cloud_topics/level_one/maintenance/compaction/compaction_source.h"
 #include "cloud_topics/level_one/maintenance/compaction/tests/in_memory_sink.h"
 #include "cloud_topics/level_one/maintenance/compaction/tests/throwing_compaction_sink.h"
+#include "cloud_topics/level_one/maintenance/logger.h"
 #include "cloud_topics/level_one/maintenance/meta.h"
 #include "cloud_topics/level_one/maintenance/worker_probe.h"
 #include "cloud_topics/level_one/metastore/metastore.h"
@@ -36,6 +37,7 @@
 #include "model/tests/random_batch.h"
 #include "model/timestamp.h"
 #include "storage/tests/batch_generators.h"
+#include "utils/prefix_logger.h"
 
 #include <seastar/util/defer.hh>
 
@@ -49,6 +51,8 @@ using namespace cloud_topics;
 using namespace std::chrono_literals;
 
 namespace {
+
+static prefix_logger logger(l1::compaction_log, "reducer_test");
 
 using latest_kv_map_t
   = absl::btree_map<ss::sstring, std::optional<ss::sstring>>;
@@ -116,7 +120,8 @@ ss::future<> do_compact(
       as,
       state,
       probe,
-      nullptr);
+      nullptr,
+      logger);
     auto sink = std::make_unique<l1::compaction_sink>(
       tidp,
       dirty_range_intervals,
@@ -127,7 +132,8 @@ ss::future<> do_compact(
       metastore,
       as,
       config::mock_binding<size_t>(128_MiB),
-      16_MiB);
+      16_MiB,
+      logger);
     auto reducer = compaction::sliding_window_reducer(
       std::move(src), std::move(sink));
 
@@ -165,7 +171,8 @@ ss::future<> do_compact_with_throwing_sink(
       as,
       state,
       probe,
-      nullptr);
+      nullptr,
+      logger);
     // Use a very large max_object_size to disable size-based rolls; the
     // throwing_compaction_sink's should_roll predicate controls rolling.
     auto inner_sink = std::make_unique<l1::compaction_sink>(
@@ -178,7 +185,8 @@ ss::future<> do_compact_with_throwing_sink(
       metastore,
       as,
       config::mock_binding<size_t>(128_MiB),
-      16_MiB);
+      16_MiB,
+      logger);
     auto sink = std::make_unique<l1::throwing_compaction_sink>(
       std::move(inner_sink), std::move(should_roll), std::move(should_throw));
     auto reducer = compaction::sliding_window_reducer(
