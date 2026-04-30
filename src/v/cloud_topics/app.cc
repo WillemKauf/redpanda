@@ -14,7 +14,7 @@
 #include "cloud_topics/data_plane_api.h"
 #include "cloud_topics/data_plane_impl.h"
 #include "cloud_topics/housekeeper/manager.h"
-#include "cloud_topics/level_one/compaction/scheduler.h"
+#include "cloud_topics/level_one/maintenance/scheduler.h"
 #include "cloud_topics/level_one/metastore/flush_loop.h"
 #include "cloud_topics/level_one/metastore/topic_purger.h"
 #include "cloud_topics/level_zero/gc/level_zero_gc.h"
