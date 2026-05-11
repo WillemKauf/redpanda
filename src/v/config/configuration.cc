@@ -4723,7 +4723,8 @@ configuration::configuration()
       "With the default target fill ratio of 0.8, this gives an effective "
       "target object size of 64 MiB.",
       {.needs_restart = needs_restart::no, .visibility = visibility::tunable},
-      80_MiB)
+      80_MiB,
+      {.min = size_t{1}})
   , cloud_topics_upload_part_size(
       *this,
       "cloud_topics_upload_part_size",
@@ -4774,6 +4775,21 @@ configuration::configuration()
       "How often to trigger background compaction for cloud topics.",
       {.needs_restart = needs_restart::no, .visibility = visibility::tunable},
       30s)
+  , cloud_topics_leveling_object_size_threshold(
+      *this,
+      "cloud_topics_leveling_object_size_threshold",
+      "An L1 object smaller than this fraction of "
+      "cloud_topics_reconciliation_max_object_size is considered "
+      "undersized and eligible for leveling. Valid values are (0.0, 1.0].",
+      {.needs_restart = needs_restart::no, .visibility = visibility::tunable},
+      0.5,
+      validate_0_to_1_ratio)
+  , cloud_topics_leveling_interval_ms(
+      *this,
+      "cloud_topics_leveling_interval_ms",
+      "How often to trigger background leveling for cloud topics.",
+      {.needs_restart = needs_restart::no, .visibility = visibility::tunable},
+      30min)
   , cloud_topics_compaction_key_map_memory(
       *this,
       "cloud_topics_compaction_key_map_memory",

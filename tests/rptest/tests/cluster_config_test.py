@@ -841,6 +841,7 @@ class ClusterConfigTest(RedpandaTest, ClusterConfigHelpersMixin):
                 valid_value = 10000
 
             if name in (
+                "cloud_topics_leveling_object_size_threshold",
                 "cloud_topics_reconciliation_target_fill_ratio",
                 "cloud_topics_reconciliation_speedup_blend",
                 "cloud_topics_reconciliation_slowdown_blend",
