@@ -78,8 +78,36 @@ TEST_F(LogInfoCollectorTestFixture, TestInfoCollector) {
     while (!cached_metadata.empty()) {
         auto sample = cached_metadata.top();
         cached_metadata.pop();
-        ASSERT_TRUE(sample->info_and_ts.has_value());
-        ASSERT_FLOAT_EQ(sample->info_and_ts->info.dirty_ratio, 1.0);
-        ASSERT_TRUE(sample->info_and_ts->info.earliest_dirty_ts.has_value());
+        ASSERT_TRUE(sample->compaction_info_and_ts.has_value());
+        ASSERT_FLOAT_EQ(sample->compaction_info_and_ts->info.dirty_ratio, 1.0);
+        ASSERT_TRUE(
+          sample->compaction_info_and_ts->info.earliest_dirty_ts.has_value());
     }
+}
+
+TEST_F(LogInfoCollectorTestFixture, TestSampleLevelingInfo) {
+    auto cfg_provider = std::make_unique<fake_cfg_provider>();
+    auto offset_provider = std::make_unique<fake_offset_provider>();
+    l1::log_info_collector log_info_collector(
+      &_metastore, std::move(cfg_provider), std::move(offset_provider));
+
+    auto [ntp, tidp] = make_ntidp("leveling_topic");
+    auto log_ptr = ss::make_lw_shared<l1::log_compaction_meta>(tidp, ntp);
+
+    // Seed the metastore with a small object. With the default config
+    // (max_object_size=80MiB, threshold=0.5 => min_acceptable=40MiB), any
+    // object smaller than 40MiB is undersized, so levelable_bytes will be > 0.
+    std::vector<tidp_batches_t> tidp_batches;
+    auto batches = model::test::make_random_batches(model::offset{0}, 10).get();
+    tidp_batches.emplace_back(tidp, std::move(batches));
+    make_l1_objects(std::move(tidp_batches)).get();
+
+    chunked_vector<l1::log_compaction_meta_ptr> logs;
+    logs.push_back(log_ptr);
+
+    log_info_collector.sample_leveling_info(std::move(logs)).get();
+
+    ASSERT_TRUE(log_ptr->leveling_info_and_ts.has_value());
+    ASSERT_GT(log_ptr->leveling_info_and_ts->info.levelable_bytes, 0u);
+    ASSERT_FALSE(log_ptr->leveling_info_and_ts->info.leveling_ranges.empty());
 }
