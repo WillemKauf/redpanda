@@ -59,7 +59,8 @@ public:
       ss::sharded<ss::abort_source>&,
       ss::sharded<cluster_recovery_table>&,
       ss::sharded<health_monitor_backend>& hm_backend,
-      ss::sharded<health_monitor_frontend>& hm_frontend);
+      ss::sharded<health_monitor_frontend>& hm_frontend,
+      ss::sharded<controller_stm>& stm);
 
     // Preload early in startup, from bootstrap file or config cache
     static ss::future<preload_result> preload(const YAML::Node&);
@@ -148,7 +149,7 @@ private:
     ss::sharded<ss::abort_source>& _as;
     ss::sharded<cluster_recovery_table>& _recovery_table;
     ss::sharded<health_monitor_backend>& _hm_backend;
-    [[maybe_unused]] ss::sharded<health_monitor_frontend>& _hm_frontend;
+    ss::sharded<health_monitor_frontend>& _hm_frontend;
     notification_id_type _health_notify_handle{};
     bool _am_controller_leader{false};
     ss::condition_variable _activation_wait;
@@ -159,7 +160,13 @@ private:
       absl::flat_hash_map<ss::sstring, ss::sstring>>
       _node_clustered_values;
 
+    ss::sharded<controller_stm>& _controller_stm;
+
     ss::gate _gate;
+
+    ss::future<> maybe_activate_clustered_properties();
+    ss::future<> replicate_activate_cmd(
+      ss::sstring property_name, ss::sstring serialized_value);
 };
 
 } // namespace cluster

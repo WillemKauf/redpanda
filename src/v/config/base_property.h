@@ -281,6 +281,14 @@ public:
 
     virtual bool is_clustered() const noexcept { return false; }
 
+    /// Returns true if there is no staged update pending cluster-wide
+    /// convergence. Always true for non-clustered properties.
+    virtual bool is_active() const noexcept { return true; }
+
+    /// Returns the staged value serialized as a YAML string, or an empty
+    /// string if there is no staged update. Always empty for non-clustered.
+    virtual ss::sstring staged_yaml_string() const { return {}; }
+
     /// Serialize the property's node-local active value as YAML. Used by the
     /// per-node health report to communicate the local_active value of every
     /// clustered property. Default is empty (only meaningful for clustered).

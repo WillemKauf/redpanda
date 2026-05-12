@@ -69,7 +69,14 @@ public:
     }
 
     /// True iff there is no staged update pending convergence.
-    bool is_active() const noexcept { return _is_active; }
+    bool is_active() const noexcept override { return _is_active; }
+
+    ss::sstring staged_yaml_string() const override {
+        if (!_staged.has_value()) {
+            return {};
+        }
+        return ss::sstring{YAML::Dump(YAML::Node{*_staged})};
+    }
 
     const std::optional<T>& staged() const noexcept { return _staged; }
 

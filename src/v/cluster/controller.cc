@@ -339,7 +339,8 @@ ss::future<> controller::start(
       std::ref(_as),
       std::ref(_recovery_table),
       std::ref(_hm_backend),
-      std::ref(_hm_frontend));
+      std::ref(_hm_frontend),
+      std::ref(_stm));
 
     if (auto bucket_opt = get_configured_bucket(); bucket_opt.has_value()) {
         co_await _topic_mount_handler.start(

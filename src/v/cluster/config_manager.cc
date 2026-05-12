@@ -16,8 +16,11 @@
 #include "cluster/config_frontend.h"
 #include "cluster/controller_service.h"
 #include "cluster/controller_snapshot.h"
+#include "cluster/controller_stm.h"
+#include "cluster/controller_utils.h"
 #include "cluster/errc.h"
 #include "cluster/health_monitor_backend.h"
+#include "cluster/health_monitor_frontend.h"
 #include "cluster/health_monitor_types.h"
 #include "cluster/logger.h"
 #include "cluster/members_table.h"
@@ -63,7 +66,8 @@ config_manager::config_manager(
   ss::sharded<ss::abort_source>& as,
   ss::sharded<cluster_recovery_table>& rt,
   ss::sharded<health_monitor_backend>& hm_backend,
-  ss::sharded<health_monitor_frontend>& hm_frontend)
+  ss::sharded<health_monitor_frontend>& hm_frontend,
+  ss::sharded<controller_stm>& stm)
   : _self(*config::node().node_id())
   , _frontend(cf)
   , _connection_cache(cc)
@@ -72,7 +76,8 @@ config_manager::config_manager(
   , _as(as)
   , _recovery_table(rt)
   , _hm_backend(hm_backend)
-  , _hm_frontend(hm_frontend) {
+  , _hm_frontend(hm_frontend)
+  , _controller_stm(stm) {
     if (ss::this_shard_id() == controller_stm_shard) {
         // Only the controller stm shard handles updates: leave these
         // members in default initialized state on other shards.
@@ -288,6 +293,16 @@ ss::future<> config_manager::start_health_callbacks() {
               _activation_wait.signal();
           }
       });
+
+    ssx::background = ssx::spawn_with_gate_then(_gate, [this] {
+                          return ss::do_until(
+                            [this] { return _as.local().abort_requested(); },
+                            [this] {
+                                return maybe_activate_clustered_properties();
+                            });
+                      }).handle_exception([](const std::exception_ptr& e) {
+        vlog(clusterlog.warn, "Config activation loop exception: {}", e);
+    });
 }
 void config_manager::handle_cluster_members_update(
   model::node_id id, model::membership_state new_state) {
@@ -1149,6 +1164,97 @@ config_manager::apply_snapshot(model::offset, const controller_snapshot& snap) {
     // all pending values immediately so needs_restart properties take
     // effect (e.g. during cluster recovery).
     co_await promote_all_pending();
+}
+
+ss::future<> config_manager::maybe_activate_clustered_properties() {
+    try {
+        co_await _activation_wait.wait();
+    } catch (const ss::broken_condition_variable&) {
+        co_return;
+    }
+    if (!_am_controller_leader) {
+        co_return;
+    }
+
+    auto& cfg = config::shard_local_cfg();
+    std::vector<std::pair<ss::sstring, ss::sstring>> to_activate;
+    bool defer = false;
+
+    cfg.for_each([&, this](const config::base_property& p) {
+        if (defer) {
+            return;
+        }
+        if (!p.is_clustered()) {
+            return;
+        }
+        if (p.is_active()) {
+            return;
+        }
+        auto staged_str = p.staged_yaml_string();
+        if (staged_str.empty()) {
+            return;
+        }
+
+        for (const auto& node_id : _members.local().node_ids()) {
+            auto it = _node_clustered_values.find(node_id);
+            if (it == _node_clustered_values.end()) {
+                vlog(
+                  clusterlog.debug,
+                  "Defer activate {}: node {} state unknown",
+                  p.name(),
+                  node_id);
+                defer = true;
+                return;
+            }
+            auto is_alive_opt = _hm_frontend.local().is_alive(node_id);
+            if (!is_alive_opt.has_value() || *is_alive_opt == alive::no) {
+                throw std::runtime_error(
+                  fmt::format(
+                    "Can't activate {} because node {} is not alive",
+                    p.name(),
+                    node_id));
+            }
+            auto v_it = it->second.find(ss::sstring{p.name()});
+            if (v_it == it->second.end() || v_it->second != staged_str) {
+                vlog(
+                  clusterlog.debug,
+                  "Defer activate {}: node {} value mismatch",
+                  p.name(),
+                  node_id);
+                defer = true;
+                return;
+            }
+        }
+        to_activate.emplace_back(ss::sstring{p.name()}, std::move(staged_str));
+    });
+
+    if (defer) {
+        co_return;
+    }
+
+    for (auto& [name, value] : to_activate) {
+        co_await replicate_activate_cmd(std::move(name), std::move(value));
+    }
+}
+
+ss::future<> config_manager::replicate_activate_cmd(
+  ss::sstring property_name, ss::sstring serialized_value) {
+    auto pname_copy = property_name;
+    cluster_config_activate_cmd_data data{
+      .property_name = std::move(property_name),
+      .value = std::move(serialized_value)};
+    cluster_config_activate_cmd cmd{0, std::move(data)};
+
+    auto timeout = model::timeout_clock::now() + std::chrono::seconds(5);
+    auto ec = co_await replicate_and_wait(
+      _controller_stm, _as, std::move(cmd), timeout);
+    if (ec) {
+        vlog(
+          clusterlog.warn,
+          "Failed to replicate config_activate_cmd for {}: {}",
+          pname_copy,
+          ec.message());
+    }
 }
 
 } // namespace cluster
