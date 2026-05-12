@@ -1907,7 +1907,7 @@ void config_multi_property_validation(
         }
     }
 
-    if (updated_config.cloud_storage_enabled()) {
+    if (updated_config.cloud_storage_enabled.local_value()) {
         // The properties that cloud_storage::configuration requires
         // to be set if cloud storage is enabled.
         using config_properties_seq = std::vector<std::reference_wrapper<

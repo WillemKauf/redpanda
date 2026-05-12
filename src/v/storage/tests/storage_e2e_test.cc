@@ -3823,7 +3823,7 @@ TEST_F(storage_test_fixture, test_bytes_eviction_overrides) {
         SUCCEED() << fmt::format("Running case {}", i++);
         auto cfg = default_log_config(test_dir);
         // enable cloud storage
-        config::shard_local_cfg().cloud_storage_enabled.set_value(
+        config::shard_local_cfg().cloud_storage_enabled.set_value_and_activate(
           tc.cloud_storage);
 
         cfg.max_segment_size = config::mock_binding<size_t>(

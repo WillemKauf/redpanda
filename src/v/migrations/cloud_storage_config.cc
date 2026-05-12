@@ -35,7 +35,7 @@ ss::future<> cloud_storage_config::do_mutate() {
         auto& props = topic_conf.properties;
 
         auto cloud_storage_enabled
-          = config::shard_local_cfg().cloud_storage_enabled();
+          = config::shard_local_cfg().cloud_storage_enabled.local_value();
 
         auto remote_write_enabled
           = model::is_archival_enabled(props.shadow_indexing.value_or(

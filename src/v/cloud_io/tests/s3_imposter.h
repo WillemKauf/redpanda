@@ -156,7 +156,8 @@ public:
     enable_cloud_storage_fixture();
 
     ~enable_cloud_storage_fixture() {
-        config::shard_local_cfg().cloud_storage_enabled.set_value(false);
+        config::shard_local_cfg().cloud_storage_enabled.set_value_and_activate(
+          false);
     }
 };
 

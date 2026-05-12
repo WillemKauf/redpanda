@@ -570,7 +570,8 @@ struct storage_mode_config_validator {
         case model::redpanda_storage_mode::local:
             return true;
         case model::redpanda_storage_mode::tiered:
-            return config::shard_local_cfg().cloud_storage_enabled();
+            return config::shard_local_cfg()
+              .cloud_storage_enabled.local_value();
         case model::redpanda_storage_mode::cloud:
             if (
               ft == nullptr

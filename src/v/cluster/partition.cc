@@ -64,7 +64,7 @@ partition::partition(
   , _log_cleanup_policy(config::shard_local_cfg().log_cleanup_policy.bind()) {
     // Construct cloud_storage read path (remote_partition)
     if (
-      config::shard_local_cfg().cloud_storage_enabled()
+      config::shard_local_cfg().cloud_storage_enabled.local_value()
       && _cloud_storage_api.local_is_initialized()
       && _raft->ntp().ns == model::kafka_namespace) {
         if (_cloud_storage_cache.local_is_initialized()) {
@@ -162,7 +162,7 @@ ss::future<std::vector<tx::tx_range>> partition::aborted_transactions_cloud(
 }
 
 cluster::cloud_storage_mode partition::get_cloud_storage_mode() const {
-    if (!config::shard_local_cfg().cloud_storage_enabled()) {
+    if (!config::shard_local_cfg().cloud_storage_enabled.local_value()) {
         return cluster::cloud_storage_mode::disabled;
     }
 
@@ -776,7 +776,7 @@ bool partition::should_construct_archiver() {
     // in the case of read replicas -- we still need the archiver to drive
     // manifest updates, etc.
     const auto& ntp_config = _raft->log()->config();
-    return config::shard_local_cfg().cloud_storage_enabled()
+    return config::shard_local_cfg().cloud_storage_enabled.local_value()
            && config::shard_local_cfg().cloud_storage_disable_archiver_manager()
            && _cloud_storage_api.local_is_initialized()
            // The archiver can only be created for partitions that belong to
@@ -1219,7 +1219,7 @@ ss::future<>
 partition::unsafe_reset_remote_partition_manifest_from_json(iobuf json_buf) {
     vlog(clusterlog.info, "[{}] Manual unsafe manifest reset requested", ntp());
 
-    if (!(config::shard_local_cfg().cloud_storage_enabled()
+    if (!(config::shard_local_cfg().cloud_storage_enabled.local_value()
           && _archival_meta_stm)) {
         vlog(
           clusterlog.warn,
@@ -1253,7 +1253,7 @@ partition::unsafe_reset_remote_partition_manifest_from_cloud(bool force) {
 
     _as.check();
 
-    if (!(config::shard_local_cfg().cloud_storage_enabled()
+    if (!(config::shard_local_cfg().cloud_storage_enabled.local_value()
           && _archival_meta_stm)) {
         vlog(
           clusterlog.warn,

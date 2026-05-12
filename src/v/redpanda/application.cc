@@ -906,7 +906,7 @@ bool application::requires_cloud_io() {
 
 bool application::archival_storage_enabled() {
     const auto& cfg = config::shard_local_cfg();
-    return cfg.cloud_storage_enabled();
+    return cfg.cloud_storage_enabled.local_value();
 }
 
 bool application::wasm_data_transforms_enabled() {

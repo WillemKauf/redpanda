@@ -13,6 +13,7 @@
 
 #include "config/bounded_property.h"
 #include "config/broker_endpoint.h"
+#include "config/clustered_property.h"
 #include "config/config_store.h"
 #include "config/convert.h"
 #include "config/data_directory_path.h"
@@ -373,7 +374,7 @@ struct configuration final : public config_store {
     property<bool> audit_use_rpc;
 
     // Archival storage
-    enterprise<property<bool>> cloud_storage_enabled;
+    enterprise<clustered_property<bool>> cloud_storage_enabled;
     property<bool> cloud_storage_enable_remote_read;
     property<bool> cloud_storage_enable_remote_write;
     enum_property<model::redpanda_storage_mode> default_redpanda_storage_mode;

@@ -174,7 +174,7 @@ ss::future<> controller::wire_up() {
             data_migrations::data_migrations_shard,
             std::ref(_data_migrated_resources),
             std::ref(_tp_state),
-            config::shard_local_cfg().cloud_storage_enabled()
+            config::shard_local_cfg().cloud_storage_enabled.local_value()
               && config::shard_local_cfg()
                    .cloud_storage_disable_archiver_manager());
       })

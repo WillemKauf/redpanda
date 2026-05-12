@@ -546,7 +546,7 @@ private:
     /// disabled. If legacy mode is enabled always return false.
     bool should_construct_archiver() const {
         const auto& ntp_config = _part->log()->config();
-        return config::shard_local_cfg().cloud_storage_enabled()
+        return config::shard_local_cfg().cloud_storage_enabled.local_value()
                && !config::shard_local_cfg()
                      .cloud_storage_disable_archiver_manager()
                && !ntp_config.cloud_topic_enabled()

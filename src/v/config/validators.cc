@@ -462,7 +462,7 @@ validate_default_redpanda_storage_mode(const configuration& config) {
 
     if (
       mode == model::redpanda_storage_mode::tiered
-      && !config.cloud_storage_enabled()) {
+      && !config.cloud_storage_enabled.local_value()) {
         return fmt::format(
           "default_redpanda_storage_mode cannot be set to tiered when "
           "cloud_storage_enabled is false");

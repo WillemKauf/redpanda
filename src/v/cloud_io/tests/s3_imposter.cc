@@ -621,7 +621,7 @@ s3_imposter_fixture::should_fail_request(
 enable_cloud_storage_fixture::enable_cloud_storage_fixture() {
     ss::smp::invoke_on_all([]() {
         auto& cfg = config::shard_local_cfg();
-        cfg.cloud_storage_enabled.set_value(true);
+        cfg.cloud_storage_enabled.set_value_and_activate(true);
         cfg.cloud_storage_api_endpoint.set_value(
           std::optional<ss::sstring>{s3_imposter_fixture::httpd_host_name});
         cfg.cloud_storage_api_endpoint_port.set_value(

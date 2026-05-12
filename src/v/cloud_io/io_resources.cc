@@ -162,7 +162,8 @@ throughput_limit get_throughput_limit(std::optional<size_t> device_throughput) {
 
 // Get device throughput for the mountpoint
 ss::future<std::optional<device_throughput>> get_storage_device_throughput() {
-    if (config::shard_local_cfg().cloud_storage_enabled() == false) {
+    if (
+      config::shard_local_cfg().cloud_storage_enabled.local_value() == false) {
         co_return std::nullopt;
     }
     try {

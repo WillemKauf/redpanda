@@ -50,7 +50,7 @@ archiver_fixture::archiver_fixture()
       redpanda_thread_fixture::init_cloud_storage_no_archiver_tag{}) {
     ss::smp::invoke_on_all([port = httpd_port_number()]() {
         auto& cfg = config::shard_local_cfg();
-        cfg.cloud_storage_enabled.set_value(true);
+        cfg.cloud_storage_enabled.set_value_and_activate(true);
         cfg.cloud_storage_api_endpoint.set_value(
           std::optional<ss::sstring>{httpd_host_name});
         cfg.cloud_storage_api_endpoint_port.set_value(int16_t(port));
@@ -100,7 +100,8 @@ archiver_fixture::archiver_fixture()
 }
 
 archiver_fixture::~archiver_fixture() {
-    config::shard_local_cfg().cloud_storage_enabled.set_value(false);
+    config::shard_local_cfg().cloud_storage_enabled.set_value_and_activate(
+      false);
     pool.local().shutdown_connections();
     io.local().request_stop();
     remote.stop().get();

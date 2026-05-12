@@ -63,7 +63,7 @@ cloudcheck::run(cloudcheck_opts opts) {
       opts);
 
     const auto& cfg = config::shard_local_cfg();
-    if (!cfg.cloud_storage_enabled()) {
+    if (!cfg.cloud_storage_enabled.local_value()) {
         vlog(
           clusterlog.warn,
           "Cloud storage is not enabled, exiting cloud storage self-test.");
