@@ -104,6 +104,11 @@ public:
     ss::future<>
     sample_leveling_info(chunked_vector<log_compaction_meta_ptr> logs) const;
 
+    // Returns `true` if the log is eligible for compaction based on its cached
+    // `compaction_info_and_ts` and the topic configuration. The log must have
+    // `compaction_info_and_ts` set; returns `false` otherwise.
+    bool is_compaction_eligible(const log_compaction_meta&) const;
+
 private:
     // Returns a container of `compaction_info_spec` to sample the metastore
     // with based on the input `log_list_t`.

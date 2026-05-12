@@ -29,9 +29,10 @@ namespace cloud_topics::l1 {
 
 class worker_manager;
 
-// A per-shard worker that accepts compaction jobs and performs de-duplication
-// using a `sink`, `source`, and `reducer`.
-// Can be pre-empted to either cancel or stop a compaction job.
+// A per-shard worker that accepts compaction and leveling jobs and performs
+// either de-duplication (for compaction) or rewrites (for leveling) using a
+// `sink`, `source`, and `reducer`. Can be pre-empted to either cancel or stop
+// an inflight job.
 class compaction_worker {
 public:
     // Describes whether a worker on a given shard is `active` and available
@@ -116,14 +117,22 @@ private:
     // as obtained from the `metastore`.
     ss::future<> compact_log(log_compaction_meta*);
 
+    // Requests a leveling rewrite of the provided CTP using the
+    // leveling ranges obtained from the `metastore`.
+    ss::future<> level_log(log_compaction_meta*);
+
     // Retrieves a job from the `_worker_manager`, if there is one available.
-    ss::future<std::optional<foreign_log_compaction_meta_ptr>>
+    // Compaction is preferred when both queues have work — see
+    // `worker_manager::try_acquire_work` for the priority logic.
+    ss::future<
+      std::optional<std::pair<foreign_log_compaction_meta_ptr, job_kind>>>
     try_acquire_work_from_manager();
 
-    // After completing a compaction job, go back to the `worker_manager` shard
-    // to mark the work as "complete" (i.e reset the `meta->inflight` value to
-    // indicate there is no longer an in-process compaction occurring).
-    ss::future<> complete_work_on_manager(foreign_log_compaction_meta_ptr);
+    // After completing a job, go back to the `worker_manager` shard to mark
+    // the work as "complete" (i.e reset the `meta->inflight` value to indicate
+    // there is no longer an in-process maintenance job occurring).
+    ss::future<>
+      complete_work_on_manager(foreign_log_compaction_meta_ptr, job_kind);
 
     // Performs lazy initialization of the `compaction::key_offset_map` using
     // its reserved memory, if it is uninitialized.

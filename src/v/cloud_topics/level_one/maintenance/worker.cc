@@ -13,6 +13,8 @@
 #include "cloud_topics/level_one/frontend_reader/level_one_reader_probe.h"
 #include "cloud_topics/level_one/maintenance/compaction/compaction_sink.h"
 #include "cloud_topics/level_one/maintenance/compaction/compaction_source.h"
+#include "cloud_topics/level_one/maintenance/leveling/leveling_sink.h"
+#include "cloud_topics/level_one/maintenance/leveling/leveling_source.h"
 #include "cloud_topics/level_one/maintenance/logger.h"
 #include "cloud_topics/level_one/maintenance/meta.h"
 #include "cloud_topics/level_one/maintenance/worker_manager.h"
@@ -111,24 +113,26 @@ ss::future<> compaction_worker::work_loop() {
                 break;
             }
 
-            auto work = std::move(maybe_work).value();
+            auto [work, kind] = std::move(maybe_work).value();
 
             auto ntp = work->ntp;
 
-            auto compact_fut = co_await ss::coroutine::as_future(
-              compact_log(work.get()));
-            co_await complete_work_on_manager(std::move(work));
+            auto job_fut = co_await ss::coroutine::as_future(
+              kind == job_kind::compaction ? compact_log(work.get())
+                                           : level_log(work.get()));
+            co_await complete_work_on_manager(std::move(work), kind);
 
-            if (compact_fut.failed()) {
-                auto eptr = compact_fut.get_exception();
+            if (job_fut.failed()) {
+                auto eptr = job_fut.get_exception();
                 auto log_lvl = ssx::is_shutdown_exception(eptr)
                                  ? ss::log_level::debug
                                  : ss::log_level::warn;
                 vlogl(
                   compaction_log,
                   log_lvl,
-                  "Caught exception {} while compacting CTP {}.",
+                  "Caught exception {} while running {} job for CTP {}.",
                   eptr,
+                  kind == job_kind::compaction ? "compaction" : "leveling",
                   ntp);
             }
         }
@@ -277,7 +281,97 @@ ss::future<> compaction_worker::compact_log(log_compaction_meta* log) {
     _inflight_ntp.reset();
 }
 
-ss::future<std::optional<foreign_log_compaction_meta_ptr>>
+ss::future<> compaction_worker::level_log(log_compaction_meta* log) {
+    if (!is_active()) {
+        co_return;
+    }
+
+    // If there was a concurrent race with a request to cancel/stop an
+    // inflight job, early return after resetting state to `idle`.
+    if (
+      _job_state == compaction_job_state::soft_stop
+      || _job_state == compaction_job_state::hard_stop) {
+        _job_state = compaction_job_state::idle;
+        co_return;
+    }
+
+    if (!log) {
+        co_return;
+    }
+
+    if (!log->link.is_linked()) {
+        co_return;
+    }
+
+    auto tidp = log->tidp;
+    auto ntp = log->ntp;
+
+    auto ctxlog = prefix_logger(
+      compaction_log, fmt::format("leveling/{}", ntp));
+
+    if (!log->leveling_info_and_ts.has_value()) {
+        vlog(
+          ctxlog.error,
+          "Log in leveling process did not have metastore leveling "
+          "information set. Concurrency issue?");
+        co_return;
+    }
+
+    vlog(ctxlog.info, "Leveling CTP");
+
+    _job_state = compaction_job_state::running;
+    _inflight_ntp = ntp;
+
+    auto leveling_ranges
+      = log->leveling_info_and_ts->info.leveling_ranges.to_vec();
+    auto expected_compaction_epoch = log->leveling_info_and_ts->info.epoch;
+
+    auto src = std::make_unique<leveling_source>(
+      std::move(ntp),
+      tidp,
+      std::move(leveling_ranges),
+      _metastore,
+      _io,
+      _as,
+      _job_state,
+      _probe);
+    auto sink = std::make_unique<leveling_sink>(
+      tidp,
+      expected_compaction_epoch,
+      _io,
+      _metastore,
+      _as,
+      config::shard_local_cfg()
+        .cloud_topics_reconciliation_max_object_size.bind(),
+      _upload_part_size,
+      l1::object_builder::options{
+        .indexing_interval
+        = config::shard_local_cfg().cloud_topics_l1_indexing_interval(),
+      });
+    auto reducer = compaction::sliding_window_reducer(
+      std::move(src), std::move(sink));
+
+    auto m = _probe.auto_compaction_measurement();
+
+    auto level_fut = co_await ss::coroutine::as_future(
+      std::move(reducer).run());
+
+    if (level_fut.failed()) {
+        auto eptr = level_fut.get_exception();
+        auto log_lvl = ssx::is_shutdown_exception(eptr) ? ss::log_level::debug
+                                                        : ss::log_level::warn;
+        vlogl(ctxlog, log_lvl, "Caught exception {} while leveling CTP.", eptr);
+
+        m->cancel();
+    } else {
+        vlog(ctxlog.info, "Finished leveling CTP");
+    }
+
+    _job_state = compaction_job_state::idle;
+    _inflight_ntp.reset();
+}
+
+ss::future<std::optional<std::pair<foreign_log_compaction_meta_ptr, job_kind>>>
 compaction_worker::try_acquire_work_from_manager() {
     co_return co_await ss::smp::submit_to(
       worker_manager::worker_manager_shard,
@@ -287,10 +381,10 @@ compaction_worker::try_acquire_work_from_manager() {
 }
 
 ss::future<> compaction_worker::complete_work_on_manager(
-  foreign_log_compaction_meta_ptr log) {
+  foreign_log_compaction_meta_ptr log, job_kind kind) {
     co_return co_await ss::smp::submit_to(
-      worker_manager::worker_manager_shard, [this, log = std::move(log)] {
-          _worker_manager->complete_work(log.get());
+      worker_manager::worker_manager_shard, [this, log = std::move(log), kind] {
+          _worker_manager->complete_work(log.get(), kind);
           // Destruct foreign_ptr on owning shard by moving it into closure.
           std::ignore = std::move(log);
       });

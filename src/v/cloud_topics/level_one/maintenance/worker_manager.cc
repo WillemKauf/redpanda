@@ -21,13 +21,15 @@
 namespace cloud_topics::l1 {
 
 worker_manager::worker_manager(
-  log_compaction_queue& work_queue,
+  log_compaction_queue& compaction_queue,
+  log_leveling_queue& leveling_queue,
   ss::sharded<file_io>* io,
   ss::sharded<replicated_metastore>* metastore,
   ss::sharded<cluster::metadata_cache>* metadata_cache,
   compaction_scheduler_probe& probe,
   ss::sharded<level_one_reader_probe>* l1_reader_probe)
-  : _work_queue(work_queue)
+  : _compaction_queue(compaction_queue)
+  , _leveling_queue(leveling_queue)
   , _io(io)
   , _metastore(metastore)
   , _metadata_cache(metadata_cache)
@@ -50,20 +52,18 @@ ss::future<> worker_manager::stop() {
     co_await _workers.stop();
 }
 
-std::optional<foreign_log_compaction_meta_ptr>
-worker_manager::try_acquire_work(ss::shard_id shard) {
-    vassert(
-      ss::this_shard_id() == worker_manager_shard,
-      "Expected calls to worker_manager::try_acquire_work() to always "
-      "execute on shard {}",
-      worker_manager_shard);
+namespace {
 
-    if (_work_queue.empty()) {
+// Pops the head off `queue` and sets inflight state for `shard`. Returns
+// `std::nullopt` if the queue is empty or the head was unlinked.
+std::optional<foreign_log_compaction_meta_ptr>
+acquire_from_queue(auto& queue, ss::shard_id shard, job_kind kind) {
+    if (queue.empty()) {
         return std::nullopt;
     }
 
-    auto log = _work_queue.top();
-    _work_queue.pop();
+    auto log = queue.top();
+    queue.pop();
 
     if (!log) {
         return std::nullopt;
@@ -78,10 +78,40 @@ worker_manager::try_acquire_work(ss::shard_id shard) {
       "Expected log state to be queued when acquiring work");
     log->state = log_compaction_meta::log_state::inflight;
     log->inflight_shard = shard;
+    log->inflight_kind = kind;
     return ss::make_foreign(log);
 }
 
-void worker_manager::complete_work(log_compaction_meta* log) {
+} // namespace
+
+std::optional<std::pair<foreign_log_compaction_meta_ptr, job_kind>>
+worker_manager::try_acquire_work(ss::shard_id shard) {
+    vassert(
+      ss::this_shard_id() == worker_manager_shard,
+      "Expected calls to worker_manager::try_acquire_work() to always "
+      "execute on shard {}",
+      worker_manager_shard);
+
+    // Compaction takes priority over leveling: compaction shrinks the dataset
+    // and can change which extents are still worth leveling.
+    if (
+      auto work = acquire_from_queue(
+        _compaction_queue, shard, job_kind::compaction);
+      work.has_value()) {
+        return std::pair{std::move(*work), job_kind::compaction};
+    }
+
+    if (
+      auto work = acquire_from_queue(
+        _leveling_queue, shard, job_kind::leveling);
+      work.has_value()) {
+        return std::pair{std::move(*work), job_kind::leveling};
+    }
+
+    return std::nullopt;
+}
+
+void worker_manager::complete_work(log_compaction_meta* log, job_kind kind) {
     vassert(
       ss::this_shard_id() == worker_manager_shard,
       "Expected calls to worker_manager::complete_work() to always execute on "
@@ -93,9 +123,14 @@ void worker_manager::complete_work(log_compaction_meta* log) {
       "Expected log state to be inflight when completing work");
     log->state = log_compaction_meta::log_state::idle;
     log->inflight_shard.reset();
-    log->compaction_info_and_ts.reset();
 
-    _probe.log_compacted();
+    if (kind == job_kind::compaction) {
+        log->compaction_info_and_ts.reset();
+        _probe.log_compacted();
+    } else {
+        log->leveling_info_and_ts.reset();
+        _probe.log_leveled();
+    }
 }
 
 void worker_manager::request_stop_compaction(log_compaction_meta_ptr log) {
@@ -115,6 +150,12 @@ void worker_manager::request_stop_compaction(log_compaction_meta_ptr log) {
             return worker.terminate_current_job();
         });
     });
+}
+
+ss::future<> worker_manager::interrupt_leveling_job(ss::shard_id shard) {
+    auto guard = _gate.hold();
+    co_await _workers.invoke_on(
+      shard, [](compaction_worker& worker) { worker.interrupt_current_job(); });
 }
 
 ss::future<> worker_manager::alert_workers() {

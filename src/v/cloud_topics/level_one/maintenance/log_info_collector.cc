@@ -47,6 +47,19 @@ inline bool needs_compaction(
 
 } // namespace
 
+bool log_info_collector::is_compaction_eligible(
+  const log_compaction_meta& log) const {
+    if (!log.compaction_info_and_ts.has_value()) {
+        return false;
+    }
+    auto topic_cfg_opt = _topic_metadata_provider->get_topic_cfg(
+      model::topic_namespace_view(log.ntp));
+    if (!topic_cfg_opt.has_value()) {
+        return false;
+    }
+    return needs_compaction(log, topic_cfg_opt.value().get());
+}
+
 topic_cfg_provider_impl::topic_cfg_provider_impl(
   cluster::metadata_cache* metadata_cache)
   : _metadata_cache(metadata_cache) {}

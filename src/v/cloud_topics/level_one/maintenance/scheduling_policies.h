@@ -26,14 +26,34 @@ public:
     scheduling_policy& operator=(scheduling_policy&&) noexcept = default;
     virtual ~scheduling_policy() = default;
 
-    virtual cmp_t get_comparator() const noexcept = 0;
+    virtual cmp_t get_compaction_comparator() const noexcept = 0;
+    virtual cmp_t get_leveling_comparator() const noexcept = 0;
+};
+
+// A leveling sort policy that orders logs by `levelable_bytes` descending.
+// Shared between scheduling policies since the leveling heuristic is
+// orthogonal to compaction's.
+struct leveling_sort_policy {
+    static bool operator()(
+      const log_compaction_meta_ptr& a,
+      const log_compaction_meta_ptr& b) noexcept {
+        vassert(
+          a->leveling_info_and_ts.has_value()
+            && b->leveling_info_and_ts.has_value(),
+          "Leveling sort policy applied to logs without "
+          "leveling_info_and_ts assigned");
+        return a->leveling_info_and_ts->info.levelable_bytes
+               > b->leveling_info_and_ts->info.levelable_bytes;
+    }
 };
 
 // Compacts partitions from highest dirty ratio (the ratio of unclean bytes in
-// the log to the total log size) to lowest.
+// the log to the total log size) to lowest. Levels partitions from highest
+// `levelable_bytes` to lowest.
 class dirty_ratio_scheduling_policy : public scheduling_policy {
 public:
-    cmp_t get_comparator() const noexcept final;
+    cmp_t get_compaction_comparator() const noexcept final;
+    cmp_t get_leveling_comparator() const noexcept final;
 
 private:
     struct sort_policy {
@@ -53,10 +73,12 @@ private:
 };
 
 // Compacts partitions from highest compaction lag (the oldest timestamp of
-// the first uncompacted record) to lowest.
+// the first uncompacted record) to lowest. Levels partitions from highest
+// `levelable_bytes` to lowest.
 class compaction_lag_scheduling_policy : public scheduling_policy {
 public:
-    cmp_t get_comparator() const noexcept final;
+    cmp_t get_compaction_comparator() const noexcept final;
+    cmp_t get_leveling_comparator() const noexcept final;
 
 private:
     struct sort_policy {

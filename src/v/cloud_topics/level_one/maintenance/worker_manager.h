@@ -29,9 +29,9 @@ class SchedulerTestFixture;
 namespace cloud_topics::l1 {
 
 // A worker_manager which exists as a singleton on shard0, owns a sharded pool
-// of `compaction_worker`s, and provides access to a priority queue of CTPs
-// which require compaction. Manages inflight compactions and can request early
-// abort of inflight jobs.
+// of `compaction_worker`s, and provides access to two priority queues of CTPs
+// that require maintenance work: one for compaction and one for leveling.
+// Manages inflight jobs and can request early abort of inflight jobs.
 // TODO: Hook this up to the AdminAPI to allow for users to customize which
 // shards have active `compaction_worker`s, and persist that information in e.g.
 // the kvstore.
@@ -41,29 +41,33 @@ public:
 
     worker_manager(
       log_compaction_queue&,
+      log_leveling_queue&,
       ss::sharded<file_io>*,
       ss::sharded<replicated_metastore>*,
       ss::sharded<cluster::metadata_cache>*,
       compaction_scheduler_probe&,
       ss::sharded<level_one_reader_probe>*);
 
-    // Starts the pool of workers, making them available for compaction jobs.
+    // Starts the pool of workers, making them available for maintenance jobs.
     ss::future<> start();
 
-    // Stops all workers (and inflight compaction jobs) and then destructs
-    // workers. Workers will no longer accept compaction jobs after this
-    // function has been called, and waiters will be declined. This should only
-    // be invoked during application shutdown.
+    // Stops all workers (and inflight jobs) and then destructs workers.
+    // Workers will no longer accept jobs after this function has been called,
+    // and waiters will be declined. This should only be invoked during
+    // application shutdown.
     ss::future<> stop();
 
-    // Returns the top entry of `_work_queue`, if it is not empty, and sets
-    // inflight state for the provided shard & CTP. Returns `std::nullopt` if
-    // the `_work_queue` is empty.
-    std::optional<foreign_log_compaction_meta_ptr>
+    // Returns the top entry of either the compaction or leveling queue, if
+    // available, and sets inflight state for the provided shard & CTP. Returns
+    // `std::nullopt` if both queues are empty. Compaction is preferred over
+    // leveling when both queues have work, since compaction reduces data
+    // volume and can change what's worth leveling.
+    std::optional<std::pair<foreign_log_compaction_meta_ptr, job_kind>>
       try_acquire_work(ss::shard_id);
 
-    // Resets inflight state for the provided CTP.
-    void complete_work(log_compaction_meta*);
+    // Resets inflight state for the provided CTP. `kind` indicates which
+    // queue the work came from and which probe counter to bump.
+    void complete_work(log_compaction_meta*, job_kind);
 
     // If an inflight compaction job for the provided log exists, a signal is
     // sent to the worker shard on which the job is occurring to request an
@@ -77,6 +81,11 @@ public:
     // partition is removed or the `cleanup.policy` for a topic is changed and a
     // single compaction job must be stopped.
     void request_stop_compaction(log_compaction_meta_ptr);
+
+    // If an inflight leveling job is running on the provided shard, sends a
+    // soft-stop signal so the job checkpoints and exits, allowing compaction to
+    // take priority. Does not affect the worker itself.
+    ss::future<> interrupt_leveling_job(ss::shard_id);
 
     // Alert all workers that new jobs have become available in the
     // `_work_queue`.
@@ -93,7 +102,10 @@ private:
     friend class ::SchedulerTestFixture;
 
     // Owned by `scheduler`.
-    log_compaction_queue& _work_queue;
+    log_compaction_queue& _compaction_queue;
+
+    // Owned by `scheduler`.
+    log_leveling_queue& _leveling_queue;
 
     // Owned by `app`.
     ss::sharded<file_io>* _io;

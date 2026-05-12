@@ -40,6 +40,9 @@ struct leveling_info_and_timestamp {
     model::timestamp collected_at;
 };
 
+// Describes the kind of maintenance job a worker is running.
+enum class job_kind { compaction, leveling };
+
 struct log_compaction_meta {
     log_compaction_meta(model::topic_id_partition tidp, model::ntp ntp)
       : tidp(std::move(tidp))
@@ -65,6 +68,9 @@ struct log_compaction_meta {
     // If set, this is the shard on which the log is currently undergoing an
     // inflight compaction. Guaranteed to have a value if `state == inflight`.
     std::optional<ss::shard_id> inflight_shard{std::nullopt};
+    // The kind of job currently inflight. Only meaningful when
+    // `state == inflight`.
+    job_kind inflight_kind{job_kind::compaction};
     intrusive_list_hook link;
     // If `true`, we have been able to sample compaction info from the
     // `metastore` previously.
@@ -121,6 +127,14 @@ using log_list_t
 using cmp_t = std::function<bool(
   const log_compaction_meta_ptr&, const log_compaction_meta_ptr&)>;
 using log_compaction_queue = std::priority_queue<
+  log_compaction_meta_ptr,
+  chunked_vector<log_compaction_meta_ptr>,
+  cmp_t>;
+
+// Leveling queue. Shares the same element type as the compaction queue since
+// `log_compaction_meta` carries both compaction and leveling info; the queue is
+// just sorted by a different comparator.
+using log_leveling_queue = std::priority_queue<
   log_compaction_meta_ptr,
   chunked_vector<log_compaction_meta_ptr>,
   cmp_t>;

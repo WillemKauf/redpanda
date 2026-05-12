@@ -67,6 +67,8 @@ redpanda_cc_library(
         "//src/v/cloud_topics/level_one/common:file_io",
         "//src/v/cloud_topics/level_one/frontend_reader:level_one_reader_probe",
         "//src/v/cloud_topics/level_one/maintenance/compaction:compaction_source_and_sink",
+        "//src/v/cloud_topics/level_one/maintenance/leveling:leveling_sink",
+        "//src/v/cloud_topics/level_one/maintenance/leveling:leveling_source",
         "//src/v/cloud_topics/level_one/metastore",
         "//src/v/cloud_topics/level_one/metastore:replicated_metastore",
         "//src/v/cluster",
