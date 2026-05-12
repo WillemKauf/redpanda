@@ -1693,3 +1693,18 @@ redpanda_cc_gtest(
         "@seastar",
     ],
 )
+
+redpanda_cc_gtest(
+    name = "clustered_property_activation_test",
+    timeout = "short",
+    srcs = [
+        "clustered_property_activation_test.cc",
+    ],
+    cpu = 1,
+    deps = [
+        "//src/v/cluster:types",
+        "//src/v/config",
+        "//src/v/test_utils:gtest",
+        "@googletest//:gtest",
+    ],
+)
