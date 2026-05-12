@@ -1538,6 +1538,28 @@ struct cluster_config_status_cmd_data
     config_status status;
 };
 
+struct cluster_config_activate_cmd_data
+  : serde::envelope<
+      cluster_config_activate_cmd_data,
+      serde::version<0>,
+      serde::compat_version<0>> {
+    /// Name of the clustered property being activated.
+    ss::sstring property_name;
+
+    /// The serialized value (YAML-formatted) that the cluster has
+    /// converged on. The apply path on each replica compares this against
+    /// the property's current _staged value; a mismatch (e.g., a newer
+    /// delta has overwritten the staged value in flight) results in the
+    /// activation being dropped.
+    ss::sstring value;
+
+    auto serde_fields() { return std::tie(property_name, value); }
+
+    friend bool operator==(
+      const cluster_config_activate_cmd_data&,
+      const cluster_config_activate_cmd_data&) = default;
+};
+
 struct feature_update_cmd_data
   : serde::envelope<
       feature_update_cmd_data,

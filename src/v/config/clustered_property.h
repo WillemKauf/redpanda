@@ -108,6 +108,22 @@ public:
 
     void clear_staged() noexcept { _staged.reset(); }
 
+    void apply_activation(std::string_view serialized_value) override {
+        if (!_staged.has_value()) {
+            return;
+        }
+        std::optional<T> incoming;
+        try {
+            incoming = YAML::Load(std::string{serialized_value}).as<T>();
+        } catch (...) {
+            return;
+        }
+        if (!incoming || *incoming != *_staged) {
+            return;
+        }
+        complete_activation();
+    }
+
     void test_set_staged(T v) { set_staged_value(std::move(v)); }
     void test_activate(T v) {
         if (_staged && *_staged == v) {

@@ -151,6 +151,7 @@ inline constexpr int8_t remove_node_cmd_type = 7;
 // cluster config commands
 inline constexpr int8_t cluster_config_delta_cmd_type = 0;
 inline constexpr int8_t cluster_config_status_cmd_type = 1;
+inline constexpr int8_t cluster_config_activate_cmd_type = 2;
 
 // feature_manager command types
 inline constexpr int8_t feature_update_cmd_type = 0;
@@ -418,6 +419,12 @@ using cluster_config_status_cmd = controller_command<
   cluster_config_status_cmd_type,
   model::record_batch_type::cluster_config_cmd,
   serde_opts::adl_and_serde>;
+
+using cluster_config_activate_cmd = controller_command<
+  int8_t, // unused
+  cluster_config_activate_cmd_data,
+  cluster_config_activate_cmd_type,
+  model::record_batch_type::cluster_config_cmd>;
 
 using feature_update_cmd = controller_command<
   feature_update_cmd_data,

@@ -26,6 +26,7 @@
 #include "storage/config.h"
 
 #include <seastar/core/reactor.hh>
+#include <seastar/core/smp.hh>
 #include <seastar/core/thread.hh>
 
 #include <chrono>
@@ -4978,5 +4979,17 @@ std::unique_ptr<configuration> make_config() {
 configuration& shard_local_cfg() {
     static thread_local std::unique_ptr<configuration> cfg = make_config();
     return *cfg;
+}
+
+ss::future<> shard_local_cfg_apply_activation_all_shards(
+  std::string_view property_name, std::string_view value) {
+    co_await ss::smp::invoke_on_all(
+      [name = ss::sstring{property_name}, val = ss::sstring{value}]() {
+          auto& cfg = config::shard_local_cfg();
+          if (!cfg.contains(name)) {
+              return;
+          }
+          cfg.get(name).apply_activation(val);
+      });
 }
 } // namespace config

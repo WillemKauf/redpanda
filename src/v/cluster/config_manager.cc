@@ -1013,6 +1013,18 @@ config_manager::apply_status(cluster_config_status_cmd&& cmd) {
 
     co_return errc::success;
 }
+
+ss::future<std::error_code>
+config_manager::apply_activate(cluster_config_activate_cmd&& cmd) {
+    vlog(
+      clusterlog.debug,
+      "Applying cluster_config_activate_cmd for property={}",
+      cmd.value.property_name);
+    co_await config::shard_local_cfg_apply_activation_all_shards(
+      cmd.value.property_name, cmd.value.value);
+    co_return errc::success;
+}
+
 ss::future<std::error_code>
 config_manager::apply_update(model::record_batch b) {
     auto cmd_var = co_await cluster::deserialize(
@@ -1027,6 +1039,9 @@ config_manager::apply_update(model::record_batch b) {
       },
       [this](cluster_config_status_cmd cmd) {
           return apply_status(std::move(cmd));
+      },
+      [this](cluster_config_activate_cmd cmd) {
+          return apply_activate(std::move(cmd));
       });
 }
 

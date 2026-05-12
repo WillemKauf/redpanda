@@ -279,6 +279,10 @@ public:
      */
     virtual void notify_original_version(legacy_version) = 0;
 
+    /// Apply a successful cluster-wide activation for clustered properties.
+    /// Default implementation is a no-op; clustered_property<T> overrides.
+    virtual void apply_activation(std::string_view /*serialized_value*/) {}
+
 private:
     std::string_view _name;
     std::string_view _desc;

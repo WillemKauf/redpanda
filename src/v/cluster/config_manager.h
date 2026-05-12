@@ -34,7 +34,8 @@ namespace cluster {
 class config_manager final {
     static constexpr auto accepted_commands = make_commands_list<
       cluster_config_delta_cmd,
-      cluster_config_status_cmd>{};
+      cluster_config_status_cmd,
+      cluster_config_activate_cmd>{};
 
 public:
     static constexpr ss::shard_id shard = 0;
@@ -118,6 +119,7 @@ private:
     static ss::future<> load_legacy(const YAML::Node&);
 
     ss::future<std::error_code> apply_status(cluster_config_status_cmd&& cmd);
+    ss::future<std::error_code> apply_activate(cluster_config_activate_cmd&&);
 
     static std::filesystem::path bootstrap_path();
     static std::filesystem::path cache_path();

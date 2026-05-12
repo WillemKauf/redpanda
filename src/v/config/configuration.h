@@ -31,6 +31,7 @@
 #include "security/config.h"
 #include "utils/unresolved_address.h"
 
+#include <seastar/core/future.hh>
 #include <seastar/core/sstring.hh>
 #include <seastar/net/inet_address.hh>
 #include <seastar/net/ip.hh>
@@ -885,5 +886,10 @@ bool development_feature_property<T>::development_features_enabled(
 std::unique_ptr<configuration> make_config();
 
 configuration& shard_local_cfg();
+
+/// Apply the activation for a clustered property on every shard. Used by
+/// config_manager when a cluster_config_activate_cmd is replicated.
+ss::future<> shard_local_cfg_apply_activation_all_shards(
+  std::string_view property_name, std::string_view value);
 
 } // namespace config
