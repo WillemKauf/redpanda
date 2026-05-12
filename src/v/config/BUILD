@@ -4,6 +4,7 @@ redpanda_cc_library(
     name = "config",
     srcs = [
         "base_property.cc",
+        "clustered_property.cc",
         "broker_authn_endpoint.cc",
         "configuration.cc",
         "leaders_preference.cc",
@@ -74,6 +75,7 @@ redpanda_cc_library(
         "//src/v/utils:named_type",
         "//src/v/utils:to_string",
         "//src/v/utils:unresolved_address",
+        "@abseil-cpp//absl/container:flat_hash_map",
         "@abseil-cpp//absl/container:flat_hash_set",
         "@abseil-cpp//absl/container:node_hash_set",
         "@boost//:algorithm",

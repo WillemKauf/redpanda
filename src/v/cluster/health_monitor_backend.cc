@@ -27,6 +27,7 @@
 #include "cluster/partition_manager.h"
 #include "cluster/partition_probe.h"
 #include "cluster/types.h"
+#include "config/clustered_property.h"
 #include "config/configuration.h"
 #include "config/property.h"
 #include "container/chunked_hash_map.h"
@@ -901,12 +902,15 @@ health_monitor_backend::collect_current_node_health() {
     it->second.is_alive = alive::yes;
     it->second.last_reply_timestamp = ss::lowres_clock::now();
 
-    co_return node_health_report{
+    node_health_report report{
       id,
       std::move(local_state),
       std::move(topics),
       std::move(drain_status),
       std::move(node_liveness_report)};
+    report.clustered_config = config::collect_clustered_config(
+      config::shard_local_cfg());
+    co_return report;
 }
 ss::future<result<node_health_report_ptr>>
 health_monitor_backend::get_current_node_health() {

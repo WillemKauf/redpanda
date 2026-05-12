@@ -16,6 +16,9 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/future.hh>
 
+#include <absl/container/flat_hash_map.h>
+#include <yaml-cpp/yaml.h>
+
 #include <optional>
 
 namespace config {
@@ -137,6 +140,12 @@ public:
         complete_activation();
     }
 
+    bool is_clustered() const noexcept override { return true; }
+
+    ss::sstring to_yaml_string_local() const override {
+        return ss::sstring{YAML::Dump(YAML::Node{property<T>::value()})};
+    }
+
     T operator()() const = delete;
 
 private:
@@ -144,5 +153,12 @@ private:
     bool _is_active{true};
     ss::condition_variable _activation_cv;
 };
+
+class config_store;
+
+/// Walk the config_store and emit a map of {name -> serialized local value}
+/// for every clustered property. Called by the health-report sender.
+absl::flat_hash_map<ss::sstring, ss::sstring>
+collect_clustered_config(const config_store& store);
 
 } // namespace config

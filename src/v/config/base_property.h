@@ -279,6 +279,13 @@ public:
      */
     virtual void notify_original_version(legacy_version) = 0;
 
+    virtual bool is_clustered() const noexcept { return false; }
+
+    /// Serialize the property's node-local active value as YAML. Used by the
+    /// per-node health report to communicate the local_active value of every
+    /// clustered property. Default is empty (only meaningful for clustered).
+    virtual ss::sstring to_yaml_string_local() const { return {}; }
+
     /// Apply a successful cluster-wide activation for clustered properties.
     /// Default implementation is a no-op; clustered_property<T> overrides.
     virtual void apply_activation(std::string_view /*serialized_value*/) {}
