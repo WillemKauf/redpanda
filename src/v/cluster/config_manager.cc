@@ -1035,6 +1035,12 @@ config_manager::apply_delta(cluster_config_delta_cmd&& cmd_in) {
     my_latest_status.version = delta_version;
     merge_apply_result(my_latest_status, data, apply_r);
 
+    // Cache<=snapshot invariant: snapshot captures this delta before the
+    // cache is written. Crash between snapshot and cache write leaves the
+    // snapshot authoritative; preload reads stale cache and STM replay
+    // catches up. Never possible: cache ahead of snapshot.
+    co_await _controller_stm.local().force_snapshot();
+
     // Store the raw values (irrespective of any issues applying them) for
     // early replay on next startup.
     co_await store_delta(data);
