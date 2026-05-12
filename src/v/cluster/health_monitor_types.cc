@@ -102,6 +102,7 @@ node_health_report node_health_report::copy() const {
     for (const auto& [tp_ns, partitions] : topics) {
         ret.topics.emplace(tp_ns, copy_partition_statuses(partitions));
     }
+    ret.clustered_config = clustered_config;
     return ret;
 }
 
@@ -115,7 +116,8 @@ node_health_report_serde::node_health_report_serde(const node_health_report& hr)
       hr.local_state,
       /* topics */ {},
       hr.drain_status,
-      hr.node_liveness_report) {
+      hr.node_liveness_report,
+      hr.clustered_config) {
     topics.reserve(hr.topics.size());
     for (const auto& [tp_ns, partitions] : hr.topics) {
         topics.emplace_back(tp_ns, copy_to_vector(partitions));
@@ -183,7 +185,8 @@ bool operator==(
              a.topics.cend(),
              b.topics.cbegin(),
              b.topics.cend())
-           && a.node_liveness_report == b.node_liveness_report;
+           && a.node_liveness_report == b.node_liveness_report
+           && a.clustered_config == b.clustered_config;
 }
 fmt::iterator cluster_health_report::format_to(fmt::iterator it) const {
     return fmt::format_to(

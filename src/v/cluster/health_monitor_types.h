@@ -9,6 +9,7 @@
  * by the Apache License, Version 2.0
  */
 #pragma once
+#include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_map.h"
 #include "absl/container/node_hash_set.h"
 #include "base/format_to.h"
@@ -24,9 +25,11 @@
 #include "serde/async.h"
 #include "serde/rw/bool_class.h"
 #include "serde/rw/envelope.h"
+#include "serde/rw/map.h"
 #include "serde/rw/optional.h"
 #include "serde/rw/rw.h"
 #include "serde/rw/scalar.h"
+#include "serde/rw/sstring.h"
 #include "serde/rw/vector.h"
 #include "utils/named_type.h"
 
@@ -251,6 +254,7 @@ struct node_health_report {
     topics_t topics;
     std::optional<cluster::drain_status> drain_status;
     node_liveness_report node_liveness_report;
+    absl::flat_hash_map<ss::sstring, ss::sstring> clustered_config;
 
     node_health_report(
       model::node_id,
@@ -275,17 +279,23 @@ using node_health_report_ptr
 struct node_health_report_serde
   : serde::envelope<
       node_health_report_serde,
-      serde::version<1>,
+      serde::version<2>,
       serde::compat_version<0>> {
     model::node_id id;
     node::local_state local_state;
     chunked_vector<topic_status> topics;
     std::optional<cluster::drain_status> drain_status;
     node_liveness_report node_liveness_report;
+    absl::flat_hash_map<ss::sstring, ss::sstring> clustered_config;
 
     auto serde_fields() {
         return std::tie(
-          id, local_state, topics, drain_status, node_liveness_report);
+          id,
+          local_state,
+          topics,
+          drain_status,
+          node_liveness_report,
+          clustered_config);
     }
 
     node_health_report_serde() = default;
@@ -295,27 +305,36 @@ struct node_health_report_serde
       node::local_state local_state,
       chunked_vector<topic_status> topics,
       std::optional<cluster::drain_status> drain_status,
-      struct node_liveness_report node_liveness_report)
+      struct node_liveness_report node_liveness_report,
+      absl::flat_hash_map<ss::sstring, ss::sstring> clustered_config = {})
       : id(id)
       , local_state(std::move(local_state))
       , topics(std::move(topics))
       , drain_status(drain_status)
-      , node_liveness_report(std::move(node_liveness_report)) {}
+      , node_liveness_report(std::move(node_liveness_report))
+      , clustered_config(std::move(clustered_config)) {}
 
     node_health_report_serde copy() const {
         return {
-          id, local_state, topics.copy(), drain_status, node_liveness_report};
+          id,
+          local_state,
+          topics.copy(),
+          drain_status,
+          node_liveness_report,
+          clustered_config};
     }
 
     explicit node_health_report_serde(const node_health_report& hr);
 
     node_health_report to_in_memory() && {
-        return node_health_report{
+        auto hr = node_health_report{
           id,
           std::move(local_state),
           std::move(topics),
           drain_status,
           std::move(node_liveness_report)};
+        hr.clustered_config = std::move(clustered_config);
+        return hr;
     }
 
     fmt::iterator format_to(fmt::iterator it) const;
