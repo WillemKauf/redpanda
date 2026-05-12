@@ -337,7 +337,9 @@ ss::future<> controller::start(
       std::ref(_partition_leaders),
       std::ref(_members_table),
       std::ref(_as),
-      std::ref(_recovery_table));
+      std::ref(_recovery_table),
+      std::ref(_hm_backend),
+      std::ref(_hm_frontend));
 
     if (auto bucket_opt = get_configured_bucket(); bucket_opt.has_value()) {
         co_await _topic_mount_handler.start(
@@ -743,6 +745,9 @@ ss::future<> controller::start(
       std::ref(_partition_leaders),
       std::ref(_tp_state),
       std::ref(_node_status_table));
+
+    co_await _config_manager.invoke_on(
+      config_manager::shard, &config_manager::start_health_callbacks);
 
     _leader_balancer = std::make_unique<leader_balancer>(
       _tp_state.local(),

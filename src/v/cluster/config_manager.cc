@@ -17,10 +17,13 @@
 #include "cluster/controller_service.h"
 #include "cluster/controller_snapshot.h"
 #include "cluster/errc.h"
+#include "cluster/health_monitor_backend.h"
+#include "cluster/health_monitor_types.h"
 #include "cluster/logger.h"
 #include "cluster/members_table.h"
 #include "cluster/partition_leaders_table.h"
 #include "cluster/types.h"
+#include "config/clustered_property.h"
 #include "config/configuration.h"
 #include "config/node_config.h"
 #include "model/metadata.h"
@@ -58,14 +61,18 @@ config_manager::config_manager(
   ss::sharded<partition_leaders_table>& pl,
   ss::sharded<cluster::members_table>& mt,
   ss::sharded<ss::abort_source>& as,
-  ss::sharded<cluster_recovery_table>& rt)
+  ss::sharded<cluster_recovery_table>& rt,
+  ss::sharded<health_monitor_backend>& hm_backend,
+  ss::sharded<health_monitor_frontend>& hm_frontend)
   : _self(*config::node().node_id())
   , _frontend(cf)
   , _connection_cache(cc)
   , _leaders(pl)
   , _members(mt)
   , _as(as)
-  , _recovery_table(rt) {
+  , _recovery_table(rt)
+  , _hm_backend(hm_backend)
+  , _hm_frontend(hm_frontend) {
     if (ss::this_shard_id() == controller_stm_shard) {
         // Only the controller stm shard handles updates: leave these
         // members in default initialized state on other shards.
@@ -253,11 +260,34 @@ ss::future<> config_manager::start() {
     _raft0_leader_changed_notification
       = _leaders.local().register_leadership_change_notification(
         model::controller_ntp,
-        [this](const model::ntp&, model::term_id, model::node_id) {
+        [this](const model::ntp&, model::term_id, model::node_id leader_id) {
             _reconcile_wait.signal();
+            _am_controller_leader = (leader_id == _self);
+            _node_clustered_values.clear();
+            if (_am_controller_leader) {
+                _node_clustered_values[_self]
+                  = config::collect_clustered_config(config::shard_local_cfg());
+                _activation_wait.signal();
+            }
         });
 
     co_return co_await ss::now();
+}
+
+ss::future<> config_manager::start_health_callbacks() {
+    if (ss::this_shard_id() != controller_stm_shard) {
+        co_return;
+    }
+    _health_notify_handle = _hm_backend.local().register_node_callback(
+      [this](
+        const node_health_report& report,
+        std::optional<ss::lw_shared_ptr<const node_health_report>>) {
+          auto& entry = _node_clustered_values[report.id];
+          if (entry != report.clustered_config) {
+              entry = report.clustered_config;
+              _activation_wait.signal();
+          }
+      });
 }
 void config_manager::handle_cluster_members_update(
   model::node_id id, model::membership_state new_state) {
@@ -277,6 +307,10 @@ void config_manager::handle_cluster_members_update(
 ss::future<> config_manager::stop() {
     vlog(clusterlog.info, "Stopping Config Manager...");
     _reconcile_wait.broken();
+    _activation_wait.broken();
+    if (_hm_backend.local_is_initialized()) {
+        _hm_backend.local().unregister_node_callback(_health_notify_handle);
+    }
     _members.local().unregister_members_updated_notification(
       _member_update_notification);
     _leaders.local().unregister_leadership_change_notification(

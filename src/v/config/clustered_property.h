@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include "absl/container/flat_hash_map.h"
 #include "config/config_not_converged.h"
 #include "config/property.h"
 
@@ -16,7 +17,6 @@
 #include <seastar/core/condition-variable.hh>
 #include <seastar/core/future.hh>
 
-#include <absl/container/flat_hash_map.h>
 #include <yaml-cpp/yaml.h>
 
 #include <optional>

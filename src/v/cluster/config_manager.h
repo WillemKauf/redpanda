@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include "absl/container/flat_hash_map.h"
 #include "cluster/commands.h"
 #include "cluster/fwd.h"
 #include "cluster/notification.h"
@@ -56,7 +57,9 @@ public:
       ss::sharded<partition_leaders_table>&,
       ss::sharded<cluster::members_table>&,
       ss::sharded<ss::abort_source>&,
-      ss::sharded<cluster_recovery_table>&);
+      ss::sharded<cluster_recovery_table>&,
+      ss::sharded<health_monitor_backend>& hm_backend,
+      ss::sharded<health_monitor_frontend>& hm_frontend);
 
     // Preload early in startup, from bootstrap file or config cache
     static ss::future<preload_result> preload(const YAML::Node&);
@@ -67,6 +70,7 @@ public:
     preload_join(const controller_join_snapshot&);
 
     ss::future<> start();
+    ss::future<> start_health_callbacks();
     ss::future<> stop();
 
     // mux_state_machine interface
@@ -143,6 +147,18 @@ private:
     ss::condition_variable _reconcile_wait;
     ss::sharded<ss::abort_source>& _as;
     ss::sharded<cluster_recovery_table>& _recovery_table;
+    ss::sharded<health_monitor_backend>& _hm_backend;
+    [[maybe_unused]] ss::sharded<health_monitor_frontend>& _hm_frontend;
+    notification_id_type _health_notify_handle{};
+    bool _am_controller_leader{false};
+    ss::condition_variable _activation_wait;
+
+    // node_id -> {clustered_property_name -> serialized local_active}
+    absl::flat_hash_map<
+      model::node_id,
+      absl::flat_hash_map<ss::sstring, ss::sstring>>
+      _node_clustered_values;
+
     ss::gate _gate;
 };
 
