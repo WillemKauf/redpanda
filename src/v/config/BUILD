@@ -23,6 +23,8 @@ redpanda_cc_library(
         "bounded_property.h",
         "broker_authn_endpoint.h",
         "broker_endpoint.h",
+        "clustered_property.h",
+        "config_not_converged.h",
         "config_store.h",
         "configuration.h",
         "convert.h",
