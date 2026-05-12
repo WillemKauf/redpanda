@@ -98,6 +98,13 @@ public:
     /// peer of the more general maybe_make_snapshot
     ss::future<std::optional<iobuf>> maybe_make_join_snapshot();
 
+    /// Trigger a controller-STM snapshot immediately, bypassing the periodic
+    /// timer. Used by config_manager to enforce the cache<=snapshot offset
+    /// invariant after every config delta. The returned future resolves once
+    /// the snapshot has been written (or skipped if the feature flag is
+    /// inactive or there is nothing new to snapshot).
+    ss::future<> force_snapshot();
+
     /**
      * By calling this function caller may take a lock and prevent applying any
      * new updates to the controller state machine even if they are available.

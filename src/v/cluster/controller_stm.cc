@@ -218,6 +218,14 @@ ss::future<ssx::semaphore_units> controller_stm::lock_apply() {
     return _apply_mtx.get_units();
 }
 
+ss::future<> controller_stm::force_snapshot() {
+    // Respect the feature-flag guard inside maybe_make_snapshot: no point
+    // writing a snapshot the cluster cannot process. The up-to-date check in
+    // maybe_write_snapshot (_raft->last_snapshot_index >= last_applied) is
+    // also respected — nothing to write if there are no new log entries.
+    co_await maybe_write_snapshot();
+}
+
 ss::future<result<raft::replicate_result>> controller_stm::replicate(
   model::record_batch&& b, std::optional<model::term_id> term) {
     return ss::with_scheduling_group(
