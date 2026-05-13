@@ -1285,7 +1285,9 @@ public:
     /**
      * @brief Checks current value of property to see if it is restricted
      */
-    bool is_restricted() const { return do_check_restricted(this->value()); }
+    bool is_restricted() const {
+        return do_check_restricted(property<T>::value());
+    }
 
     /**
      * @brief Returns the sanctioned value of this property

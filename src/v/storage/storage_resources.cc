@@ -93,7 +93,7 @@ void storage_resources::update_allowance(uint64_t total, uint64_t free) {
     // TODO: also take as an input the disk consumption of the SI cache:
     // it knows this because it calculates it when doing periodic trimming.
     if (
-      config::shard_local_cfg().cloud_storage_enabled
+      config::shard_local_cfg().cloud_storage_enabled.local_value()
       && total > config::shard_local_cfg().cloud_storage_cache_size()) {
         total -= config::shard_local_cfg().cloud_storage_cache_size();
     }
