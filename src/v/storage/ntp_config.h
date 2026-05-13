@@ -431,7 +431,7 @@ public:
     }
 
     model::iceberg_mode iceberg_mode() const {
-        if (!config::shard_local_cfg().iceberg_enabled) {
+        if (!config::shard_local_cfg().iceberg_enabled.local_value()) {
             return model::iceberg_mode::disabled;
         }
         return _overrides ? _overrides->iceberg_mode : default_iceberg_mode;

@@ -26,7 +26,7 @@ bool wasm_enabled() {
 }
 
 bool datalake_enabled() {
-    return config::shard_local_cfg().iceberg_enabled.value();
+    return config::shard_local_cfg().iceberg_enabled.local_value();
 }
 
 bool cloud_topics_enabled() {

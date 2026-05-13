@@ -471,7 +471,7 @@ ss::future<> server::apply(ss::lw_shared_ptr<net::connection> conn) {
 void server::mark_datalake_producer(
   const std::optional<std::string_view>& client_id) {
     if (
-      !config::shard_local_cfg().iceberg_enabled()
+      !config::shard_local_cfg().iceberg_enabled.local_value()
       || !_datalake_throttle_manager.local_is_initialized()) {
         return;
     }
@@ -481,7 +481,7 @@ void server::mark_datalake_producer(
 ss::future<std::chrono::milliseconds> server::get_datalake_producer_throttle(
   std::optional<std::string_view> client_id) {
     if (
-      !config::shard_local_cfg().iceberg_enabled()
+      !config::shard_local_cfg().iceberg_enabled.local_value()
       || !_datalake_throttle_manager.local_is_initialized()) {
         return ssx::now<std::chrono::milliseconds>(0ms);
     }

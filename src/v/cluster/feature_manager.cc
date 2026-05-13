@@ -274,7 +274,7 @@ feature_manager::report_enterprise_features() const {
     report.set(features::license_required_feature::fips, fips_enabled());
     report.set(
       features::license_required_feature::datalake_iceberg,
-      cfg.iceberg_enabled());
+      cfg.iceberg_enabled.local_value());
     report.set(
       features::license_required_feature::leadership_pinning,
       leadership_pinning_enabled());

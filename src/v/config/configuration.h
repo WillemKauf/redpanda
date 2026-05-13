@@ -714,7 +714,7 @@ struct configuration final : public config_store {
     property<ss::sstring> tls_v1_3_cipher_suites;
 
     // datalake configurations
-    enterprise<property<bool>> iceberg_enabled;
+    enterprise<clustered_property<bool>> iceberg_enabled;
     bounded_property<std::chrono::milliseconds>
       iceberg_catalog_commit_interval_ms;
     bounded_property<std::chrono::milliseconds>

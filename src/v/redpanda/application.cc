@@ -915,7 +915,7 @@ bool application::wasm_data_transforms_enabled() {
 }
 
 bool application::datalake_enabled() {
-    return config::shard_local_cfg().iceberg_enabled()
+    return config::shard_local_cfg().iceberg_enabled.local_value()
            && !config::node().recovery_mode_enabled();
 }
 

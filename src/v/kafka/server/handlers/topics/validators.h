@@ -339,7 +339,7 @@ struct iceberg_config_validator {
         // be created with any override. If it is disabled
         // at the cluster level, it cannot be enabled with a topic
         // override.
-        return config::shard_local_cfg().iceberg_enabled();
+        return config::shard_local_cfg().iceberg_enabled.local_value();
     }
 };
 

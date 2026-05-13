@@ -265,7 +265,7 @@ struct iceberg_config_validator {
               "Iceberg configuration cannot be altered on non user topics");
         }
         if (
-          !config::shard_local_cfg().iceberg_enabled()
+          !config::shard_local_cfg().iceberg_enabled.local_value()
           && value != model::iceberg_mode::disabled) {
             return fmt::format(
               "Iceberg disabled in the cluster configuration, enable it by "
