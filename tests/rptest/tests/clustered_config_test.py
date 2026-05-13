@@ -246,3 +246,200 @@ class ClusteredConfigTest(RedpandaTest):
         self.logger.info(
             "clustered_property activation via rolling restart: PASS"
         )
+
+    @cluster(num_nodes=3, log_allow_list=RESTART_LOG_ALLOW_LIST)
+    def test_dead_node_blocks_activation(self):
+        """
+        Verify that a dead/decommissioned node prevents the activation loop
+        from converging a clustered_property change cluster-wide.
+
+        1. Stop node 2 before any config change.
+        2. Stage cloud_topics_enabled=true on the live nodes.
+        3. Rolling-restart the two live nodes; each shows local_value=true
+           and restart=false after its restart.
+        4. Assert that activation does NOT complete while node 2 is dead:
+           the cluster-config status still carries a pending entry for node 2,
+           so the activation loop cannot fire.
+        5. Bring node 2 back online and restart it so it picks up the new
+           config.  All three nodes converge; activation completes.
+        """
+        nodes = self.redpanda.nodes
+        live_nodes = nodes[:2]
+        dead_node = nodes[2]
+
+        # ------------------------------------------------------------------ #
+        # Step 1: stop node 2 before staging any change                      #
+        # ------------------------------------------------------------------ #
+        self.logger.info(
+            f"Stopping node {dead_node.account.hostname} before config change"
+        )
+        self.redpanda.stop_node(dead_node)
+
+        # ------------------------------------------------------------------ #
+        # Step 2: stage cloud_topics_enabled=true on the live nodes          #
+        # ------------------------------------------------------------------ #
+        self.logger.info("Staging cloud_topics_enabled=true")
+        patch_result = self.admin.patch_cluster_config(
+            upsert={self.PROP: True}
+        )
+        new_version = patch_result["config_version"]
+
+        # Wait for the two live nodes to acknowledge the new config version.
+        # The dead node's entry will be stale; query only live nodes.
+        def _live_nodes_at_version():
+            status = self.admin.get_cluster_config_status(
+                node=self.redpanda.controller()
+            )
+            live_ids = {self.redpanda.node_id(n) for n in live_nodes}
+            return all(
+                entry["config_version"] >= new_version
+                for entry in status
+                if entry["node_id"] in live_ids
+            )
+
+        wait_until(
+            _live_nodes_at_version,
+            timeout_sec=30,
+            backoff_sec=0.5,
+            err_msg=(
+                f"Live nodes did not reach config_version >= {new_version}"
+            ),
+        )
+
+        # Both live nodes should report restart=true (change is pending).
+        restart_flags = self._all_restart_flags()
+        self.logger.info(
+            f"Restart flags after staging (dead_node down): {restart_flags}"
+        )
+        for node in live_nodes:
+            node_id = self.redpanda.node_id(node)
+            assert restart_flags.get(node_id, False), (
+                f"Expected restart=true for live node {node_id} after staging, "
+                f"flags={restart_flags}"
+            )
+
+        # ------------------------------------------------------------------ #
+        # Step 3: rolling restart of the two live nodes                      #
+        # ------------------------------------------------------------------ #
+        for i, node in enumerate(live_nodes):
+            hostname = node.account.hostname
+            self.logger.info(
+                f"Rolling restart: restarting live node {i+1}/2 ({hostname})"
+            )
+            self.redpanda.restart_nodes([node])
+
+            # Wait for the remaining live cluster to be healthy.
+            wait_until(
+                self.redpanda.healthy,
+                timeout_sec=60,
+                backoff_sec=1,
+                err_msg=(
+                    f"Cluster not healthy after restarting {hostname}"
+                ),
+            )
+
+            # The restarted node now has the new local active value.
+            local_val = self._local_value(node)
+            assert local_val is True, (
+                f"Expected cloud_topics_enabled local_value=true on "
+                f"{hostname} after restart, got {local_val!r}"
+            )
+
+            # The restarted node should have cleared its own restart flag.
+            node_id = self.redpanda.node_id(node)
+            restart_flags = self._all_restart_flags()
+            assert not restart_flags.get(node_id, True), (
+                f"Expected restart=false for node {node_id} ({hostname}) "
+                f"after restart, flags={restart_flags}"
+            )
+
+        # ------------------------------------------------------------------ #
+        # Step 4: assert activation does NOT complete while node 2 is dead   #
+        # ------------------------------------------------------------------ #
+        # The activation loop requires ALL live nodes to have the new local
+        # value before firing a cluster_config_activate_cmd.  Because the
+        # dead node hasn't reported its local_value, the controller stalls.
+        # Give the loop a generous window and assert it still has not fired.
+        #
+        # Observable signal: the dead node's restart flag remains true in the
+        # cluster-config status, indicating a pending change is unresolved.
+        import time
+        self.logger.info(
+            "Asserting activation blocked while dead node is still down"
+        )
+        time.sleep(5)
+
+        restart_flags = self._all_restart_flags()
+        dead_node_id = self.redpanda.node_id(dead_node)
+        self.logger.info(
+            f"Restart flags with dead_node still down: {restart_flags}"
+        )
+        assert restart_flags.get(dead_node_id, False), (
+            f"Expected restart=true for dead node {dead_node_id} "
+            f"(activation should be blocked), flags={restart_flags}"
+        )
+
+        # ------------------------------------------------------------------ #
+        # Step 5: bring node 2 back and complete activation                  #
+        # ------------------------------------------------------------------ #
+        self.logger.info(
+            f"Starting dead node {dead_node.account.hostname} back up"
+        )
+        self.redpanda.start_node(dead_node)
+
+        wait_until(
+            self.redpanda.healthy,
+            timeout_sec=60,
+            backoff_sec=1,
+            err_msg="Cluster not healthy after restarting dead_node",
+        )
+
+        # Restart the recovered node so it picks up the staged config.
+        self.logger.info(
+            f"Restarting recovered node {dead_node.account.hostname} "
+            "to apply staged config"
+        )
+        self.redpanda.restart_nodes([dead_node])
+
+        wait_until(
+            self.redpanda.healthy,
+            timeout_sec=60,
+            backoff_sec=1,
+            err_msg="Cluster not healthy after config restart of dead_node",
+        )
+
+        # All three nodes now have the new local active value.
+        def _all_nodes_converged():
+            try:
+                return all(
+                    self._local_value(n) is True
+                    for n in self.redpanda.nodes
+                )
+            except Exception:
+                return False
+
+        wait_until(
+            _all_nodes_converged,
+            timeout_sec=30,
+            backoff_sec=0.5,
+            err_msg=(
+                "Not all nodes converged to cloud_topics_enabled=true "
+                "after recovered node restart"
+            ),
+        )
+
+        # All restart flags have cleared — activation is complete.
+        wait_until(
+            lambda: not any(self._all_restart_flags().values()),
+            timeout_sec=30,
+            backoff_sec=0.5,
+            err_msg=(
+                "Expected all restart flags cleared after full convergence, "
+                "but some nodes still report restart=true: "
+                + str(self._all_restart_flags())
+            ),
+        )
+
+        self.logger.info(
+            "dead-node blocks clustered_property activation: PASS"
+        )
