@@ -30,7 +30,7 @@ bool datalake_enabled() {
 }
 
 bool cloud_topics_enabled() {
-    return config::shard_local_cfg().cloud_topics_enabled();
+    return config::shard_local_cfg().cloud_topics_enabled.local_value();
 }
 
 struct memory_shares {

@@ -442,7 +442,7 @@ public:
     }
 
     bool cloud_topic_enabled() const {
-        if (!config::shard_local_cfg().cloud_topics_enabled()) {
+        if (!config::shard_local_cfg().cloud_topics_enabled.local_value()) {
             return false;
         }
         return _overrides
@@ -453,7 +453,7 @@ public:
     }
 
     bool is_tiered_cloud() const {
-        if (!config::shard_local_cfg().cloud_topics_enabled()) {
+        if (!config::shard_local_cfg().cloud_topics_enabled.local_value()) {
             return false;
         }
         return _overrides

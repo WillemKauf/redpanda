@@ -650,7 +650,7 @@ topic_result topics_frontend::validate_topic_configuration(
 
     // the only way that cloud topics can be enabled on a topic is if the cloud
     // topics development feature is also enabled.
-    if (!config::shard_local_cfg().cloud_topics_enabled()) {
+    if (!config::shard_local_cfg().cloud_topics_enabled.local_value()) {
         if (
           assignable_config.cfg.properties.storage_mode
           == model::redpanda_storage_mode::cloud) {

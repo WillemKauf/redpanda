@@ -283,7 +283,7 @@ feature_manager::report_enterprise_features() const {
       cfg.enable_shadow_linking());
     report.set(
       features::license_required_feature::cloud_topics,
-      cfg.cloud_topics_enabled());
+      cfg.cloud_topics_enabled.local_value());
     report.set(
       features::license_required_feature::topic_deletion_disabled,
       !cfg.delete_topic_enable());

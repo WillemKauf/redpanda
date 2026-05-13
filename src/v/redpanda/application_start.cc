@@ -88,7 +88,7 @@ void application::start_runtime_services(
           pm.register_factory<datalake::coordinator::stm_factory>();
           pm.register_factory<datalake::translation::stm_factory>(
             config::shard_local_cfg().iceberg_enabled());
-          if (config::shard_local_cfg().cloud_topics_enabled()) {
+          if (config::shard_local_cfg().cloud_topics_enabled.local_value()) {
               pm.register_factory<cloud_topics::l0::ctp_stm_factory>();
               pm.register_factory<cloud_topics::read_replica::stm_factory>();
               if (ct_test_cfg.use_lsm_metastore) {

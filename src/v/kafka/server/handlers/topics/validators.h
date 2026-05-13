@@ -578,14 +578,14 @@ struct storage_mode_config_validator {
               || !ft->is_active(features::feature::cloud_topics)) {
                 return false;
             }
-            return config::shard_local_cfg().cloud_topics_enabled();
+            return config::shard_local_cfg().cloud_topics_enabled.local_value();
         case model::redpanda_storage_mode::tiered_cloud:
             if (
               ft == nullptr || !ft->is_active(features::feature::cloud_topics)
               || !ft->is_active(features::feature::tiered_cloud_topics)) {
                 return false;
             }
-            return config::shard_local_cfg().cloud_topics_enabled();
+            return config::shard_local_cfg().cloud_topics_enabled.local_value();
         case model::redpanda_storage_mode::unset:
             // unset is always valid - actual behavior depends on
             // shadow_indexing
