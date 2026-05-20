@@ -2575,7 +2575,7 @@ configuration::configuration()
           };
       }),
       "redpanda",
-      &validate_non_empty_string_opt)
+      &validate_non_empty_string)
   , sasl_kerberos_principal_mapping(
       *this,
       static_metadata([] {
@@ -6443,7 +6443,7 @@ configuration::configuration()
           };
       }),
       ss::sstring{net::tls_v1_2_cipher_suites},
-      [](ss::sstring s) -> std::optional<ss::sstring> {
+      [](const ss::sstring& s) -> std::optional<ss::sstring> {
           if (!validate_tls_v1_2_cipher_suites(s)) {
               return ssx::sformat("Invalid cipher suites: {}", s);
           }
@@ -6465,7 +6465,7 @@ configuration::configuration()
           };
       }),
       ss::sstring{net::tls_v1_3_cipher_suites},
-      [](ss::sstring s) -> std::optional<ss::sstring> {
+      [](const ss::sstring& s) -> std::optional<ss::sstring> {
           if (!validate_tls_v1_3_cipher_suites(s)) {
               return ssx::sformat("Invalid cipher suites: {}", s);
           }
@@ -6787,7 +6787,7 @@ configuration::configuration()
           };
       }),
       "glue",
-      &validate_non_empty_string_opt)
+      &validate_non_empty_string)
   , iceberg_rest_catalog_aws_access_key(
       *this,
       static_metadata([] {
@@ -7083,7 +7083,7 @@ configuration::configuration()
           };
       }),
       "~dlq",
-      &validate_non_empty_string_opt)
+      &validate_non_empty_string)
   , iceberg_default_catalog_namespace(
       *this,
       static_metadata([] {
@@ -7847,8 +7847,11 @@ configuration::configuration()
           };
       }),
       "",
-      [this](const ss::sstring& v) -> std::optional<ss::sstring> {
-          if (development_features_enabled()) {
+      // Stateless: looks up the property on the shard-local configuration.
+      // Safe because this validator only fires on user-initiated updates,
+      // long after the initial construction is complete.
+      [](const ss::sstring& v) -> std::optional<ss::sstring> {
+          if (config::shard_local_cfg().development_features_enabled()) {
               return fmt::format(
                 "Development feature flag cannot be changed once enabled.");
           }

@@ -74,22 +74,22 @@ public:
       configuration& conf,
       const base_property::metadata* meta,
       T def,
-      property<T>::validator validator = property<T>::noop_validator)
-      : property<T>(
-          conf,
-          meta,
-          def,
-          [&conf, validator = std::move(validator)](
-            const auto& v) -> std::optional<ss::sstring> {
-              if (development_features_enabled(conf)) {
-                  // delegate to the underlying property's validator
-                  return validator(v);
-              }
-              return "Development feature support is not enabled.";
-          })
-      , _conf(conf)
+      property<T>::validator validator = nullptr)
+      : property<T>(conf, meta, def, validator)
+      , _conf(conf) {}
 
-    {}
+    std::optional<validation_error> validate(const T& v) const override {
+        if (!development_features_enabled(_conf)) {
+            return validation_error{
+              this->name().data(),
+              "Development feature support is not enabled."};
+        }
+        return property<T>::validate(v);
+    }
+
+    std::optional<validation_error> validate(YAML::Node n) const override {
+        return validate(n.as<T>());
+    }
 
     bool is_hidden() const override {
         if (development_features_enabled(_conf)) {

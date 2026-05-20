@@ -78,20 +78,26 @@ template<class T>
 class property : public base_property {
 public:
     using value_type = T;
-    using validator =
-      typename ss::noncopyable_function<std::optional<ss::sstring>(const T&)>;
+    /// A validator is a plain function pointer (8 bytes) — not a polymorphic
+    /// functor — so each property pays for at most a pointer's worth of
+    /// validator storage. Stateless lambdas and free-function references
+    /// (which is what every user-facing call site passes) decay to this type
+    /// implicitly. Derived classes that need stateful validation
+    /// (bounded_property, enum_property, development_feature_property)
+    /// override the virtual `validate(YAML::Node)` instead.
+    using validator = std::optional<ss::sstring> (*)(const T&);
 
     property(
       config_store& conf,
       const base_property::metadata* meta,
       value_type def = value_type{},
-      property::validator validator = property::noop_validator,
+      property::validator validator = nullptr,
       std::optional<legacy_default<value_type>> ld = std::nullopt)
       : base_property(conf, meta)
       , _value(def)
       , _default(std::move(def))
       , _legacy_default(std::move(ld))
-      , _validator(std::move(validator)) {}
+      , _validator(validator) {}
 
     /**
      * Properties aren't moved in normal use on the per-shard
@@ -104,7 +110,7 @@ public:
       , _value(std::move(rhs._value))
       , _default(std::move(rhs._default))
       , _pending_value(std::move(rhs._pending_value))
-      , _validator(std::move(rhs._validator))
+      , _validator(rhs._validator)
       , _bindings(std::move(rhs._bindings)) {
         for (auto& binding : _bindings) {
             binding._parent = this;
@@ -225,7 +231,11 @@ public:
         }
     }
 
-    std::optional<validation_error> validate(const value_type& v) const {
+    virtual std::optional<validation_error>
+    validate(const value_type& v) const {
+        if (_validator == nullptr) {
+            return std::nullopt;
+        }
         if (auto err = _validator(v); err) {
             return std::make_optional<validation_error>(name().data(), *err);
         }
@@ -306,9 +316,9 @@ public:
         }
     }
 
-    constexpr static auto noop_validator = [](const auto&) {
-        return std::nullopt;
-    };
+    /// Sentinel meaning "no validation" — the property accepts any value
+    /// of its underlying type. Equivalent to leaving the validator default.
+    constexpr static validator noop_validator = nullptr;
 
 protected:
     void notify_watchers(const value_type& new_value) {
@@ -985,39 +995,32 @@ public:
       T def,
       std::vector<T> values,
       std::optional<legacy_default<T>> ld = std::nullopt)
-      : property<T>(
-          conf,
-          meta,
-          def,
-          [this](T new_value) -> std::optional<ss::sstring> {
-              if constexpr (reflection::is_std_optional<T>) {
-                  // Accept nullopt as a valid value for optional enums even if
-                  // it is not explicitly listed in the enum values.
-                  if (!new_value.has_value()) {
-                      return std::nullopt;
-                  }
-              }
-
-              auto found = std::ranges::find_if(
-                _values, [&new_value](const T& v) { return v == new_value; });
-              if (found == _values.end()) {
-                  return help_text();
-              } else {
-                  return std::nullopt;
-              }
-          },
-          std::move(ld))
+      : property<T>(conf, meta, def, /*validator=*/nullptr, std::move(ld))
       , _values(values) {}
 
-    std::optional<validation_error>
-    validate(YAML::Node n) const final override {
+    std::optional<validation_error> validate(const T& v) const final {
+        if constexpr (reflection::is_std_optional<T>) {
+            // Accept nullopt as a valid value for optional enums even if
+            // it is not explicitly listed in the enum values.
+            if (!v.has_value()) {
+                return std::nullopt;
+            }
+        }
+        auto found = std::ranges::find_if(
+          _values, [&v](const T& x) { return x == v; });
+        if (found == _values.end()) {
+            return validation_error{this->name().data(), help_text()};
+        }
+        return std::nullopt;
+    }
+
+    std::optional<validation_error> validate(YAML::Node n) const final {
         try {
-            auto v = n.as<T>();
-            return property<T>::validate(v);
+            return validate(n.as<T>());
         } catch (...) {
             // Not convertible (e.g. if the underlying type is an enum class)
             // therefore assume it is out of bounds.
-            return validation_error{property<T>::name().data(), help_text()};
+            return validation_error{this->name().data(), help_text()};
         }
     }
 

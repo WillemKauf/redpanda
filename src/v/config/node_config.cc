@@ -50,7 +50,8 @@ node_config::node_config() noexcept
           };
       }),
       std::nullopt,
-      [](std::optional<model::node_id> id) -> std::optional<ss::sstring> {
+      [](
+        const std::optional<model::node_id>& id) -> std::optional<ss::sstring> {
           if (id && (*id)() < 0) {
               return fmt::format("Negative node_id ({}) not allowed", *id);
           }
@@ -103,7 +104,8 @@ node_config::node_config() noexcept
           };
       }),
       {},
-      [](std::vector<seed_server> s) -> std::optional<ss::sstring> {
+      [](const std::vector<seed_server>& s_in) -> std::optional<ss::sstring> {
+          auto s = s_in;
           std::sort(s.begin(), s.end());
           const auto s_dupe_i = std::adjacent_find(s.cbegin(), s.cend());
           if (s_dupe_i != s.cend()) {

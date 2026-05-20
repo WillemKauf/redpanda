@@ -142,7 +142,7 @@ bool oidc_is_enabled_http() {
 
 bool oidc_is_enabled_kafka() { return has_sasl_mechanism(oauthbearer); }
 
-std::optional<ss::sstring> validate_0_to_1_ratio(const double d) {
+std::optional<ss::sstring> validate_0_to_1_ratio(const double& d) {
     if (d < 0 || d > 1) {
         return fmt::format("Ratio must be in the [0,1] range, got: {}", d);
     }
@@ -155,6 +155,13 @@ validate_non_empty_string_vec(const std::vector<ss::sstring>& vs) {
         if (s.empty()) {
             return "Empty strings are not valid in this collection";
         }
+    }
+    return std::nullopt;
+}
+
+std::optional<ss::sstring> validate_non_empty_string(const ss::sstring& s) {
+    if (s.empty()) {
+        return "Empty string is not valid";
     }
     return std::nullopt;
 }

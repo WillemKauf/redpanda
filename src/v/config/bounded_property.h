@@ -194,31 +194,31 @@ public:
       T def,
       B<I> bounds,
       std::optional<legacy_default<T>> legacy = std::nullopt)
-      : property<T>(
-          conf,
-          meta,
-          def,
-          [this](T new_value) -> std::optional<ss::sstring> {
-              if (detail::bounds_checking_disabled()) {
-                  return std::nullopt;
-              }
-              // Extract inner value if we are an optional<>,
-              // and pass through into numeric_bounds::validate
-              using outer_type = std::decay_t<T>;
-              if constexpr (reflection::is_std_optional<outer_type>) {
-                  if (new_value.has_value()) {
-                      return _bounds.validate(new_value.value());
-                  } else {
-                      // nullopt is always valid
-                      return std::nullopt;
-                  }
-              } else {
-                  return _bounds.validate(new_value);
-              }
-          },
-          legacy)
+      : property<T>(conf, meta, def, /*validator=*/nullptr, legacy)
       , _bounds(bounds)
       , _example(generate_example()) {}
+
+    std::optional<validation_error> validate(const T& v) const override {
+        if (detail::bounds_checking_disabled()) {
+            return std::nullopt;
+        }
+        std::optional<ss::sstring> err;
+        if constexpr (reflection::is_std_optional<std::decay_t<T>>) {
+            if (v.has_value()) {
+                err = _bounds.validate(v.value());
+            }
+        } else {
+            err = _bounds.validate(v);
+        }
+        if (err) {
+            return validation_error{this->name().data(), *err};
+        }
+        return std::nullopt;
+    }
+
+    std::optional<validation_error> validate(YAML::Node n) const override {
+        return validate(n.as<T>());
+    }
 
     using property<T>::set_value;
 

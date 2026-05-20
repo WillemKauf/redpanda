@@ -93,7 +93,7 @@ configuration::configuration()
           };
       }),
       10,
-      [](const size_t max_size) {
+      [](const size_t& max_size) {
           std::optional<ss::sstring> msg{std::nullopt};
           if (max_size == 0) {
               msg = ss::sstring{"Client cache max size must not be zero"};

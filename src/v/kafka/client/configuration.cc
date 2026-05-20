@@ -133,7 +133,7 @@ configuration::configuration()
           };
       }),
       -1,
-      [](int16_t acks) -> std::optional<ss::sstring> {
+      [](const int16_t& acks) -> std::optional<ss::sstring> {
           if (acks < -1 || acks > 1) {
               return ss::format("Validation failed for acks: {}", acks);
           }
