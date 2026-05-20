@@ -48,77 +48,129 @@ struct test_config : public config::config_store {
     test_config()
       : optional_int(
           *this,
-          "optional_int",
-          "An optional int value",
-          {.visibility = config::visibility::tunable},
+          config::static_metadata([] {
+              return config::base_property::metadata{
+                .name = "optional_int",
+                .desc = "An optional int value",
+                .visibility = config::visibility::tunable,
+              };
+          }),
           100)
-      , required_string(
+      , required_string(*this, config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "required_string",
+            .desc = "Required string value",
+            .needs_restart = config::needs_restart::no,
+            .visibility = config::visibility::user,
+          };
+      }))
+      , an_int64_t(
           *this,
-          "required_string",
-          "Required string value",
-          {.needs_restart = config::needs_restart::no,
-           .visibility = config::visibility::user})
-      , an_int64_t(*this, "an_int64_t", "Some other int type", {}, 200)
+          config::static_metadata([] {
+              return config::base_property::metadata{
+                .name = "an_int64_t",
+                .desc = "Some other int type",
+              };
+          }),
+          200)
       , an_aggregate(
           *this,
-          "an_aggregate",
-          "Aggregate type",
-          {},
+          config::static_metadata([] {
+              return config::base_property::metadata{
+                .name = "an_aggregate",
+                .desc = "Aggregate type",
+              };
+          }),
           testing::custom_aggregate{"str", 10})
-      , strings(
-          *this,
-          "strings",
-          "Required strings vector",
-          config::base_property::metadata{})
+      , strings(*this, config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "strings",
+            .desc = "Required strings vector",
+          };
+      }))
       , nullable_int(
           *this,
-          "nullable_int",
-          "A nullable (std::optional) int value",
-          {},
+          config::static_metadata([] {
+              return config::base_property::metadata{
+                .name = "nullable_int",
+                .desc = "A nullable (std::optional) int value",
+              };
+          }),
           std::nullopt)
       , nullable_string(
           *this,
-          "optional_string",
-          "An optional string value",
-          {},
+          config::static_metadata([] {
+              return config::base_property::metadata{
+                .name = "optional_string",
+                .desc = "An optional string value",
+              };
+          }),
           std::nullopt)
       , nullable_strings(
           *this,
-          "optional_strings",
-          "An optional strings vector",
-          {},
+          config::static_metadata([] {
+              return config::base_property::metadata{
+                .name = "optional_strings",
+                .desc = "An optional strings vector",
+              };
+          }),
           std::nullopt)
       , boolean(
           *this,
-          "boolean",
-          "Plain boolean property",
-          config::base_property::metadata{
-            .needs_restart = config::needs_restart::no},
+          config::static_metadata([] {
+              return config::base_property::metadata{
+                .name = "boolean",
+                .desc = "Plain boolean property",
+                .needs_restart = config::needs_restart::no,
+              };
+          }),
           false)
-      , seconds(*this, "seconds", "Plain seconds")
-      , optional_seconds(*this, "optional_seconds", "Optional seconds")
-      , milliseconds(*this, "milliseconds", "Plain milliseconds")
-      , default_secret_string(
-          *this,
-          "default_secret_string",
-          "Secret string value set to the default",
-          {.secret = config::is_secret::yes})
-      , secret_string(
-          *this,
-          "secret_string",
-          "Secret string value",
-          {.secret = config::is_secret::yes})
+      , seconds(*this, config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "seconds", .desc = "Plain seconds"};
+      }))
+      , optional_seconds(*this, config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "optional_seconds", .desc = "Optional seconds"};
+      }))
+      , milliseconds(*this, config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "milliseconds", .desc = "Plain milliseconds"};
+      }))
+      , default_secret_string(*this, config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "default_secret_string",
+            .desc = "Secret string value set to the default",
+            .secret = config::is_secret::yes,
+          };
+      }))
+      , secret_string(*this, config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "secret_string",
+            .desc = "Secret string value",
+            .secret = config::is_secret::yes,
+          };
+      }))
       , aliased_bool(
           *this,
-          "aliased_bool",
-          "Property with a compat alias",
-          {.aliases = {"aliased_bool_legacy"}},
+          config::static_metadata([] {
+              static constexpr std::string_view _aliases[] = {
+                "aliased_bool_legacy"};
+              return config::base_property::metadata{
+                .name = "aliased_bool",
+                .desc = "Property with a compat alias",
+                .aliases = _aliases,
+              };
+          }),
           true)
       , bounded_int(
           *this,
-          "bounded_int",
-          "Bounded integer property",
-          {},
+          config::static_metadata([] {
+              return config::base_property::metadata{
+                .name = "bounded_int",
+                .desc = "Bounded integer property",
+              };
+          }),
           50,
           {.min = 0, .max = 100}) {}
 };

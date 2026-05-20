@@ -33,7 +33,9 @@ SEASTAR_THREAD_TEST_CASE(throughput_control_group_test) {
     struct test_config : public config::config_store {
         config::property<std::vector<config::throughput_control_group>> cgroups;
         test_config()
-          : cgroups(*this, "cgroups", "") {}
+          : cgroups(*this, config::static_metadata([] {
+              return config::base_property::metadata{.name = "cgroups"};
+          })) {}
     };
 
     auto cfg_node = YAML::Load(R"(

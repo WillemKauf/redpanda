@@ -190,16 +190,12 @@ class bounded_property : public property<T> {
 public:
     bounded_property(
       config_store& conf,
-      std::string_view name,
-      std::string_view desc,
-      base_property::metadata meta,
+      const base_property::metadata* meta,
       T def,
       B<I> bounds,
       std::optional<legacy_default<T>> legacy = std::nullopt)
       : property<T>(
           conf,
-          name,
-          desc,
           meta,
           def,
           [this](T new_value) -> std::optional<ss::sstring> {

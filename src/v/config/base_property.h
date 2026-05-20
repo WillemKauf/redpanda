@@ -23,7 +23,9 @@
 
 #include <any>
 #include <iosfwd>
+#include <span>
 #include <string>
+#include <string_view>
 
 namespace config {
 
@@ -118,10 +120,18 @@ fmt::iterator format_to(visibility v, fmt::iterator);
  */
 class base_property {
 public:
+    /// Property metadata kept in static storage and pointed to by every
+    /// property instance. This struct is intentionally constexpr-constructible:
+    /// `aliases` is a span over a static array, `example` is a string_view
+    /// (empty when no example is specified), and all other fields are simple
+    /// scalars.
     struct metadata {
+        std::string_view name;
+        std::string_view desc;
+
         required required{required::no};
         needs_restart needs_restart{needs_restart::yes};
-        std::optional<ss::sstring> example{std::nullopt};
+        std::string_view example;
         visibility visibility{visibility::user};
         is_secret secret{is_secret::no};
 
@@ -136,26 +146,20 @@ public:
 
         // Aliases are used exclusively for input: all output (e.g. listing
         // configuration) uses the primary name of the property.
-        std::vector<std::string_view> aliases;
+        std::span<const std::string_view> aliases;
     };
 
-    base_property(
-      config_store& conf,
-      std::string_view name,
-      std::string_view desc,
-      metadata meta);
+    base_property(config_store& conf, const metadata* meta);
 
-    const std::string_view& name() const { return _name; }
-    const std::string_view& desc() const { return _desc; }
+    std::string_view name() const { return _meta->name; }
+    std::string_view desc() const { return _meta->desc; }
 
-    const required is_required() const { return _meta.required; }
-    bool needs_restart() const { return bool(_meta.needs_restart); }
-    visibility get_visibility() const { return _meta.visibility; }
-    bool is_secret() const { return bool(_meta.secret); }
-    const std::vector<std::string_view>& aliases() const {
-        return _meta.aliases;
-    }
-    bool gets_restored() const { return bool(_meta.gets_restored); }
+    const required is_required() const { return _meta->required; }
+    bool needs_restart() const { return bool(_meta->needs_restart); }
+    visibility get_visibility() const { return _meta->visibility; }
+    bool is_secret() const { return bool(_meta->secret); }
+    std::span<const std::string_view> aliases() const { return _meta->aliases; }
+    bool gets_restored() const { return bool(_meta->gets_restored); }
 
     /// Serialize the property value to JSON. A full configuration
     /// serialization is performed in config_store::to_json where the JSON
@@ -279,12 +283,20 @@ public:
      */
     virtual void notify_original_version(legacy_version) = 0;
 
-private:
-    std::string_view _name;
-    std::string_view _desc;
-
 protected:
-    metadata _meta;
+    const metadata* _meta;
     void assert_live_settable() const;
 };
+
+/// Yields a pointer to a function-local-static metadata initialized from
+/// the given factory's return value. Each call site instantiates this
+/// template with a unique closure type, so each gets its own static; all
+/// shards hitting the same call site share one metadata instance.
+template<typename Factory>
+[[nodiscard]] const base_property::metadata*
+static_metadata(Factory&& factory) {
+    static const base_property::metadata _m = factory();
+    return &_m;
+}
+
 }; // namespace config

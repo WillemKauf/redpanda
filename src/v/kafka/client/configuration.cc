@@ -26,56 +26,80 @@ configuration::configuration(const YAML::Node& cfg)
 configuration::configuration()
   : brokers(
       *this,
-      "brokers",
-      "Network addresses of the Kafka API servers to which the HTTP Proxy "
-      "client should connect.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "brokers",
+            .desc = "Network addresses of the Kafka API servers to which the "
+                    "HTTP Proxy client should connect.",
+          };
+      }),
       std::vector<net::unresolved_address>({{"127.0.0.1", 9092}}))
   , broker_tls(
       *this,
-      "broker_tls",
-      "TLS configuration for the Kafka API servers to which the HTTP Proxy "
-      "client should connect.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "broker_tls",
+            .desc = "TLS configuration for the Kafka API servers to which the "
+                    "HTTP Proxy client should connect.",
+          };
+      }),
       config::tls_config(),
       config::tls_config::validate)
   , retries(
       *this,
-      "retries",
-      "Number of times to retry a request to a broker.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "retries",
+            .desc = "Number of times to retry a request to a broker.",
+          };
+      }),
       5)
   , retry_base_backoff(
       *this,
-      "retry_base_backoff_ms",
-      "Delay (in milliseconds) for initial retry backoff.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "retry_base_backoff_ms",
+            .desc = "Delay (in milliseconds) for initial retry backoff.",
+          };
+      }),
       100ms)
   , produce_batch_record_count(
       *this,
-      "produce_batch_record_count",
-      "Number of records to batch before sending to broker.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "produce_batch_record_count",
+            .desc = "Number of records to batch before sending to broker.",
+          };
+      }),
       1000)
   , produce_batch_size_bytes(
       *this,
-      "produce_batch_size_bytes",
-      "Number of bytes to batch before sending to broker.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "produce_batch_size_bytes",
+            .desc = "Number of bytes to batch before sending to broker.",
+          };
+      }),
       1048576)
   , produce_batch_delay(
       *this,
-      "produce_batch_delay_ms",
-      "Delay (in milliseconds) to wait before sending batch.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "produce_batch_delay_ms",
+            .desc = "Delay (in milliseconds) to wait before sending batch.",
+          };
+      }),
       100ms)
   , produce_compression_type(
       *this,
-      "produce_compression_type",
-      "Enable or disable compression by the Kafka client. Specify `none` to "
-      "disable compression or one of the supported types [gzip, snappy, lz4, "
-      "zstd].",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "produce_compression_type",
+            .desc = "Enable or disable compression by the Kafka client. "
+                    "Specify `none` to disable compression or one of the "
+                    "supported types [gzip, snappy, lz4, zstd].",
+          };
+      }),
       "none",
       [](const ss::sstring& v) -> std::optional<ss::sstring> {
           constexpr auto supported_types = std::to_array<std::string_view>(
@@ -90,17 +114,24 @@ configuration::configuration()
       })
   , produce_shutdown_delay(
       *this,
-      "produce_shutdown_delay_ms",
-      "Delay (in milliseconds) to allow for final flush of buffers before "
-      "shutting down.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "produce_shutdown_delay_ms",
+            .desc = "Delay (in milliseconds) to allow for final flush of "
+                    "buffers before shutting down.",
+          };
+      }),
       0ms)
   , produce_ack_level(
       *this,
-      "produce_ack_level",
-      "Number of acknowledgments the producer requires the leader to have "
-      "received before considering a request complete.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "produce_ack_level",
+            .desc = "Number of acknowledgments the producer requires the "
+                    "leader to have received before considering a request "
+                    "complete.",
+          };
+      }),
       -1,
       [](int16_t acks) -> std::optional<ss::sstring> {
           if (acks < -1 || acks > 1) {
@@ -110,87 +141,126 @@ configuration::configuration()
       })
   , consumer_request_timeout(
       *this,
-      "consumer_request_timeout_ms",
-      "Interval (in milliseconds) for consumer request timeout.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "consumer_request_timeout_ms",
+            .desc = "Interval (in milliseconds) for consumer request timeout.",
+          };
+      }),
       100ms)
   , consumer_request_min_bytes(
       *this,
-      "consumer_request_min_bytes",
-      "Minimum bytes to fetch per request.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "consumer_request_min_bytes",
+            .desc = "Minimum bytes to fetch per request.",
+          };
+      }),
       1,
       {.min = 0})
   , consumer_request_max_bytes(
       *this,
-      "consumer_request_max_bytes",
-      "Maximum bytes to fetch per request.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "consumer_request_max_bytes",
+            .desc = "Maximum bytes to fetch per request.",
+          };
+      }),
       1_MiB,
       {.min = 0})
   , consumer_session_timeout(
       *this,
-      "consumer_session_timeout_ms",
-      "Timeout (in milliseconds) for consumer session.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "consumer_session_timeout_ms",
+            .desc = "Timeout (in milliseconds) for consumer session.",
+          };
+      }),
       10s)
   , consumer_rebalance_timeout(
       *this,
-      "consumer_rebalance_timeout_ms",
-      "Timeout (in milliseconds) for consumer rebalance.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "consumer_rebalance_timeout_ms",
+            .desc = "Timeout (in milliseconds) for consumer rebalance.",
+          };
+      }),
       2s)
   , consumer_heartbeat_interval(
       *this,
-      "consumer_heartbeat_interval_ms",
-      "Interval (in milliseconds) for consumer heartbeats.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "consumer_heartbeat_interval_ms",
+            .desc = "Interval (in milliseconds) for consumer heartbeats.",
+          };
+      }),
       500ms)
   , sasl_mechanism(
       *this,
-      "sasl_mechanism",
-      "The SASL mechanism to use when the HTTP Proxy client connects to the "
-      "Kafka API. These credentials are used when the HTTP Proxy API "
-      "listener has `authentication_method: none` but the cluster requires "
-      "authenticated access to the Kafka API. Starting in Redpanda 25.2, "
-      "ephemeral credentials for HTTP Proxy are removed. If your HTTP Proxy "
-      "listeners use `authentication_method: none`, you must configure these "
-      "SASL properties for HTTP Proxy to authenticate with the Kafka API. "
-      "For more information, see "
-      "https://docs.redpanda.com/current/manage/security/authentication/",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "sasl_mechanism",
+            .desc
+            = "The SASL mechanism to use when the HTTP Proxy client connects "
+              "to the Kafka API. These credentials are used when the HTTP "
+              "Proxy API listener has `authentication_method: none` but the "
+              "cluster requires authenticated access to the Kafka API. "
+              "Starting in Redpanda 25.2, ephemeral credentials for HTTP Proxy "
+              "are removed. If your HTTP Proxy listeners use "
+              "`authentication_method: none`, you must configure these SASL "
+              "properties for HTTP Proxy to authenticate with the Kafka API. "
+              "For more information, see "
+              "https://docs.redpanda.com/current/manage/security/"
+              "authentication/",
+          };
+      }),
       "")
   , scram_username(
       *this,
-      "scram_username",
-      "Username to use for SCRAM authentication mechanisms when the HTTP "
-      "Proxy client connects to the Kafka API. This property is required "
-      "when the HTTP Proxy API listener has `authentication_method: none` "
-      "but the cluster requires authenticated access to the Kafka API. "
-      "Starting in Redpanda 25.2, ephemeral credentials for HTTP Proxy are "
-      "removed. You must configure this property if your HTTP Proxy "
-      "listeners use `authentication_method: none`.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "scram_username",
+            .desc
+            = "Username to use for SCRAM authentication mechanisms when the "
+              "HTTP Proxy client connects to the Kafka API. This property is "
+              "required when the HTTP Proxy API listener has "
+              "`authentication_method: none` but the cluster requires "
+              "authenticated access to the Kafka API. Starting in Redpanda "
+              "25.2, ephemeral credentials for HTTP Proxy are removed. You "
+              "must configure this property if your HTTP Proxy listeners use "
+              "`authentication_method: none`.",
+          };
+      }),
       "")
   , scram_password(
       *this,
-      "scram_password",
-      "Password to use for SCRAM authentication mechanisms when the HTTP "
-      "Proxy client connects to the Kafka API. This property is required "
-      "when the HTTP Proxy API listener has `authentication_method: none` "
-      "but the cluster requires authenticated access to the Kafka API. "
-      "Starting in Redpanda 25.2, ephemeral credentials for HTTP Proxy are "
-      "removed. You must configure this property if your HTTP Proxy "
-      "listeners use `authentication_method: none`.",
-      {.secret = config::is_secret::yes},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "scram_password",
+            .desc
+            = "Password to use for SCRAM authentication mechanisms when the "
+              "HTTP Proxy client connects to the Kafka API. This property is "
+              "required when the HTTP Proxy API listener has "
+              "`authentication_method: none` but the cluster requires "
+              "authenticated access to the Kafka API. Starting in Redpanda "
+              "25.2, ephemeral credentials for HTTP Proxy are removed. You "
+              "must configure this property if your HTTP Proxy listeners use "
+              "`authentication_method: none`.",
+            .secret = config::is_secret::yes,
+          };
+      }),
       "")
   , client_identifier(
       *this,
-      "client_identifier",
-      "Custom identifier to include in the Kafka request header for the HTTP "
-      "Proxy client. This identifier can help debug or monitor client "
-      "activities.",
-      {},
+      config::static_metadata([] {
+          return config::base_property::metadata{
+            .name = "client_identifier",
+            .desc
+            = "Custom identifier to include in the Kafka request header for "
+              "the HTTP Proxy client. This identifier can help debug or "
+              "monitor client activities.",
+          };
+      }),
       "test_client") {}
 
 namespace {
@@ -221,8 +291,7 @@ void validate_sasl_properties(
         throw std::invalid_argument(
           ss::format(
             "Unknown SASL mechanism: {}, currently Redpanda client only "
-            "supports "
-            "SCRAM-256, SCRAM-512 and OAUTHBEARER",
+            "supports SCRAM-256, SCRAM-512 and OAUTHBEARER",
             mechanism));
     }
 

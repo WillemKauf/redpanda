@@ -83,13 +83,11 @@ public:
 
     property(
       config_store& conf,
-      std::string_view name,
-      std::string_view desc,
-      base_property::metadata meta = {},
+      const base_property::metadata* meta,
       value_type def = value_type{},
       property::validator validator = property::noop_validator,
       std::optional<legacy_default<value_type>> ld = std::nullopt)
-      : base_property(conf, name, desc, meta)
+      : base_property(conf, meta)
       , _value(def)
       , _default(std::move(def))
       , _legacy_default(std::move(ld))
@@ -279,8 +277,8 @@ public:
     }
 
     std::optional<std::string_view> example() const override {
-        if (_meta.example.has_value()) {
-            return _meta.example;
+        if (!_meta->example.empty()) {
+            return _meta->example;
         } else {
             if constexpr (std::is_same_v<value_type, bool>) {
                 // Provide an example that is the opposite of the default
@@ -949,8 +947,8 @@ private:
  */
 class deprecated_property : public property<ss::sstring> {
 public:
-    deprecated_property(config_store& conf, std::string_view name)
-      : property(conf, name, "", {.visibility = visibility::deprecated}) {}
+    deprecated_property(config_store& conf, const metadata* meta)
+      : property(conf, meta) {}
 
     ss::sstring deprecated_property_log_line() const {
         return fmt::format(
@@ -983,16 +981,12 @@ class enum_property : public property<T> {
 public:
     enum_property(
       config_store& conf,
-      std::string_view name,
-      std::string_view desc,
-      base_property::metadata meta,
+      const base_property::metadata* meta,
       T def,
       std::vector<T> values,
       std::optional<legacy_default<T>> ld = std::nullopt)
       : property<T>(
           conf,
-          name,
-          desc,
           meta,
           def,
           [this](T new_value) -> std::optional<ss::sstring> {
@@ -1130,12 +1124,10 @@ class hidden_when_default_property : public property<T> {
 public:
     hidden_when_default_property(
       config_store& conf,
-      std::string_view name,
-      std::string_view desc,
-      base_property::metadata meta,
+      const base_property::metadata* meta,
       T def,
       property<T>::validator validator = property<T>::noop_validator)
-      : property<T>(conf, name, desc, meta, def, std::move(validator)) {}
+      : property<T>(conf, meta, def, std::move(validator)) {}
 
     bool is_hidden() const override {
         return this->value() == this->default_value();

@@ -72,15 +72,11 @@ class development_feature_property : public property<T> {
 public:
     development_feature_property(
       configuration& conf,
-      std::string_view name,
-      std::string_view desc,
-      base_property::metadata meta,
+      const base_property::metadata* meta,
       T def,
       property<T>::validator validator = property<T>::noop_validator)
       : property<T>(
           conf,
-          name,
-          desc,
           meta,
           def,
           [&conf, validator = std::move(validator)](
@@ -108,8 +104,6 @@ private:
 };
 
 struct configuration final : public config_store {
-    using meta = base_property::metadata;
-
     // WAL
     bounded_property<uint64_t> log_segment_size;
     property<std::optional<uint64_t>> log_segment_size_min;

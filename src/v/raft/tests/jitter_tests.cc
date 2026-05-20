@@ -39,14 +39,16 @@ struct config_store : public config::config_store {
     config::property<std::chrono::milliseconds> timeout;
 
     config_store()
-      :
-
-      timeout(
-        *this,
-        "timeout",
-        "timeout for the jitter",
-        {.needs_restart = config::needs_restart::no},
-        std::chrono::milliseconds(100)) {}
+      : timeout(
+          *this,
+          static_metadata([] {
+              return base_property::metadata{
+                .name = "timeout",
+                .desc = "timeout for the jitter",
+                .needs_restart = config::needs_restart::no,
+              };
+          }),
+          std::chrono::milliseconds(100)) {}
 };
 
 SEASTAR_THREAD_TEST_CASE(base_jitter_update) {

@@ -13,16 +13,10 @@
 #include "config/config_store.h"
 
 namespace config {
-base_property::base_property(
-  config_store& conf,
-  std::string_view name,
-  std::string_view desc,
-  base_property::metadata meta)
-  : _name(name)
-  , _desc(desc)
-  , _meta(std::move(meta)) {
-    conf._properties.emplace(name, this);
-    for (const auto& alias : _meta.aliases) {
+base_property::base_property(config_store& conf, const metadata* meta)
+  : _meta(meta) {
+    conf._properties.emplace(_meta->name, this);
+    for (const auto& alias : _meta->aliases) {
         auto [_, inserted] = conf._aliases.emplace(alias, this);
 
         vassert(inserted, "Two properties tried to register the same alias");
@@ -51,7 +45,7 @@ fmt::iterator format_to(visibility v, fmt::iterator out) {
  */
 void base_property::assert_live_settable() const {
     vassert(
-      _meta.needs_restart == needs_restart::no,
+      _meta->needs_restart == needs_restart::no,
       "Property {} must be be marked as needs_restart::no",
       name());
 }

@@ -26,24 +26,36 @@ struct test_config : public config::config_store {
     test_config()
       : valid_retention(
           *this,
-          "valid_retention",
-          "A positive value",
-          {.needs_restart = config::needs_restart::no,
-           .visibility = config::visibility::user},
+          config::static_metadata([] {
+              return config::base_property::metadata{
+                .name = "valid_retention",
+                .desc = "A positive value",
+                .needs_restart = config::needs_restart::no,
+                .visibility = config::visibility::user,
+              };
+          }),
           10080min)
       , inf_retention(
           *this,
-          "inf_retention",
-          "-1 should be interpreted as infinity",
-          {.needs_restart = config::needs_restart::no,
-           .visibility = config::visibility::user},
+          config::static_metadata([] {
+              return config::base_property::metadata{
+                .name = "inf_retention",
+                .desc = "-1 should be interpreted as infinity",
+                .needs_restart = config::needs_restart::no,
+                .visibility = config::visibility::user,
+              };
+          }),
           10080min)
       , default_retention(
           *this,
-          "default_retention",
-          "not set retention config should return default value",
-          {.needs_restart = config::needs_restart::no,
-           .visibility = config::visibility::user},
+          config::static_metadata([] {
+              return config::base_property::metadata{
+                .name = "default_retention",
+                .desc = "not set retention config should return default value",
+                .needs_restart = config::needs_restart::no,
+                .visibility = config::visibility::user,
+              };
+          }),
           10080min) {}
 };
 
