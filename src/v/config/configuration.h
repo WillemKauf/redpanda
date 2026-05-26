@@ -814,6 +814,7 @@ public:
     bounded_property<size_t>
       cloud_topics_max_concurrent_leveling_jobs_per_shard;
     property<double> cloud_topics_leveling_min_extent_size_ratio;
+    property<size_t> cloud_topics_leveling_max_range_bytes;
     bounded_property<uint64_t> cloud_topics_compaction_key_map_memory;
     property<std::chrono::milliseconds>
       cloud_topics_long_term_garbage_collection_interval;
