@@ -4797,6 +4797,15 @@ configuration::configuration()
       "and eligible for leveling.",
       {.needs_restart = needs_restart::no, .visibility = visibility::tunable},
       0.5)
+  , cloud_topics_leveling_max_range_bytes(
+      *this,
+      "cloud_topics_leveling_max_range_bytes",
+      "Maximum total bytes per leveling job (one contiguous run of "
+      "undersized extents). Runs exceeding this are split into multiple "
+      "jobs so that each job's rewrite and metastore commit stays bounded "
+      "in time and blast radius. Lower values mean more, smaller jobs.",
+      {.needs_restart = needs_restart::no, .visibility = visibility::tunable},
+      1_GiB)
   , cloud_topics_compaction_key_map_memory(
       *this,
       "cloud_topics_compaction_key_map_memory",
