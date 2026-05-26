@@ -342,10 +342,10 @@ log_info_collector::build_leveling_specs(
   log_list_t& logs_list, model::timestamp collection_timestamp) const {
     auto target_size
       = config::shard_local_cfg().cloud_topics_reconciliation_max_object_size();
-    // TODO: Replace with cluster config.
-    constexpr double leveling_object_size_threshold = 0.5;
+    auto ratio
+      = config::shard_local_cfg().cloud_topics_leveling_min_extent_size_ratio();
     auto min_acceptable = static_cast<size_t>(
-      static_cast<double>(target_size) * leveling_object_size_threshold);
+      static_cast<double>(target_size) * ratio);
 
     chunked_vector<metastore::leveling_info_spec> specs;
     for (auto& log : logs_list) {

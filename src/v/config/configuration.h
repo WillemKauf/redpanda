@@ -810,6 +810,10 @@ public:
     property<size_t> cloud_topics_compaction_max_object_size;
     property<size_t> cloud_topics_l1_indexing_interval;
     property<std::chrono::milliseconds> cloud_topics_compaction_interval_ms;
+    property<std::chrono::milliseconds> cloud_topics_leveling_interval_ms;
+    bounded_property<size_t>
+      cloud_topics_max_concurrent_leveling_jobs_per_shard;
+    property<double> cloud_topics_leveling_min_extent_size_ratio;
     bounded_property<uint64_t> cloud_topics_compaction_key_map_memory;
     property<std::chrono::milliseconds>
       cloud_topics_long_term_garbage_collection_interval;
