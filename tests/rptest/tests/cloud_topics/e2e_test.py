@@ -597,3 +597,125 @@ class EndToEndCloudTopicsCompactionTest(EndToEndCloudTopicsBase):
                 backoff_sec=1,
                 err_msg="Did not see a fully compacted CTP log.",
             )
+
+
+class EndToEndCloudTopicsLevelingTest(EndToEndCloudTopicsBase):
+    """End-to-end test for per-range leveling.
+
+    Produces enough data to create many small L1 objects, raises the slot
+    pool so multiple ranges per shard can run in parallel, lowers the
+    leveling interval so the test does not wait several minutes, then waits
+    for the leveling queue and inflight counters to drain. Verifies data
+    integrity by reading all produced records back.
+    """
+
+    topics = (
+        TopicSpec(
+            name=EndToEndCloudTopicsBase.s3_topic_name,
+            partition_count=1,
+            replication_factor=3,
+        ),
+    )
+
+    kgo_producer: KgoVerifierProducer
+    kgo_consumer: KgoVerifierSeqConsumer
+
+    LEVELING_INTERVAL_MS = 2000
+    MAX_CONCURRENT = 4
+    MIN_EXTENT_RATIO = 0.8
+    RECONCILIATION_MAX_OBJECT_SIZE = 4 * 1024 * 1024
+
+    def __init__(self, test_context):
+        extra_rp_conf = {
+            "cloud_topics_leveling_interval_ms": self.LEVELING_INTERVAL_MS,
+            "cloud_topics_max_concurrent_leveling_jobs_per_shard": self.MAX_CONCURRENT,
+            "cloud_topics_leveling_min_extent_size_ratio": self.MIN_EXTENT_RATIO,
+            "cloud_topics_reconciliation_max_object_size": self.RECONCILIATION_MAX_OBJECT_SIZE,
+        }
+        super(EndToEndCloudTopicsLevelingTest, self).__init__(
+            test_context,
+            extra_rp_conf,
+        )
+        self.msg_size = 4096
+        self.msg_count = 20000
+
+    def _metric_sum(self, metric_name):
+        assert self.redpanda
+        return self.redpanda.metric_sum(
+            metric_name=metric_name,
+            metrics_endpoint=MetricsEndpoint.METRICS,
+            expect_metric=True,
+        )
+
+    def get_leveling_queue_length(self):
+        return self._metric_sum(
+            "vectorized_cloud_topics_compaction_scheduler_leveling_queue_length"
+        )
+
+    def get_leveling_completed(self):
+        return self._metric_sum(
+            "vectorized_cloud_topics_compaction_scheduler_leveling_ranges_completed_total"
+        )
+
+    def produce(self):
+        assert self.redpanda
+        assert self.topic
+        try:
+            self.kgo_producer = KgoVerifierProducer(
+                self.test_context,
+                self.redpanda,
+                self.topic,
+                msg_size=self.msg_size,
+                msg_count=self.msg_count,
+            )
+            self.kgo_producer.start()
+            self.kgo_producer.wait()
+        finally:
+            self.kgo_producer.stop()
+
+    def consume(self):
+        assert self.redpanda
+        assert self.topic
+        traffic_node = self.kgo_producer.nodes[0]
+        try:
+            self.kgo_consumer = KgoVerifierSeqConsumer(
+                self.test_context,
+                self.redpanda,
+                self.topic,
+                self.msg_size,
+                loop=False,
+                nodes=[traffic_node],
+            )
+            self.kgo_consumer.start(clean=False)
+            self.kgo_consumer.wait()
+        finally:
+            self.kgo_consumer.stop()
+
+    @cluster(num_nodes=4)
+    def test_per_range_leveling(self):
+        self.produce()
+
+        # Wait until at least one leveling range has been completed.
+        def saw_leveling():
+            return self.get_leveling_completed() > 0
+
+        wait_until(
+            saw_leveling,
+            timeout_sec=120,
+            backoff_sec=1,
+            err_msg="No leveling ranges were completed",
+        )
+
+        # Wait for the queue to drain.
+        def leveling_drained():
+            return self.get_leveling_queue_length() == 0
+
+        wait_until(
+            leveling_drained,
+            timeout_sec=120,
+            backoff_sec=1,
+            err_msg="Leveling did not drain",
+        )
+
+        # Read all records back to verify data integrity.
+        self.consume()
