@@ -18,6 +18,7 @@
 #include "cloud_topics/level_one/metastore/replicated_metastore.h"
 #include "cluster/metadata_cache.h"
 #include "container/chunked_hash_map.h"
+#include "container/chunked_vector.h"
 #include "model/fundamental.h"
 
 #include <seastar/core/condition-variable.hh>
@@ -29,9 +30,9 @@ class SchedulerTestFixture;
 namespace cloud_topics::l1 {
 
 // A worker_manager which exists as a singleton on shard0, owns a sharded pool
-// of `compaction_worker`s, and provides access to a priority queue of CTPs
-// which require compaction. Manages inflight compactions and can request early
-// abort of inflight jobs.
+// of `compaction_worker`s, and provides access to two priority queues of CTPs
+// that require maintenance work: one for compaction, one for leveling. Manages
+// inflight jobs and can request early abort of inflight jobs.
 // TODO: Hook this up to the AdminAPI to allow for users to customize which
 // shards have active `compaction_worker`s, and persist that information in e.g.
 // the kvstore.
@@ -41,46 +42,54 @@ public:
 
     worker_manager(
       log_compaction_queue&,
+      leveling_queue&,
       ss::sharded<file_io>*,
       ss::sharded<replicated_metastore>*,
       ss::sharded<cluster::metadata_cache>*,
       compaction_scheduler_probe&,
       ss::sharded<level_one_reader_probe>*);
 
-    // Starts the pool of workers, making them available for compaction jobs.
+    // Starts the pool of workers, making them available for maintenance jobs.
     ss::future<> start();
 
-    // Stops all workers (and inflight compaction jobs) and then destructs
-    // workers. Workers will no longer accept compaction jobs after this
-    // function has been called, and waiters will be declined. This should only
-    // be invoked during application shutdown.
+    // Stops all workers (and inflight jobs) and then destructs workers.
+    // Workers will no longer accept jobs after this function has been called,
+    // and waiters will be declined. This should only be invoked during
+    // application shutdown.
     ss::future<> stop();
 
-    // Returns the top entry of `_work_queue`, if it is not empty, and sets
-    // inflight state for the provided shard & CTP. Returns `std::nullopt` if
-    // the `_work_queue` is empty.
+    // Returns the top entry of `_compaction_queue`, if it is not empty, and
+    // sets inflight state for the provided shard & CTP.
     std::optional<foreign_log_compaction_meta_ptr>
-      try_acquire_work(ss::shard_id);
+      try_acquire_compaction_work(ss::shard_id);
 
-    // Resets inflight state for the provided CTP.
-    void complete_work(log_compaction_meta*);
+    // Returns the top entry of `_leveling_queue`, dropping at the head any
+    // jobs whose meta has been unmanaged.
+    std::optional<foreign_leveling_job_ptr>
+      try_acquire_leveling_work(ss::shard_id);
+
+    // Resets inflight state for the provided CTP after a compaction job
+    // completes.
+    void complete_compaction_work(log_compaction_meta*);
+
+    // Clears some leveling state for the provided CTP after a leveling job
+    // completes.
+    void complete_leveling_work(leveling_job*, ss::shard_id);
 
     // If an inflight compaction job for the provided log exists, a signal is
     // sent to the worker shard on which the job is occurring to request an
-    // early abort. The returned future from this function does not, upon
-    // resolving, guarantee that the inflight compaction (if underway) has been
-    // stopped, only that a pre-emption request has been made.
-    //
-    // Note that stopping compaction is much different than fully stopping a
-    // worker. This function leaves the worker in a valid state, allowing future
-    // compaction jobs to be ran. This function is ideally used when e.g. a
-    // partition is removed or the `cleanup.policy` for a topic is changed and a
-    // single compaction job must be stopped.
+    // early abort.
     void request_stop_compaction(log_compaction_meta_ptr);
 
-    // Alert all workers that new jobs have become available in the
-    // `_work_queue`.
-    ss::future<> alert_workers();
+    // Soft-stops every inflight leveling range for `tidp` across all worker
+    // shards that have one.
+    void request_stop_leveling(log_compaction_meta_ptr);
+
+    // Alert just the compaction fibers on all workers.
+    ss::future<> alert_compaction_workers();
+
+    // Alert just the leveling fibers on all workers.
+    ss::future<> alert_leveling_workers();
 
     // Pauses the worker on the provided shard.
     ss::future<> pause_worker(ss::shard_id);
@@ -93,7 +102,10 @@ private:
     friend class ::SchedulerTestFixture;
 
     // Owned by `scheduler`.
-    log_compaction_queue& _work_queue;
+    log_compaction_queue& _compaction_queue;
+
+    // Owned by `scheduler`.
+    leveling_queue& _leveling_queue;
 
     // Owned by `app`.
     ss::sharded<file_io>* _io;

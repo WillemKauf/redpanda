@@ -25,9 +25,18 @@ namespace cloud_topics::l1 {
 
 namespace {
 
+// After a leveling range commits, suppress re-scheduling the same range for
+// this many leveling intervals. Covers the window where the new layout is not
+// yet observable to sampling and dampens churn on capped/non-resolving
+// rewrites.
+constexpr int64_t leveling_range_cooldown_intervals = 3;
+
 inline bool needs_compaction(
   const log_compaction_meta& log,
   const cluster::topic_configuration& topic_cfg) {
+    if (!topic_cfg.is_compacted()) {
+        return false;
+    }
     auto& topic_mcdr = topic_cfg.properties.min_cleanable_dirty_ratio;
     auto min_cleanable_dirty_ratio
       = topic_mcdr.has_optional_value()
@@ -177,10 +186,22 @@ log_info_collector::build_compaction_specs(
   size_t size,
   model::timestamp collection_timestamp) const {
     chunked_vector<metastore::compaction_info_spec> specs;
-
     specs.reserve(size);
 
     for (const auto& log : logs_list) {
+        auto topic_cfg_opt = _topic_metadata_provider->get_topic_cfg(
+          model::topic_namespace_view(log.ntp));
+
+        if (!topic_cfg_opt.has_value()) {
+            continue;
+        }
+
+        const auto& topic_cfg = topic_cfg_opt.value().get();
+
+        if (!topic_cfg.is_compacted()) {
+            continue;
+        }
+
         if (log.compaction.s == log_compaction_state::status::inflight) {
             // No need to sample inflight logs
             vlog(
@@ -190,30 +211,6 @@ log_info_collector::build_compaction_specs(
             continue;
         }
 
-        if (log.compaction.info_and_ts.has_value()) {
-            auto sample_interval
-              = config::shard_local_cfg().cloud_topics_compaction_interval_ms();
-            auto delta = to_time_point(collection_timestamp)
-                         - to_time_point(
-                           log.compaction.info_and_ts->collected_at);
-            if (delta <= sample_interval) {
-                vlog(
-                  compaction_log.debug,
-                  "Skipping compaction info collection for CTP {}, delta is "
-                  "less than sample interval.",
-                  log.ntp);
-                continue;
-            }
-        }
-
-        auto topic_cfg_opt = _topic_metadata_provider->get_topic_cfg(
-          model::topic_namespace_view(log.ntp));
-
-        if (!topic_cfg_opt.has_value()) {
-            continue;
-        }
-
-        const auto& topic_cfg = topic_cfg_opt.value().get();
         auto tombstone_removal_ts =
           [&topic_cfg, collection_timestamp]() -> model::timestamp {
             // Cleaned ranges with tombstones that were cleaned at or below
@@ -338,8 +335,7 @@ void log_info_collector::populate_logs_with_compaction_info(
 }
 
 chunked_vector<metastore::leveling_info_spec>
-log_info_collector::build_leveling_specs(
-  log_list_t& logs_list, model::timestamp collection_timestamp) const {
+log_info_collector::build_leveling_specs(log_list_t& logs_list) const {
     auto target_size
       = config::shard_local_cfg().cloud_topics_reconciliation_max_object_size();
     auto ratio
@@ -349,21 +345,6 @@ log_info_collector::build_leveling_specs(
 
     chunked_vector<metastore::leveling_info_spec> specs;
     for (auto& log : logs_list) {
-        if (log.leveling.info_and_ts.has_value()) {
-            // TODO: replace with cluster config
-            auto sample_interval = 10min;
-            auto delta = to_time_point(collection_timestamp)
-                         - to_time_point(
-                           log.leveling.info_and_ts->collected_at);
-            if (delta <= sample_interval) {
-                vlog(
-                  compaction_log.debug,
-                  "Skipping leveling info collection for CTP {}, delta is "
-                  "less than sample interval.",
-                  log.ntp);
-                continue;
-            }
-        }
         specs.emplace_back(
           metastore::leveling_info_spec{log.tidp, min_acceptable});
     }
@@ -376,7 +357,7 @@ ss::future<> log_info_collector::collect_leveling_info(
   leveling_queue& leveling_queue) const {
     auto now = model::timestamp::now();
 
-    auto specs = build_leveling_specs(logs_list, now);
+    auto specs = build_leveling_specs(logs_list);
 
     if (specs.empty()) {
         co_return;
@@ -439,13 +420,50 @@ void log_info_collector::populate_logs_with_leveling_info(
           log->ntp,
           log->leveling.info_and_ts->info);
 
-        // Queue per-range jobs and clear range data while preserving
-        // collected_at as a rate-limit cookie for the next tick.
+        // Queue a job per range, deduplicating against ranges already
+        // queued/inflight or recently committed for this CTP. A range stays
+        // undersized in the metastore until its rewrite commits, and the
+        // commit is not instantly visible to the next sample, so without this
+        // we would re-queue the same replacement every tick.
+        //
+        // The post-commit cooldown is derived from the leveling interval so a
+        // just-leveled range is not immediately re-scheduled before the new
+        // layout is observable (or, for capped rewrites, churned repeatedly).
+        auto& scheduled = log->leveling.scheduled_ranges;
+
+        // Evict completed entries whose cooldown has elapsed: this keeps the
+        // map bounded and lets those ranges become schedulable again.
+        const auto cooldown_ms = config::shard_local_cfg()
+                                   .cloud_topics_leveling_interval_ms()
+                                   .count()
+                                 * leveling_range_cooldown_intervals;
+        chunked_vector<levelable_range_key> expired;
+        for (const auto& [key, committed_at] : scheduled) {
+            if (
+              committed_at.has_value()
+              && (collection_timestamp.value() - committed_at->value())
+                   > cooldown_ms) {
+                expired.push_back(key);
+            }
+        }
+        for (const auto& key : expired) {
+            scheduled.erase(key);
+        }
+
         auto& info = log->leveling.info_and_ts->info;
         for (auto& range : info.ranges) {
+            levelable_range_key key{
+              .base_offset = range.base_offset,
+              .last_offset = range.last_offset};
+            // Present => still queued/inflight (nullopt value) or committed
+            // within the cooldown (stale completed entries were swept above),
+            // so skip re-scheduling this replacement for now.
+            if (scheduled.contains(key)) {
+                continue;
+            }
             auto job = ss::make_lw_shared<leveling_job>(log, range, info.epoch);
             leveling_queue.push(job);
-            ++(log->leveling.outstanding_ranges);
+            scheduled.emplace(key, std::nullopt);
         }
         info.ranges.clear();
     }

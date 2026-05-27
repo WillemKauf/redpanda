@@ -20,8 +20,11 @@
 #include "compaction/key_offset_map.h"
 #include "config/property.h"
 #include "ssx/work_queue.h"
+#include "utils/adjustable_semaphore.h"
 
 #include <seastar/core/scheduling.hh>
+
+#include <absl/hash/hash.h>
 
 class WorkerManagerTestFixture;
 
@@ -29,9 +32,11 @@ namespace cloud_topics::l1 {
 
 class worker_manager;
 
-// A per-shard worker that accepts compaction jobs and performs de-duplication
-// using a `sink`, `source`, and `reducer`.
-// Can be pre-empted to either cancel or stop a compaction job.
+// A per-shard worker that accepts compaction and leveling jobs and performs
+// either de-duplication (for compaction) or rewrites (for leveling) using a
+// `sink`, `source`, and `reducer`. Can be pre-empted to either cancel or stop
+// an inflight job. Compaction and leveling run on independent fibers; leveling
+// supports multiple inflight jobs per worker shard up to a configurable cap.
 class compaction_worker {
 public:
     // Describes whether a worker on a given shard is `active` and available
@@ -65,7 +70,7 @@ public:
     // This function cancels the inflight compaction job but does not affect the
     // worker state- the worker will continue to accept compaction jobs
     // after this function is called.
-    void interrupt_current_job();
+    void interrupt_compaction_job();
 
     // Sets `_state = compaction_job_state::hard_stop`, indicating the inflight
     // compaction job should stop promptly and abandon any in progress work,
@@ -75,7 +80,7 @@ public:
     // This function stops the inflight compaction job but does not affect
     // the worker state- the worker will continue to accept compaction jobs
     // after this function is called.
-    void terminate_current_job();
+    void terminate_compaction_job();
 
     // Submits a `do_pause_worker()` job to the `_worker_update_queue`.
     ss::future<> pause_worker();
@@ -83,21 +88,35 @@ public:
     // Submits a `do_resume_worker()` job to the `_worker_update_queue`.
     ss::future<> resume_worker();
 
-    // Alert the worker that new work has become available by signalling
-    // `_worker_cv`.
-    void alert_worker();
+    // Alert the compaction fiber that new compaction work may be available.
+    void alert_compaction_fiber();
+
+    // Alert the leveling fiber that new leveling work may be available.
+    void alert_leveling_fiber();
+
+    // Hard-stops every inflight leveling job for every tidp on this
+    // worker.
+    void terminate_leveling_jobs();
+
+    // Hard-stops every inflight leveling job for the given tidp on this
+    // worker.
+    void terminate_leveling_jobs_for_tidp(model::topic_id_partition);
 
 private:
-    // Kicks off a backgrounded loop held in `_work_fut` which waits for alerts
-    // and polls occasionally to perform compaction work.
+    // Kicks off the two backgrounded loops held in `_compaction_work_fut` and
+    // `_leveling_work_fut`.
     void start_work_loop();
 
-    // The main compaction loop which waits for jobs to become available.
-    ss::future<> work_loop();
+    // The compaction loop which waits for jobs to become available.
+    ss::future<> compaction_work_loop();
 
-    // Waits for `_work_fut`'s future to resolve and clears its value (if it has
-    // one). Leaves `_work_fut`'s value as `std::nullopt`.
-    ss::future<> clear_work_fut();
+    // The leveling loop which dispatches up to
+    // `cloud_topics_max_concurrent_leveling_jobs_per_shard` jobs concurrently
+    // via an `adjustable_semaphore` slot pool.
+    ss::future<> leveling_work_loop();
+
+    // Waits for both background loops to resolve and clears their values.
+    ss::future<> clear_work_futs();
 
     // Pauses the compaction worker by setting `_worker_state` to `paused` and
     // waits for the backgrounded `_work_fut` to complete. `_work_fut` is left
@@ -116,14 +135,29 @@ private:
     // as obtained from the `metastore`.
     ss::future<> compact_log(log_compaction_meta*);
 
-    // Retrieves a job from the `_worker_manager`, if there is one available.
+    // Runs one leveling range. Drives the leveling source/sink/reducer
+    // pipeline with a single-range chunked_vector.
+    ss::future<> level_range(leveling_job*);
+
+    // Retrieves a compaction job from the `_worker_manager`, if one is
+    // available.
     ss::future<std::optional<foreign_log_compaction_meta_ptr>>
-    try_acquire_work_from_manager();
+    try_acquire_compaction_work_from_manager();
+
+    // Retrieves a leveling job from the `_worker_manager`, if one is
+    // available.
+    ss::future<std::optional<foreign_leveling_job_ptr>>
+    try_acquire_leveling_work_from_manager();
 
     // After completing a compaction job, go back to the `worker_manager` shard
     // to mark the work as "complete" (i.e reset the `meta->inflight` value to
     // indicate there is no longer an in-process compaction occurring).
-    ss::future<> complete_work_on_manager(foreign_log_compaction_meta_ptr);
+    ss::future<>
+      complete_compaction_work_on_manager(foreign_log_compaction_meta_ptr);
+
+    // After completing a leveling job, go back to the `worker_manager` shard
+    // to mark the work as "complete".
+    ss::future<> complete_leveling_work_on_manager(foreign_leveling_job_ptr);
 
     // Performs lazy initialization of the `compaction::key_offset_map` using
     // its reserved memory, if it is uninitialized.
@@ -147,7 +181,7 @@ private:
     // abandon all work and return as soon as possible. `cancelled`/`stopped` do
     // not mean that the worker itself is stopped from running future compaction
     // jobs.
-    compaction_job_state _job_state{compaction_job_state::idle};
+    compaction_job_state _compaction_job_state{compaction_job_state::idle};
 
     // The state of the worker, which is `active`, `paused`, or `stopped`.
     // * A worker in an `active` state should have an active `_work_fut` value
@@ -161,9 +195,37 @@ private:
 
     std::optional<model::ntp> _inflight_ntp;
 
-    // If set, this is the active background loop for taking jobs from the
-    // `_worker_manager` and compacting them.
-    std::optional<ss::future<>> _work_fut;
+    // Per-inflight-leveling-job soft/hard-stop signal. Lives until the job's
+    // background fiber completes. Multiple jobs may be inflight concurrently
+    // on this worker, each with its own state.
+    struct leveling_job_handle {
+        compaction_job_state state{compaction_job_state::idle};
+        ss::abort_source as;
+    };
+    using leveling_job_handle_ptr = ss::lw_shared_ptr<leveling_job_handle>;
+
+    // Keyed by (tidp, base_offset) to disambiguate multiple ranges of the same
+    // CTP running concurrently on this shard.
+    struct inflight_key {
+        model::topic_id_partition tidp;
+        kafka::offset base_offset;
+
+        bool operator==(const inflight_key&) const = default;
+    };
+    struct inflight_key_hash {
+        using is_transparent = void;
+        size_t operator()(const inflight_key& k) const noexcept {
+            return absl::HashOf(k.tidp, k.base_offset);
+        }
+    };
+
+    chunked_hash_map<inflight_key, leveling_job_handle_ptr, inflight_key_hash>
+      _inflight_leveling;
+
+    // If set, the active background loops for taking jobs from the
+    // `_worker_manager` and running them.
+    std::optional<ss::future<>> _compaction_work_fut;
+    std::optional<ss::future<>> _leveling_work_fut;
 
     // A queue which is used to linearize pause/resume requests of this worker.
     ssx::work_queue _worker_update_queue;
@@ -177,12 +239,19 @@ private:
 
     ss::abort_source _as;
 
-    // Used to alert worker that a job has become available, or when
-    // `cloud_topics_compaction_interval_ms` config changes.
-    ss::condition_variable _worker_cv;
+    // Used to alert the compaction fiber that a job has become available, or
+    // when `cloud_topics_compaction_interval_ms` config changes.
+    ss::condition_variable _compaction_cv;
 
-    // The interval on which the worker polls for new work.
+    // Used to alert the leveling fiber that a job has become available, or
+    // when `cloud_topics_leveling_interval_ms` config changes.
+    ss::condition_variable _leveling_cv;
+
+    // The interval on which the compaction fiber polls for new work.
     config::binding<std::chrono::milliseconds> _poll_interval;
+
+    // The interval on which the leveling fiber polls for new work.
+    config::binding<std::chrono::milliseconds> _leveling_poll_interval;
 
     // Captured at construction so that changing the config at runtime does not
     // take effect without a restart.

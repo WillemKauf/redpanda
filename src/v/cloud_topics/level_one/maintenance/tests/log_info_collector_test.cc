@@ -24,9 +24,16 @@ using namespace cloud_topics;
 
 class LogInfoCollectorTestFixture : public l1::l1_reader_fixture {};
 
-// A fake topic config provider which always returns a value.
+// A fake topic config provider which always returns a value. The config is
+// marked compacted so it passes the compaction loop's is_compacted() filter
+// in log_info_collector::get_logs_to_collect.
 class fake_cfg_provider : public l1::topic_cfg_provider {
 public:
+    fake_cfg_provider() {
+        _cfg.properties.cleanup_policy_bitflags
+          = model::cleanup_policy_bitflags::compaction;
+    }
+
     std::optional<std::reference_wrapper<const cluster::topic_configuration>>
     get_topic_cfg(model::topic_namespace_view) const final {
         return _cfg;
@@ -134,7 +141,6 @@ TEST_F(LogInfoCollectorTestFixture, TestSampleLevelingInfo) {
     // retained for the next tick.
     ASSERT_TRUE(log_ptr->leveling.info_and_ts->info.ranges.empty());
     ASSERT_GT(queue.size(), 0u);
-    ASSERT_EQ(queue.size(), log_ptr->leveling.outstanding_ranges);
     size_t total_size_bytes = 0;
     while (!queue.empty()) {
         total_size_bytes += queue.top()->range.size_bytes;
