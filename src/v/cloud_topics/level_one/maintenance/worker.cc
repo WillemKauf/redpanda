@@ -406,7 +406,6 @@ ss::future<> compaction_worker::level_range(leveling_job* job) {
       _io,
       handle->as,
       handle->state,
-      _probe,
       ctxlog);
     auto sink = std::make_unique<leveling_sink>(
       tidp,
@@ -417,6 +416,7 @@ ss::future<> compaction_worker::level_range(leveling_job* job) {
       config::shard_local_cfg()
         .cloud_topics_reconciliation_max_object_size.bind(),
       _upload_part_size,
+      _probe,
       ctxlog,
       l1::object_builder::options{
         .indexing_interval

@@ -49,6 +49,12 @@ public:
         _tombstones_removed += stats.expired_tombstones_discarded;
     }
 
+    // Records the net reduction in object/extent count from a committed
+    // leveling range: `input_extents - output_objects`.
+    void add_leveling_extents_reclaimed(uint64_t reclaimed) {
+        _leveling_extents_reclaimed += reclaimed;
+    }
+
 private:
     hist_t _compaction_runs;
     hist_t _leveling_runs;
@@ -57,6 +63,7 @@ private:
     uint64_t _batches_removed{0};
     uint64_t _records_removed{0};
     uint64_t _tombstones_removed{0};
+    uint64_t _leveling_extents_reclaimed{0};
 
     metrics::internal_metric_groups _metrics;
 };
