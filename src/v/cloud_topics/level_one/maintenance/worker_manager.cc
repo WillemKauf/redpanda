@@ -60,27 +60,24 @@ worker_manager::try_acquire_compaction_work(ss::shard_id shard) {
       "always execute on shard {}",
       worker_manager_shard);
 
-    if (_compaction_queue.empty()) {
-        return std::nullopt;
+    while (!_compaction_queue.empty()) {
+        auto log = _compaction_queue.top();
+        _compaction_queue.pop();
+        _probe.set_compaction_queue_length(_compaction_queue.size());
+
+        if (!log || !log->link.is_linked()) {
+            continue;
+        }
+
+        dassert(
+          log->compaction.s == log_compaction_state::status::queued,
+          "Expected log state to be queued when acquiring work");
+        log->compaction.s = log_compaction_state::status::inflight;
+        log->compaction.inflight_shard = shard;
+        return ss::make_foreign(log);
     }
 
-    auto log = _compaction_queue.top();
-    _compaction_queue.pop();
-
-    if (!log) {
-        return std::nullopt;
-    }
-
-    if (!log->link.is_linked()) {
-        return std::nullopt;
-    }
-
-    dassert(
-      log->compaction.s == log_compaction_state::status::queued,
-      "Expected log state to be queued when acquiring work");
-    log->compaction.s = log_compaction_state::status::inflight;
-    log->compaction.inflight_shard = shard;
-    return ss::make_foreign(log);
+    return std::nullopt;
 }
 
 void worker_manager::complete_compaction_work(log_compaction_meta* log) {
