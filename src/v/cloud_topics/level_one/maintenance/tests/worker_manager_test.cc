@@ -124,6 +124,70 @@ TEST_F(WorkerManagerTestFixture, AcquireWork) {
     ASSERT_EQ(work_opt.value()->compaction.s, status::idle);
 }
 
+// `try_acquire_compaction_work` must pop past stale entries at the head of the
+// queue (e.g. CTPs unmanaged after being queued, whose `link` is no longer
+// linked) and return the first live entry behind them, rather than giving up
+// on the first stale entry.
+TEST_F(WorkerManagerTestFixture, AcquireWorkSkipsStaleEntries) {
+    auto cmp_func = [](
+                      const l1::log_compaction_meta_ptr& a,
+                      const l1::log_compaction_meta_ptr& b) {
+        return a->ntp < b->ntp;
+    };
+
+    l1::compaction_scheduler_probe probe;
+    l1::log_compaction_queue pq(std::move(cmp_func));
+    l1::leveling_extent_reclamation_policy lq_policy{
+      config::mock_binding<size_t>(size_t{1024} * 1024)};
+    l1::leveling_queue lq(lq_policy.get_comparator());
+    l1::log_list_t list;
+    l1::worker_manager manager(
+      pq, lq, nullptr, nullptr, nullptr, probe, nullptr);
+    auto stop_manager = ss::defer([&manager] { manager.stop().get(); });
+
+    using status = l1::log_compaction_state::status;
+
+    auto make_meta = [](std::string_view topic) {
+        auto ntp = model::ntp(
+          model::ns("kafka"),
+          model::topic(ss::sstring{topic}),
+          model::partition_id(0));
+        auto tidp = model::topic_id_partition(
+          model::topic_id(uuid_t::create()), ntp.tp.partition);
+        return ss::make_lw_shared<l1::log_compaction_meta>(tidp, ntp);
+    };
+
+    // "zzz" sorts last, so the ntp-ordered priority queue yields it first.
+    // Leave it unlinked (never pushed onto `list`) so it reads as stale.
+    auto stale = make_meta("zzz_stale");
+    stale->compaction.s = status::queued;
+    pq.emplace(stale);
+
+    // A live, linked, queued entry sitting behind the stale one.
+    auto live = make_meta("aaa_live");
+    list.push_back(*live);
+    live->compaction.s = status::queued;
+    pq.emplace(live);
+
+    // The stale head is skipped and the live entry is returned and marked
+    // inflight; both entries are popped while searching.
+    auto work_opt = manager.try_acquire_compaction_work(ss::this_shard_id());
+    ASSERT_TRUE(work_opt.has_value());
+    ASSERT_EQ(work_opt.value()->ntp, live->ntp);
+    ASSERT_EQ(work_opt.value()->compaction.s, status::inflight);
+    ASSERT_TRUE(pq.empty());
+
+    manager.complete_compaction_work(work_opt.value().get());
+
+    // A queue containing only stale entries yields no work (and is drained).
+    auto stale_only = make_meta("stale_only");
+    stale_only->compaction.s = status::queued;
+    pq.emplace(stale_only);
+    ASSERT_FALSE(
+      manager.try_acquire_compaction_work(ss::this_shard_id()).has_value());
+    ASSERT_TRUE(pq.empty());
+}
+
 // Verifies that `dirty_ratio_scheduling_policy` orders partitions from
 // highest `dirty_ratio` to lowest.
 TEST(DirtyRatioSchedulingPolicyTest, OrdersHighestDirtyRatioFirst) {
