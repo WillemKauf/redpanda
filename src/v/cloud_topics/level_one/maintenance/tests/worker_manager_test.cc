@@ -48,7 +48,8 @@ public:
     work_fut_has_value(l1::worker_manager& manager, ss::shard_id shard) {
         return manager._workers.invoke_on(
           shard, [](l1::compaction_worker& worker) {
-              return worker._compaction_work_fut.has_value();
+              return worker._compaction_work_fut.has_value()
+                     && worker._leveling_work_fut.has_value();
           });
     }
 };
@@ -56,7 +57,11 @@ public:
 TEST_F(WorkerManagerTestFixture, PauseAndResumeWorkers) {
     l1::compaction_scheduler_probe probe;
     l1::log_compaction_queue pq;
-    l1::worker_manager manager(pq, nullptr, nullptr, nullptr, probe, nullptr);
+    l1::leveling_extent_reclamation_policy lq_policy{
+      config::mock_binding<size_t>(size_t{1024} * 1024)};
+    l1::leveling_queue lq(lq_policy.get_comparator());
+    l1::worker_manager manager(
+      pq, lq, nullptr, nullptr, nullptr, probe, nullptr);
     start_workers(manager).get();
     auto stop_manager = ss::defer([&manager] { manager.stop().get(); });
     using worker_state = l1::compaction_worker::worker_state;
@@ -86,8 +91,12 @@ TEST_F(WorkerManagerTestFixture, AcquireWork) {
 
     l1::compaction_scheduler_probe probe;
     l1::log_compaction_queue pq(std::move(cmp_func));
+    l1::leveling_extent_reclamation_policy lq_policy{
+      config::mock_binding<size_t>(size_t{1024} * 1024)};
+    l1::leveling_queue lq(lq_policy.get_comparator());
     l1::log_list_t list;
-    l1::worker_manager manager(pq, nullptr, nullptr, nullptr, probe, nullptr);
+    l1::worker_manager manager(
+      pq, lq, nullptr, nullptr, nullptr, probe, nullptr);
     auto stop_manager = ss::defer([&manager] { manager.stop().get(); });
 
     const auto test_ntp = model::ntp(
