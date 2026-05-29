@@ -27,7 +27,7 @@ worker_manager::worker_manager(
   ss::sharded<cluster::metadata_cache>* metadata_cache,
   compaction_scheduler_probe& probe,
   ss::sharded<level_one_reader_probe>* l1_reader_probe)
-  : _work_queue(work_queue)
+  : _compaction_queue(work_queue)
   , _io(io)
   , _metastore(metastore)
   , _metadata_cache(metadata_cache)
@@ -51,19 +51,20 @@ ss::future<> worker_manager::stop() {
 }
 
 std::optional<foreign_log_compaction_meta_ptr>
-worker_manager::try_acquire_work(ss::shard_id shard) {
+worker_manager::try_acquire_compaction_work(ss::shard_id shard) {
     vassert(
       ss::this_shard_id() == worker_manager_shard,
-      "Expected calls to worker_manager::try_acquire_work() to always "
+      "Expected calls to worker_manager::try_acquire_compaction_work() to "
+      "always "
       "execute on shard {}",
       worker_manager_shard);
 
-    if (_work_queue.empty()) {
+    if (_compaction_queue.empty()) {
         return std::nullopt;
     }
 
-    auto log = _work_queue.top();
-    _work_queue.pop();
+    auto log = _compaction_queue.top();
+    _compaction_queue.pop();
 
     if (!log) {
         return std::nullopt;
@@ -81,10 +82,11 @@ worker_manager::try_acquire_work(ss::shard_id shard) {
     return ss::make_foreign(log);
 }
 
-void worker_manager::complete_work(log_compaction_meta* log) {
+void worker_manager::complete_compaction_work(log_compaction_meta* log) {
     vassert(
       ss::this_shard_id() == worker_manager_shard,
-      "Expected calls to worker_manager::complete_work() to always execute on "
+      "Expected calls to worker_manager::complete_compaction_work() to always "
+      "execute on "
       "shard {}",
       worker_manager_shard);
 
@@ -112,15 +114,15 @@ void worker_manager::request_stop_compaction(log_compaction_meta_ptr log) {
 
     ssx::spawn_with_gate(_gate, [this, shard]() {
         return _workers.invoke_on(shard, [](compaction_worker& worker) {
-            return worker.terminate_current_job();
+            return worker.terminate_compaction_job();
         });
     });
 }
 
-ss::future<> worker_manager::alert_workers() {
+ss::future<> worker_manager::alert_compaction_workers() {
     auto guard = _gate.hold();
     co_await _workers.invoke_on_all(
-      [](compaction_worker& worker) { worker.alert_worker(); });
+      [](compaction_worker& worker) { worker.alert_compaction_fiber(); });
 }
 
 ss::future<> worker_manager::pause_worker(ss::shard_id worker) {
