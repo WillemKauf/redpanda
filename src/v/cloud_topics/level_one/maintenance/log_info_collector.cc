@@ -34,6 +34,9 @@ constexpr int64_t leveling_range_cooldown_intervals = 3;
 inline bool needs_compaction(
   const log_compaction_meta& log,
   const cluster::topic_configuration& topic_cfg) {
+    if (!topic_cfg.is_compacted()) {
+        return false;
+    }
     auto& topic_mcdr = topic_cfg.properties.min_cleanable_dirty_ratio;
     auto min_cleanable_dirty_ratio
       = topic_mcdr.has_optional_value()
@@ -183,10 +186,22 @@ log_info_collector::build_compaction_specs(
   size_t size,
   model::timestamp collection_timestamp) const {
     chunked_vector<metastore::compaction_info_spec> specs;
-
     specs.reserve(size);
 
     for (const auto& log : logs_list) {
+        auto topic_cfg_opt = _topic_metadata_provider->get_topic_cfg(
+          model::topic_namespace_view(log.ntp));
+
+        if (!topic_cfg_opt.has_value()) {
+            continue;
+        }
+
+        const auto& topic_cfg = topic_cfg_opt.value().get();
+
+        if (!topic_cfg.is_compacted()) {
+            continue;
+        }
+
         if (log.compaction.s == log_compaction_state::status::inflight) {
             // No need to sample inflight logs
             vlog(
@@ -196,14 +211,6 @@ log_info_collector::build_compaction_specs(
             continue;
         }
 
-        auto topic_cfg_opt = _topic_metadata_provider->get_topic_cfg(
-          model::topic_namespace_view(log.ntp));
-
-        if (!topic_cfg_opt.has_value()) {
-            continue;
-        }
-
-        const auto& topic_cfg = topic_cfg_opt.value().get();
         auto tombstone_removal_ts =
           [&topic_cfg, collection_timestamp]() -> model::timestamp {
             // Cleaned ranges with tombstones that were cleaned at or below
