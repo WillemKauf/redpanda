@@ -43,7 +43,6 @@ leveling_source::leveling_source(
   io* io,
   ss::abort_source& as,
   compaction_job_state& state,
-  compaction_worker_probe& probe,
   prefix_logger& ctxlog)
   : _ntp(std::move(ntp))
   , _tp(tp)
@@ -53,7 +52,6 @@ leveling_source::leveling_source(
   , _io(io)
   , _as(as)
   , _state(state)
-  , _probe(probe)
   , _ctxlog(ctxlog) {}
 
 ss::future<> leveling_source::initialize() { co_return; }
