@@ -102,9 +102,8 @@ public:
     // provided `log_list_t` by collecting each log's leveling info from the
     // metastore. Logs are skipped if `leveling.info_and_ts` is still fresh.
     // For freshly-sampled logs, per-range `leveling_job`s are pushed into the
-    // provided `leveling_queue` and `leveling.outstanding_ranges` is bumped
-    // accordingly. The transient `info.ranges` is cleared after queueing
-    // while the `collected_at` timestamp is retained so the next tick
+    // provided `leveling_queue`. The transient `info.ranges` is cleared after
+    // queueing while the `collected_at` timestamp is retained so the next tick
     // respects the sampling interval.
     ss::future<>
     collect_leveling_info(log_set_t&, log_list_t&, leveling_queue&) const;
@@ -116,10 +115,9 @@ private:
     build_compaction_specs(log_list_t&, size_t, model::timestamp) const;
 
     // Returns a container of `leveling_info_spec` to sample the metastore
-    // with based on the input `log_list_t`. Skips logs whose cached
-    // `leveling.info_and_ts` is still fresh.
+    // with based on the input `log_list_t`.
     chunked_vector<metastore::leveling_info_spec>
-    build_leveling_specs(log_list_t&, model::timestamp) const;
+    build_leveling_specs(log_list_t&) const;
 
     // Sets compaction info state within the input logs per the
     // `compaction_info_map` collected from the metastore and pushes logs
@@ -135,10 +133,7 @@ private:
     // Sets leveling info state within the input logs per the
     // `leveling_info_map` collected from the metastore. For each freshly-
     // sampled log with non-empty ranges, pushes per-range `leveling_job`s
-    // into the provided `leveling_queue` and bumps the meta's
-    // `leveling.outstanding_ranges`. Clears `info.ranges` after queueing
-    // while retaining `collected_at` as a rate-limit cookie for the next
-    // tick.
+    // into the provided `leveling_queue`.
     void populate_logs_with_leveling_info(
       metastore::leveling_info_map&,
       log_set_t&,

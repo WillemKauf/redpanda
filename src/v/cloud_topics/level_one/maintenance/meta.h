@@ -60,23 +60,41 @@ struct log_compaction_state {
     std::optional<ss::shard_id> inflight_shard{std::nullopt};
 };
 
+// Identifies a leveling range replacement within a CTP by its offset bounds.
+// Used to dedup scheduling of the same range while it is pending or recently
+// committed.
+struct levelable_range_key {
+    kafka::offset base_offset;
+    kafka::offset last_offset;
+
+    friend bool operator==(
+      const levelable_range_key&, const levelable_range_key&) = default;
+
+    template<typename H>
+    friend H AbslHashValue(H h, const levelable_range_key& k) {
+        return H::combine(std::move(h), k.base_offset(), k.last_offset());
+    }
+};
+
 // Per-CTP state for the leveling maintenance subsystem.
 struct log_leveling_state {
     // If set, leveling metadata obtained from the metastore at
     // `collected_at` time.
     std::optional<leveling_info_and_timestamp> info_and_ts{std::nullopt};
 
-    // Number of leveling ranges from this CTP that are currently queued or
-    // inflight.
-    //
-    // TODO: Use as a reference count for controlling `info_and_ts`'s
-    // lifetime. `info_and_ts` should be cleared when all of the outstanding
-    // ranges have been leveled (i.e. when this value reaches 0 again).
-    size_t outstanding_ranges{0};
-
     // Refcount of inflight leveling ranges per worker shard for this CTP.
-    // A shard is present iff it is currently running at least one range.
     chunked_hash_map<ss::shard_id, size_t> inflight_shards;
+
+    // Leveling ranges for this CTP that are currently queued/inflight
+    // (value == nullopt) or were recently committed (value == completion
+    // timestamp). The collector consults this to avoid re-scheduling the same
+    // range replacement while it is still pending or within the post-commit
+    // cooldown window. A range stays "undersized" in the metastore until its
+    // rewrite commits, and the commit is not immediately visible to the next
+    // sample, so without this we would re-queue the same replacement every
+    // tick. Mutated only on `worker_manager_shard`.
+    chunked_hash_map<levelable_range_key, std::optional<model::timestamp>>
+      scheduled_ranges;
 };
 
 struct log_compaction_meta {

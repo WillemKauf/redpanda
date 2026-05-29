@@ -22,7 +22,22 @@
 
 using namespace cloud_topics;
 
-class LogInfoCollectorTestFixture : public l1::l1_reader_fixture {};
+class LogInfoCollectorTestFixture : public l1::l1_reader_fixture {
+protected:
+    // Builds `n` separate small (undersized) L1 objects for `tidp`, each from
+    // its own batch run, so they form a run of consecutive undersized extents
+    // that the leveling range builder will coalesce into a range.
+    void seed_undersized_objects(const model::topic_id_partition& tidp, int n) {
+        model::offset o{0};
+        for (int i = 0; i < n; ++i) {
+            auto batches = model::test::make_random_batches(o, 10).get();
+            o = model::next_offset(batches.back().last_offset());
+            std::vector<tidp_batches_t> bs;
+            bs.emplace_back(tidp, std::move(batches));
+            make_l1_objects(std::move(bs)).get();
+        }
+    }
+};
 
 // A fake topic config provider which always returns a value.
 class fake_cfg_provider : public l1::topic_cfg_provider {
@@ -134,11 +149,126 @@ TEST_F(LogInfoCollectorTestFixture, TestSampleLevelingInfo) {
     // retained for the next tick.
     ASSERT_TRUE(log_ptr->leveling.info_and_ts->info.ranges.empty());
     ASSERT_GT(queue.size(), 0u);
-    ASSERT_EQ(queue.size(), log_ptr->leveling.outstanding_ranges);
     size_t total_size_bytes = 0;
     while (!queue.empty()) {
         total_size_bytes += queue.top()->range.size_bytes;
         queue.pop();
     }
     ASSERT_GT(total_size_bytes, 0u);
+}
+
+// While a range is still queued/inflight (recorded in `scheduled_ranges` with
+// a nullopt value), a subsequent collection must not re-queue it, even though
+// the metastore still reports the underlying extents as undersized.
+TEST_F(LogInfoCollectorTestFixture, TestLevelingDoesNotReQueueInflightRange) {
+    auto [ntp, tidp] = make_ntidp("leveling_topic");
+    auto log_ptr = ss::make_lw_shared<l1::log_compaction_meta>(tidp, ntp);
+    seed_undersized_objects(tidp, 2);
+
+    l1::log_set_t logs_set;
+    logs_set.insert(log_ptr);
+    l1::log_list_t logs_list;
+    logs_list.push_back(*log_ptr);
+
+    l1::log_info_collector collector(
+      &_metastore,
+      std::make_unique<fake_cfg_provider>(),
+      std::make_unique<fake_offset_provider>());
+    l1::leveling_extent_reclamation_policy policy{
+      config::mock_binding<size_t>(size_t{1024} * 1024)};
+    l1::leveling_queue queue(policy.get_comparator());
+
+    // First collection queues the range(s) and records them as inflight.
+    collector.collect_leveling_info(logs_set, logs_list, queue).get();
+    ASSERT_GT(queue.size(), 0u);
+    const auto scheduled_count = log_ptr->leveling.scheduled_ranges.size();
+    ASSERT_GT(scheduled_count, 0u);
+
+    // Simulate workers picking up the jobs; the ranges stay recorded as
+    // inflight in `scheduled_ranges`.
+    while (!queue.empty()) {
+        queue.pop();
+    }
+
+    // Second collection must not re-queue the still-inflight ranges.
+    collector.collect_leveling_info(logs_set, logs_list, queue).get();
+    ASSERT_TRUE(queue.empty());
+    ASSERT_EQ(log_ptr->leveling.scheduled_ranges.size(), scheduled_count);
+}
+
+// A range that was recently committed (recorded with a completion timestamp)
+// must not be re-queued until its post-commit cooldown has elapsed.
+TEST_F(LogInfoCollectorTestFixture, TestLevelingRespectsCommitCooldown) {
+    auto [ntp, tidp] = make_ntidp("leveling_topic");
+    auto log_ptr = ss::make_lw_shared<l1::log_compaction_meta>(tidp, ntp);
+    seed_undersized_objects(tidp, 2);
+
+    l1::log_set_t logs_set;
+    logs_set.insert(log_ptr);
+    l1::log_list_t logs_list;
+    logs_list.push_back(*log_ptr);
+
+    l1::log_info_collector collector(
+      &_metastore,
+      std::make_unique<fake_cfg_provider>(),
+      std::make_unique<fake_offset_provider>());
+    l1::leveling_extent_reclamation_policy policy{
+      config::mock_binding<size_t>(size_t{1024} * 1024)};
+    l1::leveling_queue queue(policy.get_comparator());
+
+    collector.collect_leveling_info(logs_set, logs_list, queue).get();
+    ASSERT_GT(queue.size(), 0u);
+    while (!queue.empty()) {
+        queue.pop();
+    }
+
+    // Mark every scheduled range as just-committed.
+    for (auto& [key, committed_at] : log_ptr->leveling.scheduled_ranges) {
+        committed_at = model::timestamp::now();
+    }
+
+    // Within the cooldown window the ranges must not be re-queued.
+    collector.collect_leveling_info(logs_set, logs_list, queue).get();
+    ASSERT_TRUE(queue.empty());
+}
+
+// Once the post-commit cooldown has elapsed, a committed range is evicted
+// from `scheduled_ranges` and becomes schedulable again: it is re-queued and
+// re-recorded as inflight.
+TEST_F(LogInfoCollectorTestFixture, TestLevelingRescheduledAfterCooldown) {
+    auto [ntp, tidp] = make_ntidp("leveling_topic");
+    auto log_ptr = ss::make_lw_shared<l1::log_compaction_meta>(tidp, ntp);
+    seed_undersized_objects(tidp, 2);
+
+    l1::log_set_t logs_set;
+    logs_set.insert(log_ptr);
+    l1::log_list_t logs_list;
+    logs_list.push_back(*log_ptr);
+
+    l1::log_info_collector collector(
+      &_metastore,
+      std::make_unique<fake_cfg_provider>(),
+      std::make_unique<fake_offset_provider>());
+    l1::leveling_extent_reclamation_policy policy{
+      config::mock_binding<size_t>(size_t{1024} * 1024)};
+    l1::leveling_queue queue(policy.get_comparator());
+
+    collector.collect_leveling_info(logs_set, logs_list, queue).get();
+    ASSERT_GT(queue.size(), 0u);
+    while (!queue.empty()) {
+        queue.pop();
+    }
+
+    // Mark every scheduled range as committed far in the past (epoch), well
+    // beyond the cooldown window.
+    for (auto& [key, committed_at] : log_ptr->leveling.scheduled_ranges) {
+        committed_at = model::timestamp{0};
+    }
+
+    collector.collect_leveling_info(logs_set, logs_list, queue).get();
+    ASSERT_GT(queue.size(), 0u);
+    // The re-queued ranges are recorded as inflight again (nullopt value).
+    for (const auto& [key, committed_at] : log_ptr->leveling.scheduled_ranges) {
+        ASSERT_FALSE(committed_at.has_value());
+    }
 }
