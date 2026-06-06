@@ -46,6 +46,7 @@ compaction_scheduler::compaction_scheduler(
   , _scheduling_policy(make_default_scheduling_policy())
   , _worker_manager(
       _compaction_queue,
+      _leveling_queue,
       io,
       metastore,
       state.metadata_cache,
@@ -53,19 +54,41 @@ compaction_scheduler::compaction_scheduler(
       l1_reader_probe)
   , _compaction_interval(
       config::shard_local_cfg().cloud_topics_compaction_interval_ms.bind())
-  , _compaction_queue(_scheduling_policy->get_comparator()) {
+  , _leveling_interval(
+      config::shard_local_cfg().cloud_topics_leveling_interval_ms.bind())
+  , _compaction_queue(_scheduling_policy->get_comparator())
+  , _leveling_queue(
+      leveling_extent_reclamation_policy{
+        config::shard_local_cfg()
+          .cloud_topics_reconciliation_max_object_size.bind()}
+        .get_comparator()) {
     _compaction_interval.watch([this]() { _compaction_sem.signal(); });
+    _leveling_interval.watch([this]() { _leveling_sem.signal(); });
 }
 
 compaction_scheduler::compaction_scheduler(log_info_collector info_collector)
   : _log_info_collector(std::move(info_collector))
   , _scheduling_policy(make_default_scheduling_policy())
   , _worker_manager(
-      _compaction_queue, nullptr, nullptr, nullptr, _probe, nullptr)
+      _compaction_queue,
+      _leveling_queue,
+      nullptr,
+      nullptr,
+      nullptr,
+      _probe,
+      nullptr)
   , _compaction_interval(
       config::shard_local_cfg().cloud_topics_compaction_interval_ms.bind())
-  , _compaction_queue(_scheduling_policy->get_comparator()) {
+  , _leveling_interval(
+      config::shard_local_cfg().cloud_topics_leveling_interval_ms.bind())
+  , _compaction_queue(_scheduling_policy->get_comparator())
+  , _leveling_queue(
+      leveling_extent_reclamation_policy{
+        config::shard_local_cfg()
+          .cloud_topics_reconciliation_max_object_size.bind()}
+        .get_comparator()) {
     _compaction_interval.watch([this]() { _compaction_sem.signal(); });
+    _leveling_interval.watch([this]() { _leveling_sem.signal(); });
 }
 
 bool compaction_scheduler::is_managed(const model::ntp& ntp) const noexcept {
@@ -116,14 +139,15 @@ void compaction_scheduler::unmanage_partition(
     // the queue (it was popped on dispatch); it is stopped below.
     _compaction_queue.clear(tidp);
 
-    // Manually unlink here to ensure that if the handle also exists in the
-    // `compaction_queue`, `is_linked()` still returns `false` when it is
-    // eventually considered for compaction.
+    // Unlink so that any leveling jobs for this CTP still in `_leveling_queue`
+    // are dropped when dequeued (`try_acquire_leveling_work` skips unlinked
+    // metas), and so a queued compaction entry, if any, is ignored too.
     handle->link.unlink();
 
-    // Request that compaction of this CTP be stopped, if in flight. `handle` is
-    // a `lw_shared_ptr`- we can allow it to go out of scope here without fear
-    // of UAF elsewhere.
+    // Request that compaction and leveling of this CTP be stopped, if in
+    // flight. `handle` is a `lw_shared_ptr`- we can allow it to go out of scope
+    // here without fear of UAF elsewhere.
+    _worker_manager.request_stop_leveling(handle);
     _worker_manager.request_stop_compaction(std::move(handle));
     _probe.set_log_count(_logs.size());
 }
@@ -138,7 +162,20 @@ void compaction_scheduler::start_bg_loop() {
               vlogl(
                 compaction_log,
                 log_level,
-                "Encountered exception in main loop: {}",
+                "Encountered exception in compaction scheduling loop: {}",
+                e);
+          });
+    });
+    ssx::repeat_until_gate_closed_or_aborted(_gate, _as, [this] {
+        return leveling_scheduling_loop().handle_exception(
+          [](const std::exception_ptr& e) {
+              auto log_level = ssx::is_shutdown_exception(e)
+                                 ? ss::log_level::debug
+                                 : ss::log_level::error;
+              vlogl(
+                compaction_log,
+                log_level,
+                "Encountered exception in leveling scheduling loop: {}",
                 e);
           });
     });
@@ -161,12 +198,38 @@ ss::future<> compaction_scheduler::compaction_scheduling_loop() {
             continue;
         }
 
-        _probe.set_compaction_queue_length(_compaction_queue.size());
-
         co_await _log_info_collector.collect_compaction_info(
           _logs, _logs_list, _compaction_queue);
 
+        _probe.set_compaction_queue_length(_compaction_queue.size());
+
         co_await _worker_manager.alert_compaction_workers();
+    }
+}
+
+ss::future<> compaction_scheduler::leveling_scheduling_loop() {
+    vlog(compaction_log.debug, "Starting leveling scheduling loop");
+    while (!_gate.is_closed() && !_as.abort_requested()) {
+        auto leveling_interval = _leveling_interval();
+        try {
+            co_await _leveling_sem.wait(
+              _leveling_interval(),
+              std::max(_leveling_sem.current(), size_t(1)));
+        } catch (const ss::semaphore_timed_out&) {
+            // Fall through
+        }
+
+        if (leveling_interval != _leveling_interval()) {
+            // Cluster config was changed while waiting.
+            continue;
+        }
+
+        co_await _log_info_collector.collect_leveling_info(
+          _logs, _logs_list, _leveling_queue);
+
+        _probe.set_leveling_queue_length(_leveling_queue.size());
+
+        co_await _worker_manager.alert_leveling_workers();
     }
 }
 
@@ -181,6 +244,7 @@ ss::future<> compaction_scheduler::stop() {
     vlog(compaction_log.debug, "Stopping compaction scheduling loop");
     _as.request_abort();
     _compaction_sem.broken();
+    _leveling_sem.broken();
 
     // Stop making new jobs.
     auto close_fut = _gate.close();

@@ -50,7 +50,8 @@ public:
     work_fut_has_value(l1::worker_manager& manager, ss::shard_id shard) {
         return manager._workers.invoke_on(
           shard, [](l1::compaction_worker& worker) {
-              return worker._compaction_work_fut.has_value();
+              return worker._compaction_work_fut.has_value()
+                     && worker._leveling_work_fut.has_value();
           });
     }
 };
@@ -63,7 +64,11 @@ TEST_F(WorkerManagerTestFixture, PauseAndResumeWorkers) {
 
     l1::compaction_scheduler_probe probe;
     l1::compaction_queue pq(std::move(cmp_func));
-    l1::worker_manager manager(pq, nullptr, nullptr, nullptr, probe, nullptr);
+    l1::leveling_extent_reclamation_policy lq_policy{
+      config::mock_binding<size_t>(size_t{1024} * 1024)};
+    l1::leveling_queue lq(lq_policy.get_comparator());
+    l1::worker_manager manager(
+      pq, lq, nullptr, nullptr, nullptr, probe, nullptr);
     start_workers(manager).get();
     auto stop_manager = ss::defer([&manager] { manager.stop().get(); });
     using worker_state = l1::compaction_worker::worker_state;
@@ -92,8 +97,12 @@ TEST_F(WorkerManagerTestFixture, AcquireWork) {
 
     l1::compaction_scheduler_probe probe;
     l1::compaction_queue pq(std::move(cmp_func));
+    l1::leveling_extent_reclamation_policy lq_policy{
+      config::mock_binding<size_t>(size_t{1024} * 1024)};
+    l1::leveling_queue lq(lq_policy.get_comparator());
     l1::log_list_t list;
-    l1::worker_manager manager(pq, nullptr, nullptr, nullptr, probe, nullptr);
+    l1::worker_manager manager(
+      pq, lq, nullptr, nullptr, nullptr, probe, nullptr);
     auto stop_manager = ss::defer([&manager] { manager.stop().get(); });
 
     const auto test_ntp = model::ntp(
@@ -118,6 +127,69 @@ TEST_F(WorkerManagerTestFixture, AcquireWork) {
 
     manager.complete_compaction_work(work_opt.value().get());
     ASSERT_FALSE(work_opt.value()->meta->compaction.inflight_shard.has_value());
+}
+
+// `try_acquire_leveling_work` must pop past stale jobs at the head of the
+// queue (jobs whose CTP was unmanaged, leaving `meta->link` unlinked) and
+// return the first live job behind them, rather than giving up on the first.
+TEST_F(WorkerManagerTestFixture, AcquireLevelingWorkSkipsStaleEntries) {
+    auto cmp_func =
+      [](const l1::compaction_job_ptr& a, const l1::compaction_job_ptr& b) {
+          return a->meta->ntp < b->meta->ntp;
+      };
+
+    l1::compaction_scheduler_probe probe;
+    l1::compaction_queue pq(std::move(cmp_func));
+    l1::leveling_extent_reclamation_policy lq_policy{
+      config::mock_binding<size_t>(size_t{1024} * 1024)};
+    l1::leveling_queue lq(lq_policy.get_comparator());
+    l1::log_list_t list;
+    l1::worker_manager manager(
+      pq, lq, nullptr, nullptr, nullptr, probe, nullptr);
+    auto stop_manager = ss::defer([&manager] { manager.stop().get(); });
+
+    auto make_meta = [](std::string_view topic) {
+        auto ntp = model::ntp(
+          model::ns("kafka"),
+          model::topic(ss::sstring{topic}),
+          model::partition_id(0));
+        auto tidp = model::topic_id_partition(
+          model::topic_id(uuid_t::create()), ntp.tp.partition);
+        return ss::make_lw_shared<l1::log_compaction_meta>(tidp, ntp);
+    };
+    // Higher extent_count => higher expected reclaim => sorts first.
+    auto make_job =
+      [](const l1::log_compaction_meta_ptr& meta, size_t extent_count) {
+          return ss::make_lw_shared<l1::leveling_job>(
+            meta,
+            l1::levelable_range{
+              .base_offset = kafka::offset{0},
+              .last_offset = kafka::offset{99},
+              .size_bytes = 1,
+              .extent_count = extent_count},
+            l1::metastore::compaction_epoch{0});
+      };
+
+    // Stale job at the head: its meta is never linked into `list`.
+    auto stale = make_meta("stale");
+    lq.push(make_job(stale, 100));
+
+    // A live, linked job sitting behind the stale one.
+    auto live = make_meta("live");
+    list.push_back(*live);
+    lq.push(make_job(live, 10));
+
+    auto work_opt = manager.try_acquire_leveling_work(ss::this_shard_id());
+    ASSERT_TRUE(work_opt.has_value());
+    ASSERT_EQ(work_opt.value()->meta->ntp, live->ntp);
+    ASSERT_TRUE(lq.empty());
+
+    // A queue with only stale jobs yields nothing (and is drained).
+    auto stale_only = make_meta("stale_only");
+    lq.push(make_job(stale_only, 5));
+    ASSERT_FALSE(
+      manager.try_acquire_leveling_work(ss::this_shard_id()).has_value());
+    ASSERT_TRUE(lq.empty());
 }
 
 // Verifies that `dirty_ratio_scheduling_policy` orders partitions from

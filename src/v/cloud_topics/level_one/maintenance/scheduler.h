@@ -13,6 +13,7 @@
 #include "cloud_topics/level_one/common/file_io.h"
 #include "cloud_topics/level_one/frontend_reader/level_one_reader_probe.h"
 #include "cloud_topics/level_one/maintenance/compaction/compaction_queue.h"
+#include "cloud_topics/level_one/maintenance/leveling/leveling_queue.h"
 #include "cloud_topics/level_one/maintenance/log_collector.h"
 #include "cloud_topics/level_one/maintenance/log_info_collector.h"
 #include "cloud_topics/level_one/maintenance/meta.h"
@@ -79,12 +80,16 @@ public:
     void unmanage_partition(const model::ntp&, std::string_view);
 
 private:
-    // Starts the backgrounded scheduling loop.
+    // Starts the backgrounded scheduling loops.
     void start_bg_loop();
 
-    // The main compaction loop. Invoked in a background fiber until `_as` has
-    // an abort requested or the `_gate` is closed.
+    // The compaction scheduling loop. Invoked in a background fiber until `_as`
+    // has an abort requested or the `_gate` is closed.
     ss::future<> compaction_scheduling_loop();
+
+    // The leveling scheduling loop. Invoked in a background fiber until `_as`
+    // has an abort requested or the `_gate` is closed.
+    ss::future<> leveling_scheduling_loop();
 
 private:
     // Pointer to sharded `file_io` held by `app`. Used by the `worker_manager`
@@ -111,10 +116,17 @@ private:
     // The interval on which compaction loop is executed.
     config::binding<std::chrono::milliseconds> _compaction_interval;
 
+    // The interval on which the leveling loop is executed.
+    config::binding<std::chrono::milliseconds> _leveling_interval;
+
     // This semaphore is used as a way to signal a change to
     // `cloud_topics_compaction_interval_ms` during the `wait()` operation in
     // the compaction scheduling loop.
     ssx::semaphore _compaction_sem{0, "cloud_topics::scheduler::compaction"};
+
+    // Used to signal a change to `cloud_topics_leveling_interval_ms` during
+    // the `wait()` operation in the leveling scheduling loop.
+    ssx::semaphore _leveling_sem{0, "cloud_topics::scheduler::leveling"};
 
     ss::abort_source _as;
     ss::gate _gate;
@@ -130,6 +142,11 @@ private:
     // Jobs for logs in `_logs/_logs_list` that have a sampled metastore info
     // and are eligible for compaction, ordered by the scheduling policy.
     compaction_queue _compaction_queue;
+
+    // Leveling jobs (one per levelable_range) ready to be picked up by the
+    // leveling fiber on any worker shard, ordered by expected extent
+    // reclamation.
+    leveling_queue _leveling_queue;
 
     // TODO: remove this once more cluster objects speak `topic_id_partition`.
     chunked_hash_map<model::ntp, model::topic_id_partition> _ntp_to_tidp;
