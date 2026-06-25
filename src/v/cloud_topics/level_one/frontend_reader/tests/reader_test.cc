@@ -658,3 +658,78 @@ TEST_F(l1_reader_test, lookahead_multiple_objects) {
     auto result_no_prefetch = read_all(std::move(reader_no_prefetch));
     EXPECT_EQ(result_no_prefetch, expected);
 }
+
+// Prefetch tests: a non-zero prefetch horizon must download upcoming objects in
+// the background without changing the batches the reader produces.
+TEST_F(l1_reader_test, prefetch_multiple_objects) {
+    auto [ntp, tidp] = make_ntidp("test_topic");
+
+    // Create several separate L1 objects so the reader crosses object
+    // boundaries, which is where prefetch kicks in.
+    chunked_circular_buffer<model::record_batch> expected;
+    auto next_offset = model::offset{0};
+    constexpr int num_objects = 5;
+    for (int i = 0; i < num_objects; ++i) {
+        auto batches = model::test::make_random_batches(next_offset, 5).get();
+        next_offset = batches.back().last_offset() + model::offset{1};
+        for (auto& b : batches) {
+            expected.push_back(b.share());
+        }
+        std::vector<tidp_batches_t> tb;
+        tb.emplace_back(tidp, std::move(batches));
+        make_l1_objects(std::move(tb)).get();
+    }
+
+    // A large horizon forces a prefetch at every object boundary (the runway
+    // remaining in the small test objects is always below it).
+    auto reader = make_reader(
+      ntp,
+      tidp,
+      kafka::offset{0},
+      kafka::offset::max(),
+      std::numeric_limits<size_t>::max(),
+      /*strict_max_bytes=*/false,
+      /*lookahead_objects=*/8,
+      /*prefetch_horizon_bytes=*/1 << 20);
+    auto result = read_all(std::move(reader));
+    EXPECT_EQ(result, expected);
+}
+
+TEST_F(l1_reader_test, prefetch_from_nonzero_offset) {
+    auto [ntp, tidp] = make_ntidp("test_topic");
+
+    // Three objects; we start reading from the middle of the data so the
+    // adopted prefetched stream must be positioned at the reader's next offset.
+    std::vector<model::record_batch> all;
+    auto next_offset = model::offset{0};
+    for (int i = 0; i < 3; ++i) {
+        auto batches = model::test::make_random_batches(next_offset, 5).get();
+        next_offset = batches.back().last_offset() + model::offset{1};
+        for (auto& b : batches) {
+            all.push_back(b.share());
+        }
+        std::vector<tidp_batches_t> tb;
+        tb.emplace_back(tidp, std::move(batches));
+        make_l1_objects(std::move(tb)).get();
+    }
+
+    const auto start = all[7].base_offset();
+    chunked_circular_buffer<model::record_batch> expected;
+    for (auto& b : all) {
+        if (b.base_offset() >= start) {
+            expected.push_back(b.share());
+        }
+    }
+
+    auto reader = make_reader(
+      ntp,
+      tidp,
+      model::offset_cast(start),
+      kafka::offset::max(),
+      std::numeric_limits<size_t>::max(),
+      /*strict_max_bytes=*/false,
+      /*lookahead_objects=*/8,
+      /*prefetch_horizon_bytes=*/1 << 20);
+    auto result = read_all(std::move(reader));
+    EXPECT_EQ(result, expected);
+}

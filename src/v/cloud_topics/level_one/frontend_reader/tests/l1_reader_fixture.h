@@ -159,10 +159,12 @@ protected:
       kafka::offset max_offset = kafka::offset::max(),
       size_t max_bytes = std::numeric_limits<size_t>::max(),
       bool strict_max_bytes = false,
-      size_t lookahead_objects = 0) {
+      size_t lookahead_objects = 0,
+      size_t prefetch_horizon_bytes = 0) {
         auto config = make_test_config(
           start_offset, max_offset, max_bytes, strict_max_bytes);
         config.lookahead_objects = lookahead_objects;
+        config.prefetch_horizon_bytes = prefetch_horizon_bytes;
         return model::record_batch_reader(
           std::make_unique<level_one_log_reader_impl>(
             config, ntp, tidp, &_metastore, &_io));

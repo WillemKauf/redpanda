@@ -45,6 +45,26 @@ redpanda_cc_gtest(
 )
 
 redpanda_cc_gtest(
+    name = "prefetch_bench",
+    timeout = "short",
+    srcs = [
+        "prefetch_bench.cc",
+    ],
+    deps = [
+        ":l1_reader_fixture",
+        "//src/v/cloud_topics:log_reader_config",
+        "//src/v/cloud_topics/level_one/common:fake_io",
+        "//src/v/cloud_topics/level_one/frontend_reader:reader",
+        "//src/v/cloud_topics/level_one/metastore:simple",
+        "//src/v/model",
+        "//src/v/model/tests:random",
+        "//src/v/test_utils:gtest",
+        "@googletest//:gtest",
+        "@seastar",
+    ],
+)
+
+redpanda_cc_gtest(
     name = "reader_test",
     timeout = "short",
     srcs = [
