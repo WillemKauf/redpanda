@@ -64,6 +64,7 @@ redpanda_cc_library(
         "//src/v/cloud_topics/read_replica:stm",
         "//src/v/cluster",
         "//src/v/cluster:types",
+        "//src/v/config",
         "//src/v/kafka/server:write_at_offset_stm",
         "@boost//:numeric_conversion",
     ],

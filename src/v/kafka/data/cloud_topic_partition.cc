@@ -18,6 +18,7 @@
 #include "cluster/partition.h"
 #include "cluster/rm_stm.h"
 #include "cluster/types.h"
+#include "config/configuration.h"
 #include "kafka/protocol/errors.h"
 #include "kafka/protocol/types.h"
 #include "kafka/server/write_at_offset_stm.h"
@@ -38,16 +39,25 @@ namespace {
 
 cloud_topics::cloud_topic_log_reader_config
 kafka_to_cloud_topic_log_reader_config(kafka::log_reader_config cfg) {
-    return {/*group=*/cloud_io::group_id::consumer_fetch,
-            /*start_offset=*/cfg.start_offset,
-            /*max_offset=*/cfg.max_offset,
-            /*min_bytes=*/cfg.min_bytes,
-            /*max_bytes=*/cfg.max_bytes,
-            /*type_filter=*/std::nullopt,
-            /*time=*/cfg.first_timestamp,
-            /*as=*/cfg.abort_source,
-            /*client_addr=*/cfg.client_address,
-            /*strict_max_bytes=*/cfg.strict_max_bytes};
+    cloud_topics::cloud_topic_log_reader_config out{
+      /*group=*/cloud_io::group_id::consumer_fetch,
+      /*start_offset=*/cfg.start_offset,
+      /*max_offset=*/cfg.max_offset,
+      /*min_bytes=*/cfg.min_bytes,
+      /*max_bytes=*/cfg.max_bytes,
+      /*type_filter=*/std::nullopt,
+      /*time=*/cfg.first_timestamp,
+      /*as=*/cfg.abort_source,
+      /*client_addr=*/cfg.client_address,
+      /*strict_max_bytes=*/cfg.strict_max_bytes};
+
+    out.prefetch_horizon_bytes
+      = config::shard_local_cfg().cloud_topics_l1_reader_prefetch_bytes();
+    // NB: lookahead_objects is left as the caller's own metastore-batching
+    // knob. When prefetch is enabled the reader fills the lookahead buffer
+    // deeply enough to feed the prefetch queue by itself (see
+    // lookup_object_for_offset); we don't overload this config for that.
+    return out;
 }
 
 using frontend_errc = cloud_topics::frontend_errc;
