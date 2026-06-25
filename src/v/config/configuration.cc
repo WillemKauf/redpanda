@@ -5086,6 +5086,20 @@ configuration::configuration()
       {.needs_restart = needs_restart::no, .visibility = visibility::tunable},
       128,
       {.min = 0, .max = 10000})
+  , cloud_topics_l1_reader_prefetch_bytes(
+      *this,
+      "cloud_topics_l1_reader_prefetch_bytes",
+      "Read-ahead window, in bytes, for the cloud-topics L1 fetch reader. When "
+      "a sequential consumer has fewer than this many bytes left in the L1 "
+      "object it is currently reading, the broker begins downloading the next "
+      "object's footer and data in the background so the object boundary does "
+      "not stall the fetch. 0 disables prefetch. The window is compared "
+      "against the per-object runway, so large L1 objects prefetch "
+      "just-in-time "
+      "while runs of small objects are pipelined.",
+      {.needs_restart = needs_restart::no, .visibility = visibility::tunable},
+      0,
+      {.min = 0, .max = 1_GiB})
   , code_hugepages_enabled(
       *this,
       "code_hugepages_enabled",
