@@ -17,8 +17,13 @@
 #include "model/record_batch_reader.h"
 #include "utils/prefix_logger.h"
 
+#include <seastar/core/abort_source.hh>
+#include <seastar/core/gate.hh>
+#include <seastar/core/shared_future.hh>
+
 #include <deque>
 #include <expected>
+#include <memory>
 #include <variant>
 
 namespace cloud_topics {
@@ -31,6 +36,11 @@ struct open_stream {
     l1::object_id oid;
     kafka::offset last_object_offset;
     std::unique_ptr<l1::object_reader> reader;
+    // Size of the object extent backing this stream and how many of those
+    // bytes have already been streamed out. Used to estimate the remaining
+    // runway in the current object when deciding whether to prefetch the next.
+    size_t extent_size{0};
+    size_t bytes_streamed{0};
 };
 
 /*
@@ -108,6 +118,8 @@ public:
     const model::topic_id_partition& tidp() const { return _tidp; }
 
 private:
+    struct prefetch_entry;
+
     struct object_info {
         l1::object_id oid;
         l1::footer footer;
@@ -160,8 +172,11 @@ private:
     ss::future<chunked_circular_buffer<model::record_batch>>
     read_batches(l1::object_reader& reader);
 
-    ss::future<l1::footer>
-    read_footer(l1::object_id oid, size_t footer_pos, size_t object_size);
+    ss::future<l1::footer> read_footer(
+      l1::object_id oid,
+      size_t footer_pos,
+      size_t object_size,
+      ss::abort_source& as);
 
     /*
      * Returns batches starting at next offset. It will continue to advance next
@@ -178,16 +193,40 @@ private:
 
     ss::future<> close_reader_safe(l1::object_reader&);
 
-    /// Open an object reader at the start of an extent, storing into
-    /// _current_stream.
-    ss::future<std::expected<std::monostate, l1::io::errc>> open_reader_at(
+    /// Open an object reader positioned at the start of an extent and return
+    /// it. Does not touch _current_stream; the caller decides where it lands
+    /// (the foreground read path, or the prefetch slot).
+    ss::future<std::expected<open_stream, l1::io::errc>> open_reader_at(
       l1::object_id oid,
       kafka::offset last_object_offset,
       size_t extent_position,
-      size_t extent_size);
+      size_t extent_size,
+      ss::abort_source& as);
 
     /// Close _current_stream if present, swallowing exceptions.
     ss::future<> close_current_stream();
+
+    /// Top up the prefetch queue: while the bytes already downloaded-or-
+    /// in-flight ahead of the read cursor are below the configured horizon,
+    /// launch background downloads of upcoming objects. The number launched
+    /// scales inversely with object size — large objects fill the horizon with
+    /// one just-in-time prefetch, runs of small objects fan out into many
+    /// concurrent downloads. Synchronous: spawns work and returns immediately.
+    void maybe_fill_prefetch();
+
+    /// Background task that downloads the footer and data extent for one
+    /// upcoming object into the given queue entry.
+    ss::future<>
+    do_prefetch(prefetch_entry* entry, l1::metastore::object_response next);
+
+    /// Adopt the front prefetched stream as _current_stream when it serves the
+    /// reader's next offset; otherwise discard the whole queue. Returns true if
+    /// adopted.
+    ss::future<bool> try_adopt_prefetch();
+
+    /// Await and tear down every queued prefetch (used on offset mismatch and
+    /// shutdown).
+    ss::future<> discard_prefetch_queue();
 
     void set_end_of_stream();
     bool _end_of_stream{false};
@@ -212,6 +251,41 @@ private:
     // Consumed front-to-back as the reader advances through objects.
     // Populated with 1 entry (no prefetch) or N entries (prefetch).
     std::deque<l1::metastore::object_response> _lookahead_buffer;
+
+    // ---- Background prefetch of upcoming objects (see maybe_fill_prefetch) --
+    //
+    // A queue of in-flight/ready prefetches, ordered by ascending serves_offset
+    // and contiguous with the reader's forward progress. Each entry has its own
+    // background fiber, all running under _prefetch_gate and cancelled via
+    // _prefetch_as (NOT the per-fetch abort source in _config, which may be
+    // gone while the reader sits idle in the l1_reader_cache between fetches).
+    // The queue depth scales with horizon / object_size: ~1 for large objects,
+    // many for runs of small objects, which is what lets prefetch beat the
+    // single-object-ahead (2x) ceiling as boundaries get more frequent. Total
+    // bytes in flight are bounded by the horizon.
+    struct prefetch_entry {
+        // The reader's next offset that this prefetch is positioned to serve.
+        kafka::offset serves_offset;
+        // Last offset in the prefetched object; used to chain the next entry's
+        // serves_offset and to advance _current_stream once adopted.
+        kafka::offset last_object_offset;
+        // Full size of the prefetched object, for horizon accounting.
+        size_t object_size{0};
+        // Resolved by the fiber once stream/failed is populated.
+        ss::shared_promise<> ready;
+        // Populated on success; empty if the prefetch failed or found no data.
+        std::optional<open_stream> stream;
+        bool failed{false};
+    };
+
+    // Hard cap on concurrent prefetches, independent of the horizon, to bound
+    // connection and memory use for pathologically small objects.
+    static constexpr size_t max_concurrent_prefetch = 10;
+
+    size_t _prefetch_horizon_bytes{0};
+    ss::gate _prefetch_gate;
+    ss::abort_source _prefetch_as;
+    std::deque<std::unique_ptr<prefetch_entry>> _prefetch;
 };
 
 } // namespace cloud_topics

@@ -106,6 +106,16 @@ struct cloud_topic_log_reader_config {
     // NB: Applies to the L1 reader only.
     size_t lookahead_objects{0};
 
+    // Read-ahead window in bytes for the L1 reader. When the reader has fewer
+    // than this many bytes left in the object it is currently streaming, it
+    // begins downloading the next object's footer and data in the background so
+    // the object boundary does not stall the fetch. 0 (default) disables
+    // prefetch. Effective only together with lookahead_objects >= 2, since
+    // prefetch reuses the next object's already-buffered metadata.
+    //
+    // NB: Applies to the L1 reader only.
+    size_t prefetch_horizon_bytes{0};
+
     // cloud_io admission lane for this reader's cloud storage requests.
     cloud_io::group_id group{cloud_io::group_id::default_group};
 
