@@ -66,6 +66,14 @@ class KafkaCat:
             cmd += ["-X", f"transactional.id={tx_id}"]
         return self._cmd_raw(cmd, input=f"{msg}\n")
 
+    def produce_one_with_header(
+        self, topic: str, header_key: str, header_value: str, value: str = "v"
+    ):
+        """Produce a single record carrying one header. Uses a plain
+        (non-idempotent) librdkafka producer, one record per batch."""
+        cmd = ["-P", "-t", topic, "-H", f"{header_key}={header_value}"]
+        return self._cmd_raw(cmd, input=f"{value}\n")
+
     def _cmd(self, cmd: list[str], input: str | None = None):
         res = self._cmd_raw(cmd + ["-J"], input=input)
         assert res and not res.isspace(), (
