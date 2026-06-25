@@ -14,6 +14,7 @@
 #include "cluster/partition_manager.h"
 #include "cluster/shard_table.h"
 #include "config/configuration.h"
+#include "dedup/produce_filter.h"
 #include "kafka/data/partition_proxy.h"
 #include "kafka/protocol/errors.h"
 #include "kafka/protocol/kafka_batch_adapter.h"
@@ -149,6 +150,10 @@ partition_produce_stages partition_append(
                                   == model::timestamp_type::create_time
                                 ? model::timestamp::missing()
                                 : batch->header().max_timestamp;
+    // Derive base_offset from the batch's offset span (last_offset_delta)
+    // rather than its record count. They differ when produce-path dedup drops
+    // records, which leaves offset holes but preserves last_offset_delta.
+    auto last_offset_delta = batch->header().last_offset_delta;
     auto stages = partition.replicate(
       bid, std::move(*batch), acks_to_replicate_options(acks, timeout_ms));
     return partition_produce_stages{
@@ -158,16 +163,17 @@ partition_produce_stages partition_append(
          id,
          num_records = num_records,
          num_bytes,
+         last_offset_delta = last_offset_delta,
          log_append_time_ms = log_append_time_ms](
           ss::future<result<raft::replicate_result>> f) mutable {
             produce_response::partition p{.partition_index = id};
             try {
                 auto r = f.get();
                 if (r.has_value()) {
-                    // have to subtract num_of_records - 1 as base_offset
-                    // is inclusive
+                    // last_offset is inclusive; subtract the batch's offset
+                    // span to recover the (inclusive) base offset.
                     p.base_offset = model::offset(
-                      r.value().last_offset - (num_records - 1));
+                      r.value().last_offset - last_offset_delta);
                     p.log_append_time_ms = log_append_time_ms;
                     p.error_code = error_code::none;
                     partition.probe().add_records_produced(num_records);
@@ -200,6 +206,99 @@ produce_response::partition finalize_request_with_error_code(
       .partition_index = ntp.tp.partition,
       .error_code = ec,
       .error_message = std::move(err_msg)};
+}
+
+// The whole batch was a duplicate within the dedup window: nothing is
+// replicated. Acknowledge the producer with the partition's current high
+// watermark as the (synthetic) base offset.
+produce_response::partition finalize_dedup_dropped(
+  std::unique_ptr<ss::promise<>> dispatch,
+  const model::ntp& ntp,
+  ss::shard_id source_shard,
+  model::offset base_offset) {
+    ssx::background = ss::smp::submit_to(
+      source_shard, [dispatch = std::move(dispatch)]() mutable {
+          dispatch->set_value();
+          dispatch.reset();
+      });
+    produce_response::partition p{
+      .partition_index = ntp.tp.partition, .error_code = error_code::none};
+    p.base_offset = base_offset;
+    return p;
+}
+
+// Filter the batch through this partition's dedup window (a no-op unless the
+// topic has redpanda.dedup.window.ms set), then append it. Extracted as a
+// named coroutine so the invoke_on lambda below stays a plain forwarder and
+// does not become a capturing coroutine lambda.
+ss::future<produce_response::partition> append_to_partition(
+  cluster::partition_manager& mgr,
+  model::ntp ntp,
+  std::unique_ptr<model::record_batch> batch,
+  std::unique_ptr<ss::promise<>> dispatch,
+  int16_t acks,
+  std::chrono::milliseconds timeout,
+  ss::shard_id source_shard) {
+    auto partition = kafka::make_partition_proxy(ntp, mgr);
+    if (!partition || !partition->is_leader()) {
+        co_return finalize_request_with_error_code(
+          error_code::not_leader_for_partition,
+          std::move(dispatch),
+          ntp,
+          source_shard);
+    }
+
+    // Deduplicate before replicating, but only for the rare topic that opts in
+    // via redpanda.dedup.window.ms. The dedup_window() check is a couple of
+    // cheap branches with no allocation, so produce on the overwhelming
+    // majority of partitions never enters the dedup path or even moves the
+    // batch. Done on the cluster::partition (which both normal and cloud-topic
+    // proxies wrap) so the proxy only ever sees deduplicated records.
+    auto cp = mgr.get(ntp);
+    if (cp && cp->get_ntp_config().dedup_window().has_value()) {
+        auto res = co_await cp->dedup_filter(std::move(*batch));
+        if (res.outcome == dedup::filter_outcome::fully_duplicate) {
+            co_return finalize_dedup_dropped(
+              std::move(dispatch),
+              ntp,
+              source_shard,
+              partition->high_watermark());
+        }
+        *batch = std::move(res.batch);
+    }
+
+    auto bid = model::batch_identity::from(batch->header());
+    auto num_records = batch->record_count();
+    auto batch_size = batch->size_bytes();
+    auto stages = partition_append(
+      ntp.tp.partition,
+      std::move(*partition),
+      bid,
+      std::move(batch),
+      acks,
+      num_records,
+      batch_size,
+      timeout);
+    co_await std::move(stages.dispatched)
+      .then_wrapped(
+        [source_shard, dispatch = std::move(dispatch)](ss::future<> f) mutable {
+            if (f.failed()) {
+                ssx::background = ss::smp::submit_to(
+                  source_shard,
+                  [dispatch = std::move(dispatch),
+                   e = f.get_exception()]() mutable {
+                      dispatch->set_exception(e);
+                      dispatch.reset();
+                  });
+                return;
+            }
+            ssx::background = ss::smp::submit_to(
+              source_shard, [dispatch = std::move(dispatch)]() mutable {
+                  dispatch->set_value();
+                  dispatch.reset();
+              });
+        });
+    co_return co_await std::move(stages.produced);
 }
 
 struct ntp_produce_request {
@@ -308,49 +407,14 @@ ss::future<produce_response::partition> do_produce_topic_partition(
        timeout,
        source_shard = ss::this_shard_id()](
         cluster::partition_manager& mgr) mutable {
-          auto partition = kafka::make_partition_proxy(ntp, mgr);
-          if (!partition || !partition->is_leader()) {
-              return ss::as_ready_future(finalize_request_with_error_code(
-                error_code::not_leader_for_partition,
-                std::move(dispatch),
-                ntp,
-                source_shard));
-          }
-
-          auto bid = model::batch_identity::from(batch->header());
-          auto num_records = batch->record_count();
-          auto batch_size = batch->size_bytes();
-          auto stages = partition_append(
-            ntp.tp.partition,
-            std::move(*partition),
-            bid,
+          return append_to_partition(
+            mgr,
+            std::move(ntp),
             std::move(batch),
+            std::move(dispatch),
             acks,
-            num_records,
-            batch_size,
-            timeout);
-          return stages.dispatched
-            .then_wrapped([source_shard, dispatch = std::move(dispatch)](
-                            ss::future<> f) mutable {
-                if (f.failed()) {
-                    ssx::background = ss::smp::submit_to(
-                      source_shard,
-                      [dispatch = std::move(dispatch),
-                       e = f.get_exception()]() mutable {
-                          dispatch->set_exception(e);
-                          dispatch.reset();
-                      });
-                    return;
-                }
-                ssx::background = ss::smp::submit_to(
-                  source_shard, [dispatch = std::move(dispatch)]() mutable {
-                      dispatch->set_value();
-                      dispatch.reset();
-                  });
-            })
-            .then([f = std::move(stages.produced)]() mutable {
-                return std::move(f);
-            });
+            timeout,
+            source_shard);
       });
     if (p.error_code == error_code::none) {
         auto dur = std::chrono::steady_clock::now() - start;

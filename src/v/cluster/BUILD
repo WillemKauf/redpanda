@@ -2445,6 +2445,8 @@ redpanda_cc_library(
         "//src/v/container:contiguous_range_map",
         "//src/v/container:intrusive",
         "//src/v/crash_tracker",
+        "//src/v/dedup:produce_filter",
+        "//src/v/dedup:windowed_dedup_map",
         "//src/v/features",
         "//src/v/features:enterprise_features",
         "//src/v/finjector",

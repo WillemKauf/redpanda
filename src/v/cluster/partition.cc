@@ -38,6 +38,7 @@
 #include <seastar/util/defer.hh>
 
 #include <chrono>
+#include <filesystem>
 #include <optional>
 
 namespace cluster {
@@ -449,6 +450,31 @@ kafka_stages partition::replicate_in_stages(
       });
 }
 
+ss::future<dedup::filter_result>
+partition::dedup_filter(model::record_batch batch) {
+    auto window = get_ntp_config().dedup_window();
+    if (!window.has_value()) {
+        co_return dedup::filter_result{
+          .outcome = dedup::filter_outcome::unchanged,
+          .batch = std::move(batch)};
+    }
+    // The map is created on first use, and only once dedup_filter_batch
+    // actually encounters a record carrying the dedup-id header.
+    co_return co_await dedup::dedup_filter_batch(
+      std::move(batch), [this, window]() -> dedup::windowed_dedup_map& {
+          if (!_dedup_map) {
+              _dedup_map = std::make_unique<dedup::windowed_dedup_map>(
+                dedup::windowed_dedup_map_config{
+                  .window = *window,
+                  .data_directory = std::filesystem::path(
+                                      get_ntp_config().work_directory().c_str())
+                                    / "dedup",
+                });
+          }
+          return *_dedup_map;
+      });
+}
+
 raft::group_id partition::group() const { return _raft->group(); }
 
 ss::future<> partition::start(
@@ -584,6 +610,14 @@ ss::future<> partition::stop() {
           "Stopping cloud_storage_manifest_view on partition: {}",
           partition_ntp);
         co_await _cloud_storage_manifest_view->stop();
+    }
+
+    if (_dedup_map) {
+        vlog(
+          clusterlog.debug,
+          "Stopping dedup map on partition: {}",
+          partition_ntp);
+        co_await _dedup_map->stop();
     }
 
     _probe.clear_metrics();

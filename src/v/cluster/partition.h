@@ -19,6 +19,7 @@
 #include "cluster/partition_probe.h"
 #include "cluster/partition_properties_stm.h"
 #include "cluster/types.h"
+#include "dedup/produce_filter.h"
 #include "features/fwd.h"
 #include "model/record_batch_reader.h"
 #include "model/timeout_clock.h"
@@ -94,6 +95,13 @@ public:
       model::batch_identity,
       model::record_batch batch,
       raft::replicate_options);
+
+    /// Run window-based deduplication over `batch` if this topic has a dedup
+    /// window configured (redpanda.dedup.window.ms / cluster default). The
+    /// per-partition dedup map is created lazily on first use, spilling under
+    /// this partition's own data directory. When dedup is disabled the batch is
+    /// returned unchanged.
+    ss::future<dedup::filter_result> dedup_filter(model::record_batch batch);
 
     /**
      * The reader is modified such that the max offset is configured to be
@@ -427,6 +435,9 @@ private:
     consensus_ptr _raft; // never null
     ss::shared_ptr<cluster::log_eviction_stm> _log_eviction_stm;
     ss::shared_ptr<cluster::rm_stm> _rm_stm;
+    // Per-partition produce-path dedup window; created lazily when the topic
+    // has redpanda.dedup.window.ms configured. Spills under work_directory().
+    std::unique_ptr<dedup::windowed_dedup_map> _dedup_map;
     ss::shared_ptr<archival_metadata_stm> _archival_meta_stm;
     ss::shared_ptr<partition_properties_stm> _partition_properties_stm;
     ss::sharded<cloud_topics::state_accessors>* _cloud_topics_state;
