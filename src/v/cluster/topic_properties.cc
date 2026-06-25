@@ -45,6 +45,7 @@ fmt::iterator topic_properties::format_to(fmt::iterator it) const {
       "remote_label: {}, iceberg_mode: {}, "
       "leaders_preference: {}, "
       "delete_retention_ms: {}, "
+      "dedup_window_ms: {}, "
       "iceberg_delete: {}, "
       "iceberg_partition_spec: {}, "
       "iceberg_invalid_record_action: {}, "
@@ -93,6 +94,7 @@ fmt::iterator topic_properties::format_to(fmt::iterator it) const {
       iceberg_mode,
       leaders_preference,
       delete_retention_ms,
+      dedup_window_ms,
       iceberg_delete,
       iceberg_partition_spec,
       iceberg_invalid_record_action,
@@ -158,7 +160,8 @@ bool topic_properties::has_overrides() const {
         || flush_bytes.has_value() || remote_label.has_value()
         || (iceberg_mode != storage::ntp_config::default_iceberg_mode)
         || leaders_preference.has_value() || delete_retention_ms.is_engaged()
-        || iceberg_delete.has_value() || iceberg_partition_spec.has_value()
+        || dedup_window_ms.is_engaged() || iceberg_delete.has_value()
+        || iceberg_partition_spec.has_value()
         || iceberg_invalid_record_action.has_value()
         || iceberg_target_lag_ms.has_value()
         || min_cleanable_dirty_ratio.is_engaged()
@@ -261,6 +264,7 @@ topic_properties::get_ntp_cfg_overrides() const {
     ret.flush_bytes = flush_bytes;
     ret.iceberg_mode = iceberg_mode;
     ret.delete_retention_ms = delete_retention_ms;
+    ret.dedup_window_ms = dedup_window_ms;
     ret.min_cleanable_dirty_ratio = min_cleanable_dirty_ratio;
     ret.min_compaction_lag_ms = min_compaction_lag_ms;
     ret.max_compaction_lag_ms = max_compaction_lag_ms;

@@ -99,7 +99,7 @@ create_topic_properties_update(
     std::apply(apply_op(op_t::none), update.custom_properties.serde_fields());
 
     static_assert(
-      std::tuple_size_v<decltype(update.properties.serde_fields())> == 45,
+      std::tuple_size_v<decltype(update.properties.serde_fields())> == 46,
       "If you add a property, decide on its default alter config "
       "policy, and handle the update in the loop below");
     static_assert(
@@ -417,6 +417,13 @@ create_topic_properties_update(
             if (cfg.name == topic_property_delete_retention_ms) {
                 parse_and_set_tristate(
                   update.properties.delete_retention_ms,
+                  cfg.value,
+                  kafka::config_resource_operation::set);
+                continue;
+            }
+            if (cfg.name == topic_property_dedup_window_ms) {
+                parse_and_set_tristate(
+                  update.properties.dedup_window_ms,
                   cfg.value,
                   kafka::config_resource_operation::set);
                 continue;

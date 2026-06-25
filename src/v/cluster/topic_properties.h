@@ -35,7 +35,7 @@ namespace cluster {
  */
 struct topic_properties
   : serde::
-      envelope<topic_properties, serde::version<14>, serde::compat_version<0>> {
+      envelope<topic_properties, serde::version<15>, serde::compat_version<0>> {
     topic_properties() noexcept = default;
     topic_properties(
       std::optional<model::compression> compression,
@@ -225,6 +225,10 @@ struct topic_properties
     std::optional<config::leaders_preference> leaders_preference;
 
     tristate<std::chrono::milliseconds> delete_retention_ms{disable_tristate};
+    // Window over which a record key is deduplicated on the produce path
+    // (redpanda.dedup.window.ms). Disabled tristate disables dedup; an empty
+    // tristate falls back to the cluster default (dedup_window_ms).
+    tristate<std::chrono::milliseconds> dedup_window_ms{disable_tristate};
     // Should we delete the corresponding iceberg table when deleting the topic.
     std::optional<bool> iceberg_delete;
     // Partition spec expression for the corresponding Iceberg table.
@@ -329,7 +333,8 @@ struct topic_properties
           message_timestamp_before_max_ms,
           message_timestamp_after_max_ms,
           storage_mode,
-          schema_registry_context);
+          schema_registry_context,
+          dedup_window_ms);
     }
 
     friend bool

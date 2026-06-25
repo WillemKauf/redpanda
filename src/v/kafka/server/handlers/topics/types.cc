@@ -304,6 +304,10 @@ cluster::topic_configuration to_topic_config(
     cfg.properties.delete_retention_ms = get_delete_retention_ms(
       config_entries);
 
+    cfg.properties.dedup_window_ms
+      = get_tristate_value<std::chrono::milliseconds>(
+        config_entries, topic_property_dedup_window_ms);
+
     cfg.properties.iceberg_delete = get_bool_value(
       config_entries, topic_property_iceberg_delete);
 

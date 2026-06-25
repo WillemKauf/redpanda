@@ -884,6 +884,23 @@ config_response_container_t make_topic_configs(
         include_documentation,
         config::shard_local_cfg().tombstone_retention_ms.desc()));
 
+    // Deduplication is strictly per-topic opt-in: there is no cluster default,
+    // so the reported default is always empty.
+    add_topic_config_if_requested(
+      config_keys,
+      result,
+      topic_property_dedup_window_ms,
+      std::optional<std::chrono::milliseconds>{},
+      topic_property_dedup_window_ms,
+      hide_disabled_tristate(
+        topic_properties.dedup_window_ms,
+        std::optional<std::chrono::milliseconds>{}),
+      include_synonyms,
+      maybe_make_documentation(
+        include_documentation,
+        "Window over which a record key is deduplicated on the produce path. "
+        "Unset disables deduplication for the topic."));
+
     constexpr std::string_view key_validation
       = "Enable validation of the schema id for keys on a record";
     constexpr std::string_view val_validation

@@ -85,6 +85,10 @@ public:
 
         tristate<std::chrono::milliseconds> delete_retention_ms;
 
+        // Window over which a record key is deduplicated on the produce path
+        // (redpanda.dedup.window.ms). Disabled tristate disables dedup.
+        tristate<std::chrono::milliseconds> dedup_window_ms;
+
         // Controls segment compaction eligiblity.
         tristate<double> min_cleanable_dirty_ratio;
         std::optional<std::chrono::milliseconds> min_compaction_lag_ms;
@@ -417,6 +421,18 @@ public:
 
         // Fall back to cluster default
         return cluster_default;
+    }
+
+    // The produce-path deduplication window for this topic, or nullopt if
+    // dedup is disabled. Deduplication is strictly opt-in: it is enabled only
+    // when the topic explicitly sets redpanda.dedup.window.ms. There is no
+    // cluster-wide default, so the feature is a complete no-op for every topic
+    // that has not set the property.
+    std::optional<std::chrono::milliseconds> dedup_window() const {
+        if (_overrides && _overrides->dedup_window_ms.has_optional_value()) {
+            return _overrides->dedup_window_ms.value();
+        }
+        return std::nullopt;
     }
 
     std::optional<model::cleanup_policy_bitflags>

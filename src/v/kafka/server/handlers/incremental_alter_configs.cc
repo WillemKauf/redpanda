@@ -403,6 +403,11 @@ create_topic_properties_update(
                   update.properties.delete_retention_ms, cfg.value, op);
                 continue;
             }
+            if (cfg.name == topic_property_dedup_window_ms) {
+                parse_and_set_tristate(
+                  update.properties.dedup_window_ms, cfg.value, op);
+                continue;
+            }
             if (cfg.name == topic_property_iceberg_delete) {
                 parse_and_set_optional_bool_alpha(
                   update.properties.iceberg_delete, cfg.value, op);

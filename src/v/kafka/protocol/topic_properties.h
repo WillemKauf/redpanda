@@ -58,6 +58,9 @@ inline constexpr std::string_view topic_property_timestamp_type
 inline constexpr std::string_view topic_property_delete_retention_ms
   = "delete.retention.ms";
 
+inline constexpr std::string_view topic_property_dedup_window_ms
+  = "redpanda.dedup.window.ms";
+
 inline constexpr std::string_view topic_property_min_compaction_lag_ms
   = "min.compaction.lag.ms";
 
