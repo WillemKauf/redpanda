@@ -61,8 +61,11 @@ public:
 
     // Preload while joining the cluster, from a controller snapshot sent
     // in response to a join request.
-    static ss::future<preload_result>
-    preload_join(const controller_join_snapshot&);
+    //
+    // When defer_needs_restart is true, needs_restart properties are applied as
+    // pending (activated on the next restart) rather than promoted live.
+    static ss::future<preload_result> preload_join(
+      const controller_join_snapshot&, bool defer_needs_restart = false);
 
     ss::future<> start();
     ss::future<> stop();
