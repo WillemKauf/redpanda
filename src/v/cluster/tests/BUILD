@@ -183,6 +183,28 @@ redpanda_test_cc_library(
 )
 
 redpanda_cc_btest(
+    name = "cluster_discovery_test",
+    timeout = "short",
+    srcs = [
+        "cluster_discovery_test.cc",
+    ],
+    deps = [
+        "//src/v/base",
+        "//src/v/cluster",
+        "//src/v/cluster:bootstrap_types",
+        "//src/v/config",
+        "//src/v/features",
+        "//src/v/model",
+        "//src/v/net",
+        "//src/v/rpc",
+        "//src/v/test_utils:seastar_boost",
+        "//src/v/utils:uuid",
+        "@seastar",
+        "@seastar//:testing",
+    ],
+)
+
+redpanda_cc_btest(
     name = "topic_table_test",
     timeout = "short",
     srcs = [

@@ -25,6 +25,8 @@
 #include <seastar/core/seastar.hh>
 
 #include <chrono>
+#include <optional>
+#include <vector>
 
 using model::node_id;
 using std::vector;
@@ -270,6 +272,23 @@ cluster_discovery::fetch_controller_snapshot_from_leader(
     co_return std::nullopt;
 }
 
+ss::future<result<cluster_bootstrap_info_reply>>
+cluster_discovery::request_cluster_bootstrap_info_attempt(
+  net::unresolved_address addr, std::chrono::milliseconds timeout) const {
+    return do_with_client_one_shot<cluster_bootstrap_client_protocol>(
+      addr,
+      config::node().rpc_server_tls(),
+      timeout,
+      rpc::transport_version::v2,
+      [timeout](cluster_bootstrap_client_protocol c) {
+          return c
+            .cluster_bootstrap_info(
+              cluster_bootstrap_info_request{},
+              rpc::client_opts(rpc::clock_type::now() + timeout))
+            .then(&rpc::get_ctx_data<cluster_bootstrap_info_reply>);
+      });
+}
+
 ss::future<cluster_bootstrap_info_reply>
 cluster_discovery::request_cluster_bootstrap_info_single(
   net::unresolved_address addr) const {
@@ -277,8 +296,6 @@ cluster_discovery::request_cluster_bootstrap_info_single(
     _as.check();
     auto repeat_jitter = simple_time_jitter<model::timeout_clock>(1s);
     while (true) {
-        result<cluster_bootstrap_info_reply> reply_result(
-          std::errc::connection_refused);
         if (_is_cluster_founder.has_value()) {
             // Another fiber detected the presence of a cluster. Just exit
             // early.
@@ -289,19 +306,8 @@ cluster_discovery::request_cluster_bootstrap_info_single(
             co_return cluster_bootstrap_info_reply{};
         }
         try {
-            reply_result = co_await do_with_client_one_shot<
-              cluster_bootstrap_client_protocol>(
-              addr,
-              config::node().rpc_server_tls(),
-              2s,
-              rpc::transport_version::v2,
-              [](cluster_bootstrap_client_protocol c) {
-                  return c
-                    .cluster_bootstrap_info(
-                      cluster_bootstrap_info_request{},
-                      rpc::client_opts(rpc::clock_type::now() + 2s))
-                    .then(&rpc::get_ctx_data<cluster_bootstrap_info_reply>);
-              });
+            auto reply_result = co_await request_cluster_bootstrap_info_attempt(
+              addr, 2s);
             if (reply_result) {
                 vlog(
                   clusterlog.info,
@@ -325,6 +331,96 @@ cluster_discovery::request_cluster_bootstrap_info_single(
         co_await ss::sleep_abortable(repeat_jitter.next_duration(), _as);
         vlog(clusterlog.trace, "Retrying cluster bootstrap info from {}", addr);
     }
+}
+
+ss::future<bool> cluster_discovery::try_detect_existing_cluster(
+  std::chrono::milliseconds budget) {
+    // If we already hold a cluster UUID locally, a cluster certainly exists.
+    if (_cluster_uuid.has_value()) {
+        co_return true;
+    }
+    // If founder state is already resolved, defer to it (only ever set to false
+    // early, indicating a cluster was detected).
+    if (_is_cluster_founder.has_value()) {
+        co_return !*_is_cluster_founder;
+    }
+
+    const net::unresolved_address& self_addr
+      = config::node().advertised_rpc_api();
+    std::vector<net::unresolved_address> peers;
+    for (const auto& seed_server : config::node().seed_servers()) {
+        if (seed_server.addr != self_addr) {
+            peers.push_back(seed_server.addr);
+        }
+    }
+    if (peers.empty()) {
+        // No peers to ask (e.g. single-seed cluster); cannot detect remotely.
+        co_return false;
+    }
+
+    constexpr auto per_attempt_timeout = std::chrono::seconds(1);
+    constexpr auto backoff = std::chrono::milliseconds(250);
+    const auto deadline = model::timeout_clock::now() + budget;
+    while (model::timeout_clock::now() < deadline && !_as.abort_requested()) {
+        bool any_peer_answered = false;
+        bool all_peers_answered = true;
+        for (const auto& addr : peers) {
+            std::optional<cluster_bootstrap_info_reply> reply;
+            try {
+                auto reply_result
+                  = co_await request_cluster_bootstrap_info_attempt(
+                    addr, per_attempt_timeout);
+                if (reply_result) {
+                    reply = std::move(reply_result.value());
+                }
+            } catch (...) {
+                // Best-effort probe: treat any transport failure as "no reply".
+                vlog(
+                  clusterlog.trace,
+                  "Early cluster-presence probe to {} failed: {}",
+                  addr,
+                  std::current_exception());
+            }
+            if (!reply.has_value()) {
+                all_peers_answered = false;
+                continue;
+            }
+            any_peer_answered = true;
+            if (reply->cluster_uuid.has_value()) {
+                vlog(
+                  clusterlog.info,
+                  "Existing cluster {} detected during early discovery; "
+                  "registering as a joiner",
+                  *reply->cluster_uuid);
+                // Sound to memoize: we only ever detect a cluster's presence
+                // early, never its absence. register_with_cluster() will now
+                // skip the blocking founder handshake and register directly.
+                _is_cluster_founder = false;
+                co_return true;
+            }
+        }
+        // Only an already-running cluster can be detected here: the service
+        // that answers cluster_bootstrap_info comes up with the main RPC
+        // server, well after this early probe. So if no peer answers at all,
+        // this is either a fresh bring-up (every seed is at this same early
+        // point, servers not up yet) or the peers are unreachable - in both
+        // cases there is no live cluster to join, and waiting would only stall
+        // a genuine founder. Bail immediately; resolve_node_identity() runs the
+        // authoritative founder handshake later, once all seeds' RPC servers
+        // are up.
+        if (!any_peer_answered) {
+            co_return false;
+        }
+        // Every reachable peer answered and none is in a cluster: likewise no
+        // existing cluster to join.
+        if (all_peers_answered) {
+            co_return false;
+        }
+        // Partial view (some peers answered, some unreachable): a slow peer may
+        // yet reveal a running cluster, so retry within the remaining budget.
+        co_await ss::sleep_abortable(backoff, _as);
+    }
+    co_return false;
 }
 
 namespace {

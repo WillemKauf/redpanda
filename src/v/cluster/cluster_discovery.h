@@ -9,6 +9,7 @@
 #pragma once
 
 #include "absl/container/flat_hash_map.h"
+#include "base/outcome.h"
 #include "base/seastarx.h"
 #include "model/fundamental.h"
 #include "model/metadata.h"
@@ -113,6 +114,31 @@ public:
     // will be set with an ID agreed upon by all seeds.
     ss::future<bool> is_cluster_founder();
 
+    // Best-effort, bounded probe that tries to detect an already-running
+    // cluster, safe to run early in startup (before the local RPC server is
+    // up). One-sided: true means a cluster was positively detected; false means
+    // detection did not succeed - either no cluster exists or the result was
+    // inconclusive (peers transiently unreachable). It never concludes that
+    // this node *is* a founder.
+    //
+    // Unlike `is_cluster_founder()`, which blocks on the full seed handshake
+    // (and so must run only after every seed's RPC server is listening), this
+    // only issues outbound `cluster_bootstrap_info` requests to peer seeds and
+    // needs nothing from the local server.
+    //
+    // It returns true and memoizes not-a-founder state as soon as a peer
+    // reports a cluster_uuid; detecting the *presence* of a cluster is sound to
+    // conclude early. It returns false if no existing cluster is observed
+    // within `budget` (which is an inconclusive result: this node may be a
+    // genuine founder, or peers may be transiently unreachable), in which case
+    // the caller must fall back to `is_cluster_founder()` later. It never
+    // concludes that this node *is* a founder.
+    //
+    // Intended to let a wiped seed rejoining an existing cluster register as a
+    // joiner immediately, rather than defer to the mutual handshake path later.
+    ss::future<bool>
+    try_detect_existing_cluster(std::chrono::milliseconds budget);
+
     // Returns node_uuid to node_id map built during cluster discovery.
     // Non-const to allow moving the contents away, since it is supposed to be
     // a single use call.
@@ -143,9 +169,14 @@ private:
     ss::future<std::optional<registration_result>>
     dispatch_node_uuid_registration_to_seeds();
 
-    // Requests `cluster_bootstrap_info` from the given address, returning
-    // early with a bogus result if it's already been determined if this node
-    // is a cluster founder.
+    // Issues a single cluster_bootstrap_info RPC to the given address.
+    ss::future<result<cluster_bootstrap_info_reply>>
+    request_cluster_bootstrap_info_attempt(
+      net::unresolved_address, std::chrono::milliseconds timeout) const;
+
+    // Requests `cluster_bootstrap_info` from the given address, retrying until
+    // it succeeds, and returning early with a bogus result if it's already been
+    // determined that this node is a cluster founder.
     ss::future<cluster_bootstrap_info_reply>
       request_cluster_bootstrap_info_single(net::unresolved_address) const;
 
