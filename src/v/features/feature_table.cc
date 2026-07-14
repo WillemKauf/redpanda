@@ -117,6 +117,8 @@ std::string_view to_string_view(feature f) {
         return "datalake_iceberg";
     case feature::raft_symmetric_reconfiguration_cancel:
         return "raft_symmetric_reconfiguration_cancel";
+    case feature::multi_term_segments:
+        return "multi_term_segments";
     case feature::datalake_iceberg_ga:
         return "datalake_iceberg_ga";
     case feature::cloud_storage_metadata_rw_fence:
@@ -198,7 +200,7 @@ constexpr cluster_version latest_version = to_cluster_version(
 // a freshly initialized node will start at. All features up to this cluster
 // version will automatically be enabled when Redpanda starts.
 constexpr cluster_version earliest_version = to_cluster_version(
-  release_version::v26_1_1);
+  release_version::v26_2_1);
 
 static_assert(
   latest_version - earliest_version == 1L,
@@ -237,6 +239,8 @@ bool is_major_version_release(cluster::cluster_version version) {
     case release_version::v25_3_1:
     case release_version::v26_1_1:
     case release_version::v26_2_1:
+        return true;
+    case release_version::v26_3_1:
         return true;
     }
     __builtin_unreachable();
