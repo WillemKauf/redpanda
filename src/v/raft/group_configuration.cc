@@ -1458,12 +1458,14 @@ void group_configuration::maybe_set_initial_revision(
 fmt::iterator group_configuration::format_to(fmt::iterator it) const {
     it = fmt::format_to(
       it,
-      "{{current: {}, old:{}, revision: {}, update: {}, version: {}",
+      "{{current: {}, old:{}, revision: {}, update: {}, version: {}, term: "
+      "{}",
       _current,
       _old,
       _revision,
       _configuration_update,
-      _version);
+      _version,
+      _term);
     if (_version < group_configuration::v_5) {
         it = fmt::format_to(it, ", brokers: {}}}", _brokers);
     } else {
@@ -1491,6 +1493,11 @@ group_configuration group_configuration::serde_direct_read(
         ret._version = version;
     }
 
+    if (h._version >= 8) {
+        ret._term = serde::read_nested<std::optional<model::term_id>>(
+          p, h._bytes_left_limit);
+    }
+
     if (p.bytes_left() > h._bytes_left_limit) {
         p.skip(p.bytes_left() - h._bytes_left_limit);
     }
@@ -1501,6 +1508,7 @@ void group_configuration::serde_write(iobuf& out) {
     using serde::write;
     serde_write_v6(out);
     write(out, _version);
+    write(out, _term);
 }
 
 void group_configuration::serde_write_v6(iobuf& out) {
@@ -1541,6 +1549,25 @@ void tag_invoke(
     size_placeholder.write(
       reinterpret_cast<const char*>(&size), sizeof(serde::serde_size_t));
 }
+
+group_configuration::version_t target_configuration_version(
+  group_configuration::version_t current,
+  configuration_state state,
+  bool supports_symmetric_reconfiguration_cancel) {
+    auto target = current;
+    static constexpr auto min_upgradable_version = group_configuration::v_4;
+    static constexpr auto min_serde_version = group_configuration::v_6;
+    if (
+      target >= min_upgradable_version
+      && target < group_configuration::current_version) {
+        target = supports_symmetric_reconfiguration_cancel
+                     && state == configuration_state::simple
+                   ? group_configuration::current_version
+                   : std::max(target, min_serde_version);
+    }
+    return target;
+}
+
 } // namespace raft
 
 namespace reflection {

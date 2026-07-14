@@ -600,3 +600,72 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
   TestCancellationAfterAdvancement, ConfigurationCancellationTest, params);
+
+// The version selected for replication must never be lower than the
+// configuration's current version. Lowering it would swap the change strategy
+// out from under an in-flight reconfiguration and drop the replication term,
+// which only v_8 and later carry.
+TEST(test_raft_group_configuration, target_version_never_lowers) {
+    constexpr std::array versions{
+      raft::group_configuration::v_3,
+      raft::group_configuration::v_4,
+      raft::group_configuration::v_5,
+      raft::group_configuration::v_6,
+      raft::group_configuration::v_7,
+      raft::group_configuration::v_8};
+    constexpr std::array states{
+      raft::configuration_state::simple,
+      raft::configuration_state::transitional,
+      raft::configuration_state::joint};
+
+    for (auto version : versions) {
+        for (auto state : states) {
+            for (bool supports_cancel : {false, true}) {
+                auto target = raft::target_configuration_version(
+                  version, state, supports_cancel);
+                EXPECT_GE(target, version)
+                  << "version " << version << " state " << state
+                  << " supports_cancel " << supports_cancel;
+            }
+        }
+    }
+}
+
+TEST(test_raft_group_configuration, target_version_upgrades) {
+    using cfg = raft::group_configuration;
+    // a simple configuration on a cluster that supports symmetric cancellation
+    // is brought all the way to the current version
+    for (auto version : {cfg::v_4, cfg::v_5, cfg::v_6, cfg::v_7}) {
+        EXPECT_EQ(
+          raft::target_configuration_version(
+            version, raft::configuration_state::simple, true),
+          cfg::v_8);
+    }
+    // without that support, or mid-reconfiguration, v_4 and v_5 still reach
+    // v_6, but a v_7 configuration is left alone rather than downgraded
+    EXPECT_EQ(
+      raft::target_configuration_version(
+        cfg::v_4, raft::configuration_state::joint, true),
+      cfg::v_6);
+    EXPECT_EQ(
+      raft::target_configuration_version(
+        cfg::v_5, raft::configuration_state::simple, false),
+      cfg::v_6);
+    EXPECT_EQ(
+      raft::target_configuration_version(
+        cfg::v_7, raft::configuration_state::joint, true),
+      cfg::v_7);
+    EXPECT_EQ(
+      raft::target_configuration_version(
+        cfg::v_7, raft::configuration_state::transitional, true),
+      cfg::v_7);
+    // versions outside the upgradeable range are untouched
+    EXPECT_EQ(
+      raft::target_configuration_version(
+        cfg::v_3, raft::configuration_state::simple, true),
+      cfg::v_3);
+    EXPECT_EQ(
+      raft::target_configuration_version(
+        cfg::v_8, raft::configuration_state::joint, true),
+      cfg::v_8);
+}
