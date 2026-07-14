@@ -159,6 +159,13 @@ public:
             _term_spans = std::move(spans);
         }
 
+        /// Rebuilds the in-memory _term_spans from recovered log data.
+        void rebuild_term_spans(
+          const chunked_vector<std::pair<model::term_id, model::offset>>&
+            transitions) {
+            _term_spans.rebuild(transitions);
+        }
+
         model::offset get_base_offset() const { return _base_offset; }
         model::offset get_committed_offset() const { return _committed_offset; }
         model::offset get_stable_offset() const { return _stable_offset; }
@@ -238,6 +245,12 @@ public:
     /// segment instead of rolling onto a new segment. Keeps the index's
     /// term span cache in sync with the offset tracker.
     void advance_term(model::term_id, model::offset base);
+
+    /// Rebuild the term spans from term transitions recovered from the
+    /// segment's raft configuration batches. Keeps the index's term span
+    /// cache in sync with the offset tracker.
+    void rebuild_term_spans(
+      const chunked_vector<std::pair<model::term_id, model::offset>>&);
 
     /// main write interface
     /// auto indexes record_batch

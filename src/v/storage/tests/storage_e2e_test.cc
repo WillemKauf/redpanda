@@ -2032,6 +2032,52 @@ TEST_F(storage_test_fixture, compaction_stamps_configuration_batches) {
     ASSERT_EQ(configs, 1);
 }
 
+/**
+ * Recovery replay visits every batch with the term parser in hand, so it
+ * re-derives index_state::config_batch_terms - stamped segments stay
+ * provably stamped even after index loss.
+ */
+TEST_F(storage_test_fixture, recovery_rederives_configuration_term_flag) {
+    auto cfg = default_log_config(test_dir);
+    cfg.batch_term_parser = make_test_batch_term_parser();
+    auto ntp = model::ntp("default", "test_flag_recovery", 0);
+
+    {
+        storage::log_manager mgr = make_log_manager(cfg);
+        auto deferred = ss::defer([&mgr]() mutable { mgr.stop().get(); });
+        auto log = manage_log(
+          mgr, storage::ntp_config(ntp, mgr.config().base_dir));
+
+        // segment 0: term transition via a stamped configuration batch (the
+        // active segment spans terms 1-2)
+        append_single_record_batch(log, 5, model::term_id(1));
+        append_configuration_batch(log, model::term_id(2));
+        append_single_record_batch(log, 5, model::term_id(2));
+        // segment 1: begins with an unstamped configuration batch (rolls)
+        append_unstamped_configuration_batch(log, model::term_id(3));
+        append_single_record_batch(log, 5, model::term_id(3));
+        log->flush().get();
+        ASSERT_EQ(log->segment_count(), 2);
+    }
+
+    // index-less restart: every segment is fully replayed
+    auto dir = storage::ntp_config(ntp, cfg.base_dir).work_directory();
+    for (const auto& e :
+         std::filesystem::directory_iterator(std::filesystem::path(dir))) {
+        if (e.path().extension() == ".base_index") {
+            std::filesystem::remove(e.path());
+        }
+    }
+    storage::log_manager mgr = make_log_manager(cfg);
+    auto deferred = ss::defer([&mgr]() mutable { mgr.stop().get(); });
+    auto log = manage_log(mgr, storage::ntp_config(ntp, mgr.config().base_dir));
+    ASSERT_EQ(log->segment_count(), 2);
+    ASSERT_TRUE(log->segments()[0]->index().config_batch_terms_verified());
+    // replay cannot stamp, so the unstamped segment stays unproven for a
+    // compaction rewrite to fix
+    ASSERT_FALSE(log->segments()[1]->index().config_batch_terms_verified());
+}
+
 TEST_F(storage_test_fixture, max_adjacent_segment_compaction) {
     auto cfg = default_log_config(test_dir);
     cfg.max_compacted_segment_size = config::mock_binding<size_t>(6_MiB);
