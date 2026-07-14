@@ -11,14 +11,17 @@
 
 #pragma once
 
+#include "container/chunked_vector.h"
 #include "storage/batch_cache.h"
 #include "storage/compacted_index_writer.h"
 #include "storage/file_sanitizer_types.h"
 #include "storage/fs_utils.h"
 #include "storage/fwd.h"
+#include "storage/index_state.h"
 #include "storage/segment_appender.h"
 #include "storage/segment_index.h"
 #include "storage/segment_reader.h"
+#include "storage/term_span.h"
 #include "storage/types.h"
 #include "storage/version.h"
 #include "utils/functional.h"
@@ -28,6 +31,7 @@
 #include <seastar/core/rwlock.hh>
 #include <seastar/core/sharded.hh>
 
+#include <algorithm>
 #include <exception>
 #include <optional>
 
@@ -55,11 +59,22 @@ public:
           = named_type<model::offset, struct dirty_offset_tag>;
 
         offset_tracker(model::term_id t, model::offset base)
-          : _term(t)
+          : _term_spans(t, base)
           , _base_offset(base)
           , _committed_offset(model::prev_offset(base))
           , _stable_offset(model::prev_offset(base))
           , _dirty_offset(model::prev_offset(base)) {}
+
+        /// The term spans forbid implicit copies (term_span_set); copying
+        /// a tracker to snapshot it must be explicit.
+        offset_tracker copy() const {
+            offset_tracker o(get_base_term(), _base_offset);
+            o._term_spans = _term_spans.copy();
+            o._committed_offset = _committed_offset;
+            o._stable_offset = _stable_offset;
+            o._dirty_offset = _dirty_offset;
+            return o;
+        }
 
         template<typename... Ts>
         void set_offsets(Ts... ts) {
@@ -79,7 +94,57 @@ public:
             set_offsets(t);
         }
 
-        model::term_id get_term() const { return _term; }
+        /// Term of the segment's base offset (the term encoded in the
+        /// segment filename). A segment may cover multiple terms; use
+        /// term_at() for the term of a specific offset.
+        model::term_id get_base_term() const { return _term_spans.base_term(); }
+
+        /// Term of the given offset, if it falls within the segment's
+        /// covered offset range [base offset, dirty offset].
+        std::optional<model::term_id> term_at(model::offset o) const {
+            if (o > _dirty_offset) {
+                return std::nullopt;
+            }
+            return _term_spans.term_at(o);
+        }
+
+        /// Term of the last offset covered by this segment.
+        model::term_id last_term() const { return _term_spans.last_term(); }
+
+        /// First offset of the last term span covered by this segment.
+        model::offset last_term_base_offset() const {
+            return _term_spans.last_term_base_offset();
+        }
+
+        /// Last offset of the given term within this segment, if the term is
+        /// covered by this segment. For the segment's last term this is the
+        /// dirty offset - which for an empty segment is base - 1, the log's
+        /// tail before this segment. That is deliberate: the log-level term
+        /// scan (disk_log_impl::get_term_last_offset) directs the query to
+        /// the newest segment whose base term is <= t, so a freshly rolled
+        /// empty segment must answer with the tail of the previous segment.
+        std::optional<model::offset> term_last_offset(model::term_id t) const {
+            if (!_term_spans.contains(t)) {
+                return std::nullopt;
+            }
+            if (auto next = _term_spans.next_term_base(t)) {
+                return model::prev_offset(*next);
+            }
+            return _dirty_offset;
+        }
+
+        /// Drop term spans beginning after the new last offset (suffix
+        /// truncation). The base span is always retained.
+        void truncate_term_spans(model::offset new_last) {
+            _term_spans.truncate(new_last);
+        }
+
+        /// Record that offsets starting at base belong to term t. Terms and
+        /// span base offsets are strictly monotonic within a segment.
+        void add_term_span(model::term_id t, model::offset base) {
+            _term_spans.add(t, base);
+        }
+
         model::offset get_base_offset() const { return _base_offset; }
         model::offset get_committed_offset() const { return _committed_offset; }
         model::offset get_stable_offset() const { return _stable_offset; }
@@ -99,7 +164,11 @@ public:
             }
         }
 
-        model::term_id _term;
+        /// Terms of the offset spans covered by this segment. Segments gain
+        /// additional spans beyond the base span only once the append path
+        /// stops rolling on term change / compaction merges across terms
+        /// (both gated on the multi_term_segments feature).
+        term_span_set _term_spans;
         model::offset _base_offset;
 
         /// \brief These offsets are the `batch.last_offset()` and not

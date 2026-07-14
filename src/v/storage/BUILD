@@ -350,6 +350,7 @@ redpanda_cc_library(
         ":resources",
         ":scoped_file_tracker",
         ":segment_appender",
+        ":term_span",
         "//src/v/base",
         "//src/v/bytes",
         "//src/v/bytes:iobuf",

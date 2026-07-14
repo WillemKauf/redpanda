@@ -429,7 +429,7 @@ FIXTURE_TEST(test_aborted_transactions, rm_stm_test_fixture) {
     auto aborted_txes_seg = [&](auto segment_index) {
         BOOST_REQUIRE_GE(segment_index, 0);
         BOOST_REQUIRE_LT(segment_index, segments.size());
-        auto offsets = segments[segment_index]->offsets();
+        const auto& offsets = segments[segment_index]->offsets();
         vlog(
           logger.info,
           "Seg index {}, begin {}, end {}",
