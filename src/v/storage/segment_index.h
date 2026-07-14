@@ -18,6 +18,7 @@
 #include "storage/file_sanitizer_types.h"
 #include "storage/fs_utils.h"
 #include "storage/index_state.h"
+#include "storage/term_span.h"
 #include "storage/types.h"
 
 #include <seastar/core/file.hh>
@@ -266,6 +267,19 @@ public:
             _needs_persistence = true;
         }
         _state.config_batch_terms_verified = b;
+    }
+
+    /// Update the cached term spans (mirror of the segment's
+    /// offset_tracker).
+    void set_term_spans(term_span_set spans) {
+        _state.term_spans = std::move(spans);
+        _needs_persistence = true;
+    }
+
+    /// The cached term spans; absent when the index was written before
+    /// index_state::term_spans_version.
+    const std::optional<term_span_set>& term_spans() const {
+        return _state.term_spans;
     }
 
     // Get the cleanly compacted timestamp.

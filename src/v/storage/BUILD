@@ -102,6 +102,7 @@ redpanda_cc_library(
         "@fmt",
     ],
     deps = [
+        ":term_span",
         "//src/v/base",
         "//src/v/bytes:iobuf",
         "//src/v/container:chunked_vector",

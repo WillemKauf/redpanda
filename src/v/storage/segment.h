@@ -145,6 +145,20 @@ public:
             _term_spans.add(t, base);
         }
 
+        const term_span_set& term_spans() const { return _term_spans; }
+
+        /// Replace the term spans wholesale, e.g. with spans recovered from
+        /// the segment index or rebuilt from log data. The spans must begin
+        /// at the segment's base offset.
+        void reset_term_spans(term_span_set spans) {
+            vassert(
+              spans.base_offset() == _base_offset,
+              "term spans must begin at the segment base offset {}: {}",
+              _base_offset,
+              spans.base_offset());
+            _term_spans = std::move(spans);
+        }
+
         model::offset get_base_offset() const { return _base_offset; }
         model::offset get_committed_offset() const { return _committed_offset; }
         model::offset get_stable_offset() const { return _stable_offset; }
@@ -219,6 +233,11 @@ public:
     ss::future<> release_appender(readers_cache*);
     ss::future<> truncate(
       model::offset, size_t physical, model::timestamp new_max_timestamp);
+
+    /// Record a term transition at the given base offset in the active
+    /// segment instead of rolling onto a new segment. Keeps the index's
+    /// term span cache in sync with the offset tracker.
+    void advance_term(model::term_id, model::offset base);
 
     /// main write interface
     /// auto indexes record_batch

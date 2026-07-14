@@ -17,6 +17,7 @@
 #include "model/fundamental.h"
 #include "model/timestamp.h"
 #include "serde/envelope.h"
+#include "storage/term_span.h"
 
 #include <seastar/util/bool_class.hh>
 
@@ -132,7 +133,7 @@ private:
    1 byte  - non_data_timestamps
  */
 struct index_state
-  : serde::envelope<index_state, serde::version<12>, serde::compat_version<4>> {
+  : serde::envelope<index_state, serde::version<13>, serde::compat_version<4>> {
     static constexpr auto monotonic_timestamps_version = 5;
     static constexpr auto broker_timestamp_version = 6;
     static constexpr auto num_compactible_records_version = 7;
@@ -144,6 +145,7 @@ struct index_state
     static constexpr auto may_have_transaction_data_or_fence_batches_version
       = 11;
     static constexpr auto config_batch_terms_verified_version = 12;
+    static constexpr auto term_spans_version = 13;
 
     static index_state
     make_empty_index(model::offset base_offset, offset_delta_time with_offset);
@@ -266,6 +268,13 @@ struct index_state
     // writer bug - the batch crc rules out disk corruption), which the
     // rewrite reports loudly.
     bool config_batch_terms_verified{false};
+
+    // Cache of the segment's term spans, duplicated into
+    // segment::offset_tracker. Absent for indices written before
+    // term_spans_version; the segment then covers a single term (the one in
+    // its filename). Rebuilt from the log using term markers in raft
+    // configuration batch payloads.
+    std::optional<term_span_set> term_spans;
 
     size_t size() const;
 

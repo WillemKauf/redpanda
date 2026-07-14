@@ -377,6 +377,9 @@ void index_state::serde_write(iobuf& out) const {
     write(tmp, may_have_transaction_control_batches);
     write(tmp, may_have_transaction_data_or_fence_batches);
     write(tmp, config_batch_terms_verified);
+    write(
+      tmp,
+      term_spans ? term_spans->spans().copy() : chunked_vector<term_span>{});
 
     crc::crc32c crc;
     crc_extend_iobuf(crc, tmp);
@@ -513,6 +516,15 @@ void read_nested(
     } else {
         st.config_batch_terms_verified = false;
     }
+    if (hdr._version >= index_state::term_spans_version) {
+        chunked_vector<term_span> spans;
+        read_nested(p, spans, 0U);
+        // an empty vector round-trips to an absent cache; invalid spans
+        // (a writer bug - the crc rules out disk corruption) also parse to
+        // nullopt, degrading to the pre-cache behavior of recovering terms
+        // from the filename or the log
+        st.term_spans = term_span_set::parse(std::move(spans));
+    }
 }
 
 index_state index_state::copy() const { return *this; }
@@ -583,7 +595,11 @@ index_state::index_state(const index_state& o) noexcept
   , may_have_transaction_control_batches(o.may_have_transaction_control_batches)
   , may_have_transaction_data_or_fence_batches(
       o.may_have_transaction_data_or_fence_batches)
-  , config_batch_terms_verified(o.config_batch_terms_verified) {}
+  , config_batch_terms_verified(o.config_batch_terms_verified) {
+    if (o.term_spans.has_value()) {
+        term_spans = o.term_spans->copy();
+    }
+}
 
 namespace serde_compat {
 uint64_t index_state_serde::checksum(const index_state& r) {

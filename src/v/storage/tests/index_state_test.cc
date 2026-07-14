@@ -37,6 +37,22 @@ static storage::index_state make_random_index_state(
               random_generators::get_int<int64_t>());
         }
         st.config_batch_terms_verified = random_generators::get_int(0, 1) == 1;
+        if (random_generators::get_int(0, 1) == 1) {
+            // term spans, strictly monotonic in both base offset and term
+            int64_t base = 0;
+            auto term = model::term_id(0);
+            chunked_vector<storage::term_span> spans;
+            const auto n_spans = random_generators::get_int(1, 4);
+            for (int s = 0; s < n_spans; ++s) {
+                spans.push_back(
+                  storage::term_span{
+                    .base = model::offset(base), .term = term});
+                base += random_generators::get_int(1, 1000);
+                term = model::term_id(
+                  term() + random_generators::get_int(1, 3));
+            }
+            st.term_spans = storage::term_span_set::parse(std::move(spans));
+        }
     }
 
     const auto n = random_generators::get_int(1, 10000);
@@ -96,14 +112,26 @@ TEST(IndexState, SerdeBasic) {
 TEST(IndexState, SerdeVersionDowngrade) {
     auto input = make_random_index_state();
     input.config_batch_terms_verified = true;
+    chunked_vector<storage::term_span> spans;
+    spans.push_back(
+      storage::term_span{.base = model::offset(0), .term = model::term_id(1)});
+    spans.push_back(
+      storage::term_span{.base = model::offset(10), .term = model::term_id(2)});
+    input.term_spans = storage::term_span_set::parse(std::move(spans));
 
     auto buf = serde::to_iobuf(input.copy());
 
-    // v11 buffers do not carry the configuration batch flag, which must
-    // default to the conservative false
+    // v12 buffers carry the configuration batch flag but not term spans
+    set_version(buf, 12);
+    auto v12 = serde::from_iobuf<storage::index_state>(buf.copy());
+    ASSERT_TRUE(v12.config_batch_terms_verified);
+    ASSERT_FALSE(v12.term_spans.has_value());
+
+    // v11 buffers carry neither
     set_version(buf, 11);
     auto v11 = serde::from_iobuf<storage::index_state>(buf.copy());
     ASSERT_FALSE(v11.config_batch_terms_verified);
+    ASSERT_FALSE(v11.term_spans.has_value());
 }
 
 TEST(IndexState, SerdeNoTimeOffsetingForExistingIndices) {
