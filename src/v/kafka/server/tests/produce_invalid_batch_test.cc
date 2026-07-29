@@ -91,6 +91,42 @@ struct test_fixture : public redpanda_thread_fixture {
     const model::topic& test_topic = test_tp_ns.tp;
 };
 
+FIXTURE_TEST(test_handling_empty_batch, test_fixture) {
+    wait_for_controller_leadership().get();
+    start();
+    auto deferred_close = ss::defer([this] { producer->stop().get(); });
+
+    // A record batch with a valid CRC but no records must be rejected with
+    // invalid_record: no client produces one (empty batches only arise from
+    // broker-side compaction), and downstream layers rely on batches having
+    // at least one record.
+    const auto hwm_before = high_watermark();
+    chunked_vector<kafka::produce_request::partition> batches;
+    batches.push_back(
+      kafka::produce_request::partition{
+        .partition_index = model::partition_id(0),
+        .records = kafka::produce_request_record_data{make_batch(0)}});
+    auto resp = produce_batch(std::move(batches)).get();
+    BOOST_REQUIRE_EQUAL(resp.data.responses.size(), 1);
+    BOOST_REQUIRE_EQUAL(resp.data.responses[0].partitions.size(), 1);
+    BOOST_REQUIRE_EQUAL(
+      resp.data.responses[0].partitions[0].error_code,
+      kafka::error_code::invalid_record);
+    BOOST_REQUIRE_EQUAL(high_watermark(), hwm_before);
+
+    // The partition remains healthy: a valid produce succeeds.
+    chunked_vector<kafka::produce_request::partition> valid;
+    valid.push_back(
+      kafka::produce_request::partition{
+        .partition_index = model::partition_id(0),
+        .records = kafka::produce_request_record_data{make_batch(1)}});
+    resp = produce_batch(std::move(valid)).get();
+    BOOST_REQUIRE_EQUAL(
+      resp.data.responses[0].partitions[0].error_code,
+      kafka::error_code::none);
+    BOOST_REQUIRE_EQUAL(high_watermark(), hwm_before + model::offset(1));
+};
+
 FIXTURE_TEST(test_handling_message_with_truncated_batch, test_fixture) {
     wait_for_controller_leadership().get();
     start();

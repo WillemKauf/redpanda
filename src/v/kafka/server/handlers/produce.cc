@@ -632,6 +632,14 @@ produce_topic(produce_ctx& octx, produce_request::topic& topic) {
             push_error_response(error_code::invalid_record);
             continue;
         }
+
+        // A produced record batch must contain at least one record. Apache
+        // Kafka rejects these at produce time, see:
+        // https://github.com/apache/kafka/blob/trunk/storage/src/main/java/org/apache/kafka/storage/internals/log/LogValidator.java#L459-L465
+        if (unlikely(part.records->adapter.batch->record_count() <= 0)) {
+            push_error_response(error_code::invalid_record);
+            continue;
+        }
         auto pr = produce_topic_partition(octx, topic, part, cfg_ctx);
         partitions_produced.push_back(std::move(pr.produced));
         partitions_dispatched.push_back(std::move(pr.dispatched));
