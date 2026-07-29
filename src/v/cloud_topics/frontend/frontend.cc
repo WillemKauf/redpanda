@@ -1413,10 +1413,13 @@ ss::future<result<raft::replicate_result>> frontend::replicate_at_offset(
     // carry their payload in the record key/value and must be passed
     // through to the local raft log unchanged - otherwise the placeholder
     // encoding strips the key and downstream consumers like rm_stm cannot
-    // parse them. No other batch types are expected on this path.
+    // parse them. Batches with no records (a compacted source retains empty
+    // batches to preserve producer state) have nothing to upload and cannot
+    // be represented as placeholders, so they are passed through as well.
+    // No other batch types are expected on this path.
     chunked_vector<model::record_batch_header> data_headers;
     chunked_vector<model::record_batch> data_batches;
-    chunked_vector<model::record_batch> control_batches;
+    chunked_vector<model::record_batch> passthrough_batches;
     const size_t input_count = batches.size();
     for (auto&& batch : batches) {
         const auto& hdr = batch.header();
@@ -1426,12 +1429,12 @@ ss::future<result<raft::replicate_result>> frontend::replicate_at_offset(
           "raft_data batches (data and transactional control) are supported",
           hdr.type,
           ntp());
-        const bool is_data = !hdr.attrs.is_control();
+        const bool is_data = !hdr.attrs.is_control() && hdr.record_count > 0;
         if (is_data) {
             data_headers.push_back(hdr);
             data_batches.push_back(std::move(batch));
         } else {
-            control_batches.push_back(std::move(batch));
+            passthrough_batches.push_back(std::move(batch));
         }
     }
     batches.clear();
@@ -1533,16 +1536,16 @@ ss::future<result<raft::replicate_result>> frontend::replicate_at_offset(
     }
 
     // Restore the original input order by 2-way merging placeholders and
-    // control batches on their base offsets. Both inputs preserve their
+    // passthrough batches on their base offsets. Both inputs preserve their
     // relative order from `batches`, and each batch already has a unique
     // base_offset assigned, so a merge on base_offset reproduces the
     // original interleaving without an auxiliary order tracker.
     chunked_vector<model::record_batch> final_batches;
     final_batches.reserve(input_count);
     auto ph_it = placeholder_batches.begin();
-    auto ctl_it = control_batches.begin();
+    auto ctl_it = passthrough_batches.begin();
     while (ph_it != placeholder_batches.end()
-           && ctl_it != control_batches.end()) {
+           && ctl_it != passthrough_batches.end()) {
         if (ph_it->base_offset() < ctl_it->base_offset()) {
             final_batches.push_back(std::move(*ph_it++));
         } else {
@@ -1552,7 +1555,7 @@ ss::future<result<raft::replicate_result>> frontend::replicate_at_offset(
     for (; ph_it != placeholder_batches.end(); ++ph_it) {
         final_batches.push_back(std::move(*ph_it));
     }
-    for (; ctl_it != control_batches.end(); ++ctl_it) {
+    for (; ctl_it != passthrough_batches.end(); ++ctl_it) {
         final_batches.push_back(std::move(*ctl_it));
     }
 
