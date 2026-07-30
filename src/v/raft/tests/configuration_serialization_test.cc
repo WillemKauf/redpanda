@@ -143,6 +143,103 @@ SEASTAR_THREAD_TEST_CASE(configuration_term_version_compat) {
     BOOST_REQUIRE_EQUAL(new_cfg_v8.version(), raft::group_configuration::v_8);
 }
 
+SEASTAR_THREAD_TEST_CASE(stamp_configuration_batch_term) {
+    // a pre-v_8 configuration batch is stamped with the batch header's term
+    auto cfg = random_configuration();
+    cfg.set_version(raft::group_configuration::v_7);
+    auto batch = raft::details::serialize_configuration_as_batch(cfg);
+    batch.set_term(model::term_id(7));
+    BOOST_REQUIRE(
+      !raft::details::peek_configuration_batch_term(batch).has_value());
+
+    auto stamped = raft::details::maybe_stamp_configuration_batch_term(batch);
+    BOOST_REQUIRE(stamped.has_value());
+    BOOST_REQUIRE_EQUAL(
+      raft::details::peek_configuration_batch_term(*stamped),
+      model::term_id(7));
+
+    // the header is preserved apart from the payload size and checksums
+    BOOST_REQUIRE_EQUAL(
+      stamped->header().base_offset, batch.header().base_offset);
+    BOOST_REQUIRE_EQUAL(
+      stamped->header().last_offset_delta, batch.header().last_offset_delta);
+    BOOST_REQUIRE_EQUAL(
+      stamped->header().first_timestamp, batch.header().first_timestamp);
+    BOOST_REQUIRE_EQUAL(
+      stamped->header().max_timestamp, batch.header().max_timestamp);
+    BOOST_REQUIRE_EQUAL(stamped->header().record_count, 1);
+    BOOST_REQUIRE_EQUAL(stamped->term(), model::term_id(7));
+
+    // the configuration itself is unchanged, modulo version and term
+    iobuf_parser parser(stamped->copy_records().begin()->release_value());
+    auto stamped_cfg = raft::details::deserialize_configuration(parser);
+    BOOST_REQUIRE_EQUAL(stamped_cfg.version(), raft::group_configuration::v_8);
+    cfg.set_version(raft::group_configuration::v_8);
+    BOOST_REQUIRE_EQUAL(stamped_cfg, cfg);
+
+    // stamping is idempotent: a batch that carries its term is untouched
+    BOOST_REQUIRE(!raft::details::maybe_stamp_configuration_batch_term(*stamped)
+                     .has_value());
+
+    // every historical version is stampable, including pre-serde (adl)
+    // configurations and configurations captured mid-change
+    for (auto v :
+         {raft::group_configuration::v_4,
+          raft::group_configuration::v_5,
+          raft::group_configuration::v_6,
+          raft::group_configuration::v_7}) {
+        auto old_cfg = random_configuration();
+        old_cfg.set_version(v);
+        auto old_batch = raft::details::serialize_configuration_as_batch(
+          old_cfg);
+        old_batch.set_term(model::term_id(11));
+        BOOST_REQUIRE(
+          !raft::details::peek_configuration_batch_term(old_batch).has_value());
+
+        auto old_stamped = raft::details::maybe_stamp_configuration_batch_term(
+          old_batch);
+        BOOST_REQUIRE(old_stamped.has_value());
+        BOOST_REQUIRE_EQUAL(
+          raft::details::peek_configuration_batch_term(*old_stamped),
+          model::term_id(11));
+
+        iobuf_parser old_parser(
+          old_stamped->copy_records().begin()->release_value());
+        auto old_stamped_cfg = raft::details::deserialize_configuration(
+          old_parser);
+        BOOST_REQUIRE_EQUAL(
+          old_stamped_cfg.version(),
+          raft::group_configuration::current_version);
+        old_cfg.set_version(raft::group_configuration::current_version);
+        BOOST_REQUIRE_EQUAL(old_stamped_cfg, old_cfg);
+    }
+
+    // non-configuration batches are untouched
+    storage::record_batch_builder data_builder(
+      model::record_batch_type::raft_data, model::offset(0));
+    data_builder.add_raw_kv(iobuf{}, iobuf{});
+    auto data_batch = std::move(data_builder).build();
+    BOOST_REQUIRE(
+      !raft::details::maybe_stamp_configuration_batch_term(data_batch)
+         .has_value());
+
+    // configuration batches carry exactly one record; a malformed
+    // multi-record batch (a writer bug) is refused rather than partially
+    // rewritten
+    auto multi_cfg = random_configuration();
+    multi_cfg.set_version(raft::group_configuration::v_7);
+    storage::record_batch_builder multi_builder(
+      model::record_batch_type::raft_configuration, model::offset(0));
+    multi_builder.add_raw_kv(
+      iobuf{}, raft::details::serialize_configuration(multi_cfg));
+    multi_builder.add_raw_kv(iobuf{}, iobuf{});
+    auto multi_batch = std::move(multi_builder).build();
+    multi_batch.set_term(model::term_id(3));
+    BOOST_REQUIRE(
+      !raft::details::maybe_stamp_configuration_batch_term(multi_batch)
+         .has_value());
+}
+
 struct test_consumer {
     explicit test_consumer(model::offset base_offset)
       : _next_offset(base_offset + model::offset(1)) {}

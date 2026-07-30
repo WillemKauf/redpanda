@@ -3040,6 +3040,21 @@ ss::future<storage::append_result> consensus::disk_append(
       // batch fsync
       storage::log_append_config::fsync::no};
 
+    for (auto& b : batches) {
+        if (
+          unlikely(
+            b.header().type == model::record_batch_type::raft_configuration)) {
+            // configurations replicated before v_8 do not carry their term
+            // in the payload (e.g. old history shipped during recovery);
+            // fill it in so the term transition is recoverable from log
+            // data alone.
+            if (
+              auto stamped = details::maybe_stamp_configuration_batch_term(b)) {
+                b = std::move(*stamped);
+            }
+        }
+    }
+
     return details::for_each_ref_extract_configuration(
              _log->offsets().dirty_offset,
              std::move(batches),
