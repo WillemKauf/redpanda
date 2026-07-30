@@ -62,7 +62,8 @@ ss::future<index_state> deduplicate_segment(
   storage::probe& probe,
   offset_delta_time should_offset_delta_times,
   ss::sharded<features::feature_table>&,
-  bool inject_reader_failure = false);
+  bool inject_reader_failure = false,
+  config_batch_term_hooks term_hooks = {});
 
 // Creates a reader for the segment starting from the last_indexed_offset
 // (exclusive) in order to index the next "chunk" of the segment (using the

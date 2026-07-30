@@ -160,6 +160,31 @@ copy_data_segment_reducer::filter(model::record_batch batch) {
         co_return std::nullopt;
     }
 
+    // configuration batches are never filtered, but the rewrite is the
+    // opportunity to stamp historical batches whose payload does not carry
+    // the replication term. The batch's term comes from the log reader, which
+    // stamped it from the source segment's metadata.
+    if (batch.header().type == model::record_batch_type::raft_configuration) {
+        auto mode = filtered_batch::result::identical;
+        const bool has_term = _term_hooks.can_parse()
+                              && _term_hooks.get_term(batch).has_value();
+        if (!has_term && _term_hooks.can_stamp()) {
+            auto stamped = _term_hooks.stamp_batch(batch);
+            if (stamped.has_value()) {
+                batch = std::move(stamped).value();
+                mode = filtered_batch::result::rebuilt;
+            } else {
+                vlog(
+                  gclog.error,
+                  "[{}] configuration batch at offset {} could not be "
+                  "stamped with its term.",
+                  _ntp,
+                  batch.base_offset());
+            }
+        }
+        co_return filtered_batch{.mode = mode, .batch = std::move(batch)};
+    }
+
     // do not filter non-removable batch types under any circumstances
     if (!compaction::is_filterable(batch.header().type)) {
         co_return filtered_batch{

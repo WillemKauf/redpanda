@@ -624,6 +624,7 @@ redpanda_cc_gtest(
         "//src/v/finjector",
         "//src/v/model",
         "//src/v/model/tests:random",
+        "//src/v/raft",
         "//src/v/random:generators",
         "//src/v/reflection:adl",
         "//src/v/resource_mgmt:memory_groups",

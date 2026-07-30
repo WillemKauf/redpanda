@@ -196,7 +196,8 @@ ss::future<index_state> deduplicate_segment(
   probe& probe,
   offset_delta_time should_offset_delta_times,
   ss::sharded<features::feature_table>& feature_table,
-  bool inject_reader_failure) {
+  bool inject_reader_failure,
+  config_batch_term_hooks term_hooks) {
     auto read_holder = co_await seg->read_lock(*cfg.asrc);
     if (seg->is_closed()) {
         throw segment_closed_exception();
@@ -270,7 +271,8 @@ ss::future<index_state> deduplicate_segment(
       stm_hookset,
       &cmp_idx_writer,
       inject_reader_failure,
-      cfg.asrc);
+      cfg.asrc,
+      term_hooks);
 
     auto res = co_await std::move(rdr).consume(
       std::move(copy_reducer), model::no_timeout);

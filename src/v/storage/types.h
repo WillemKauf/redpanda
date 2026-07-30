@@ -13,6 +13,7 @@
 
 #include "base/format_to.h"
 #include "base/units.h"
+#include "base/vassert.h"
 #include "compaction/types.h"
 #include "container/chunked_vector.h"
 #include "model/fundamental.h"
@@ -37,6 +38,39 @@
 namespace storage {
 using log_clock = ss::lowres_clock;
 using jitter_percents = named_type<int, struct jitter_percents_tag>;
+
+/// Extracts the replication term from a raft_configuration batch payload,
+/// if present (raft::group_configuration >= v_8). Injected by the raft
+/// layer so that storage can attribute terms from log data without
+/// depending on raft serialization.
+using config_batch_term_parser
+  = std::function<std::optional<model::term_id>(const model::record_batch&)>;
+
+/// Rewrites a raft_configuration batch whose payload does not carry the
+/// replication term into one that does (raft::group_configuration v_8),
+/// stamping the term from the batch header.
+using config_batch_term_stamper = std::function<
+  std::optional<model::record_batch>(const model::record_batch&)>;
+
+/// Term hooks handed to compaction rewrites.
+struct config_batch_term_hooks {
+    const config_batch_term_parser* parser = nullptr;
+    const config_batch_term_stamper* stamper = nullptr;
+
+    bool can_parse() const { return parser != nullptr && *parser; }
+    bool can_stamp() const { return stamper != nullptr && *stamper; }
+
+    std::optional<model::term_id> get_term(const model::record_batch& b) const {
+        vassert(can_parse(), "no configuration batch term parser installed");
+        return (*parser)(b);
+    }
+
+    std::optional<model::record_batch>
+    stamp_batch(const model::record_batch& b) const {
+        vassert(can_stamp(), "no configuration batch term stamper installed");
+        return (*stamper)(b);
+    }
+};
 
 // Helps to identify transactional stms in the registered list of stms.
 // Avoids an ugly dynamic cast to the base class.

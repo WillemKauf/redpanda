@@ -146,7 +146,8 @@ public:
       ss::lw_shared_ptr<storage::stm_hookset> stm_mgr,
       compacted_index_writer* cidx = nullptr,
       bool inject_failure = false,
-      ss::abort_source* as = nullptr)
+      ss::abort_source* as = nullptr,
+      config_batch_term_hooks term_hooks = {})
       : _ntp(std::move(ntp))
       , _should_keep_fn(std::move(f))
       , _segment_last_offset(segment_last_offset)
@@ -158,7 +159,8 @@ public:
       , _idx(index_state::make_empty_index(index_base_offset, apply_offset))
       , _internal_topic(internal_topic)
       , _inject_failure(inject_failure)
-      , _as(as) {}
+      , _as(as)
+      , _term_hooks(term_hooks) {}
 
     ss::future<ss::stop_iteration> operator()(model::record_batch);
     idx_and_stats end_of_stream() { return {std::move(_idx), _stats}; }
@@ -236,6 +238,13 @@ private:
     /// Allows the reducer to stop early, e.g. in case the partition is being
     /// shut down.
     ss::abort_source* _as;
+
+    /// Hooks for stamping/verifying replication terms in raft_configuration
+    /// batch payloads as they are copied.
+    config_batch_term_hooks _term_hooks;
+
+    /// Whether any configuration batch passed through, and whether any of
+    /// them did so without a verified term in its payload.
 
     compaction::stats _stats;
 };

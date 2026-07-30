@@ -157,6 +157,10 @@ public:
     // Must be called while _segments_rolling_lock is held.
     ss::future<> maybe_roll_unlocked(model::term_id, model::offset next_offset);
 
+    /// Term parse/stamp hooks from the log manager config, handed to
+    /// compaction rewrites.
+    config_batch_term_hooks term_hooks() const;
+
     // Kicks off a background flush of offset translator state to the kvstore.
     void bg_checkpoint_offset_translator();
 
