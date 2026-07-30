@@ -132,7 +132,7 @@ private:
    1 byte  - non_data_timestamps
  */
 struct index_state
-  : serde::envelope<index_state, serde::version<11>, serde::compat_version<4>> {
+  : serde::envelope<index_state, serde::version<12>, serde::compat_version<4>> {
     static constexpr auto monotonic_timestamps_version = 5;
     static constexpr auto broker_timestamp_version = 6;
     static constexpr auto num_compactible_records_version = 7;
@@ -143,6 +143,7 @@ struct index_state
     static constexpr auto may_have_transaction_control_batches_version = 10;
     static constexpr auto may_have_transaction_data_or_fence_batches_version
       = 11;
+    static constexpr auto config_batch_terms_verified_version = 12;
 
     static index_state
     make_empty_index(model::offset base_offset, offset_delta_time with_offset);
@@ -253,6 +254,18 @@ struct index_state
     // transactional data batches (i.e raft data batches with a transactional
     // bit set) or tx_fence markers.
     bool may_have_transaction_data_or_fence_batches{true};
+
+    // Whether a full scan of the segment (a compaction rewrite or recovery
+    // replay) proved that every raft_configuration batch carries the
+    // replication term in its payload (>= v_8), making term transitions
+    // interior to the segment recoverable from log data alone - the
+    // prerequisite for cross-term adjacent merges. Unverified segments are
+    // rewritten by compaction so the stamp pass can prove them; the stamper
+    // handles every historical configuration version, so the only content
+    // that can stay unverified is a payload that does not deserialize (a
+    // writer bug - the batch crc rules out disk corruption), which the
+    // rewrite reports loudly.
+    bool config_batch_terms_verified{false};
 
     size_t size() const;
 

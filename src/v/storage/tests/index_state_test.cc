@@ -36,6 +36,7 @@ static storage::index_state make_random_index_state(
             st.broker_timestamp = model::timestamp(
               random_generators::get_int<int64_t>());
         }
+        st.config_batch_terms_verified = random_generators::get_int(0, 1) == 1;
     }
 
     const auto n = random_generators::get_int(1, 10000);
@@ -88,6 +89,21 @@ TEST(IndexState, SerdeBasic) {
         const auto buf2 = serde::to_iobuf(std::move(output));
         ASSERT_EQ(buf, buf2);
     }
+}
+
+// fields added after a version decode to their conservative defaults when
+// reading an older-versioned buffer
+TEST(IndexState, SerdeVersionDowngrade) {
+    auto input = make_random_index_state();
+    input.config_batch_terms_verified = true;
+
+    auto buf = serde::to_iobuf(input.copy());
+
+    // v11 buffers do not carry the configuration batch flag, which must
+    // default to the conservative false
+    set_version(buf, 11);
+    auto v11 = serde::from_iobuf<storage::index_state>(buf.copy());
+    ASSERT_FALSE(v11.config_batch_terms_verified);
 }
 
 TEST(IndexState, SerdeNoTimeOffsetingForExistingIndices) {

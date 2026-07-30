@@ -252,6 +252,22 @@ public:
         return false;
     }
 
+    /// Whether every raft_configuration batch in the segment is proven to
+    /// carry its replication term; see
+    /// index_state::config_batch_terms_verified. Only verified segments
+    /// may participate in cross-term adjacent merges; unverified segments
+    /// are rewritten by compaction so the stamp pass can prove them.
+    bool config_batch_terms_verified() const {
+        return _state.config_batch_terms_verified;
+    }
+
+    void set_config_batch_terms_verified(bool b) {
+        if (_state.config_batch_terms_verified != b) {
+            _needs_persistence = true;
+        }
+        _state.config_batch_terms_verified = b;
+    }
+
     // Get the cleanly compacted timestamp.
     std::optional<model::timestamp> clean_compact_timestamp() const {
         return _state.clean_compact_timestamp;

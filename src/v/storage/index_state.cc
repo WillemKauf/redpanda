@@ -376,6 +376,7 @@ void index_state::serde_write(iobuf& out) const {
     write(tmp, self_compact_timestamp);
     write(tmp, may_have_transaction_control_batches);
     write(tmp, may_have_transaction_data_or_fence_batches);
+    write(tmp, config_batch_terms_verified);
 
     crc::crc32c crc;
     crc_extend_iobuf(crc, tmp);
@@ -507,6 +508,11 @@ void read_nested(
     } else {
         st.may_have_transaction_data_or_fence_batches = true;
     }
+    if (hdr._version >= index_state::config_batch_terms_verified_version) {
+        read_nested(p, st.config_batch_terms_verified, 0U);
+    } else {
+        st.config_batch_terms_verified = false;
+    }
 }
 
 index_state index_state::copy() const { return *this; }
@@ -576,7 +582,8 @@ index_state::index_state(const index_state& o) noexcept
   , self_compact_timestamp(o.self_compact_timestamp)
   , may_have_transaction_control_batches(o.may_have_transaction_control_batches)
   , may_have_transaction_data_or_fence_batches(
-      o.may_have_transaction_data_or_fence_batches) {}
+      o.may_have_transaction_data_or_fence_batches)
+  , config_batch_terms_verified(o.config_batch_terms_verified) {}
 
 namespace serde_compat {
 uint64_t index_state_serde::checksum(const index_state& r) {
