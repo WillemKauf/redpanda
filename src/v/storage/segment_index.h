@@ -339,6 +339,10 @@ public:
     ss::future<ss::file> open();
 
     const segment_full_path& path() const { return _path; }
+
+    /// Adopt a new on-disk name, e.g. when the segment's filename version
+    /// is upgraded. The caller is responsible for the old file.
+    void set_path(segment_full_path p) { _path = std::move(p); }
     size_t size() const { return _state.size(); }
 
     /// \brief erases the underlying file and resets the index

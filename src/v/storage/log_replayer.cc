@@ -84,8 +84,7 @@ public:
     /// begins with a raft configuration batch, and configurations >= v_8
     /// carry the replication term in their payload.
     void maybe_record_term_transition() {
-        if (
-          _header.type != model::record_batch_type::raft_configuration) {
+        if (_header.type != model::record_batch_type::raft_configuration) {
             return;
         }
         if (!_term_parser) {

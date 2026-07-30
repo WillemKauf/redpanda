@@ -979,19 +979,24 @@ disk_log_impl::find_adjacent_compaction_ranges(
       ranges;
 
     // ranges may merge across raft terms when the feature is active and
-    // every segment in the range is v2: v2 terms are recoverable per offset
-    // (index span cache + configuration batch payloads), while a multi-term
-    // v1 segment would be silently misread by older binaries
+    // every segment in the range provably carries the replication term in
+    // all of its configuration batch payloads: a term transition interior
+    // to a segment must be recoverable from log data alone. The proof is
+    // established by a compaction rewrite or recovery replay (see
+    // index_state::config_batch_terms_verified). Filename versions are
+    // deliberately not consulted: v2 segments may still carry
+    // not-yet-stamped configurations from replayed old history. Merge
+    // outputs that span terms adopt the v2 filename version.
     const bool allow_cross_term_merge = _feature_table.local().is_active(
       features::feature::multi_term_segments);
-    auto is_v2 = [](const segment_set::type& s) {
-        return s->reader().path().get_version() == record_version_type::v2;
+    auto term_recoverable = [](const segment_set::type& s) {
+        return s->index().config_batch_terms_verified();
     };
 
     auto it = _segs.begin();
     size_t current_size{0};
     model::term_id current_term{(*it)->offsets().last_term()};
-    bool range_is_v2 = is_v2(*it);
+    bool range_term_recoverable = term_recoverable(*it);
 
     std::pair<segment_set::iterator, segment_set::iterator> current_range = {
       it, it};
@@ -1005,9 +1010,10 @@ disk_log_impl::find_adjacent_compaction_ranges(
         auto num_segments_in_range = std::distance(
           current_range.first, current_range.second);
 
-        bool term_boundary
-          = seg_term != current_term
-            && !(allow_cross_term_merge && range_is_v2 && is_v2(seg));
+        bool term_boundary = seg_term != current_term
+                             && !(
+                               allow_cross_term_merge && range_term_recoverable
+                               && term_recoverable(seg));
         bool size_boundary = current_size
                              > _manager.config().max_compacted_segment_size();
         bool is_unstable = unstable(seg);
@@ -1042,7 +1048,8 @@ disk_log_impl::find_adjacent_compaction_ranges(
             current_range = {next_it, next_it};
             current_size = next_size;
             current_term = next_term;
-            range_is_v2 = next_it != _segs.end() && is_v2(*next_it);
+            range_term_recoverable = next_it != _segs.end()
+                                     && term_recoverable(*next_it);
 
             if (!is_unstable) {
                 ++current_range.second;
@@ -1051,7 +1058,8 @@ disk_log_impl::find_adjacent_compaction_ranges(
         } else {
             ++current_range.second;
             current_term = seg->offsets().last_term();
-            range_is_v2 = range_is_v2 && is_v2(seg);
+            range_term_recoverable = range_term_recoverable
+                                     && term_recoverable(seg);
         }
         ++it;
     }
@@ -1183,7 +1191,8 @@ ss::future<compaction_result> disk_log_impl::do_compact_adjacent_segments(
             *_readers_cache,
             _manager.resources(),
             _feature_table,
-            _segment_rewrite_lock);
+            _segment_rewrite_lock,
+            term_hooks());
     } catch (const generation_id_mismatch_exception& e) {
         // Early abort
         vlog(gclog.info, "{}", e.what());

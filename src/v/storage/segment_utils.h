@@ -119,7 +119,8 @@ ss::future<compaction_result> concatenate_and_rebuild_target_segment(
   storage::readers_cache& readers_cache,
   storage_resources& resources,
   ss::sharded<features::feature_table>& feature_table,
-  ssx::mutex& segment_rewrite_lock);
+  ssx::mutex& segment_rewrite_lock,
+  config_batch_term_hooks term_hooks = {});
 
 ss::future<> write_concatenated_compacted_index(
   std::filesystem::path,
@@ -232,7 +233,8 @@ ss::future<> do_swap_data_file_handles(
   ss::lw_shared_ptr<storage::segment>,
   compaction::compaction_config,
   probe&,
-  std::optional<size_t>);
+  std::optional<size_t>,
+  std::optional<segment_full_path> new_path = std::nullopt);
 
 // Generates a random jitter percentage [as a fraction] with in the passed
 // percents range.

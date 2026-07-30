@@ -537,21 +537,28 @@ ss::future<> do_swap_data_file_handles(
   ss::lw_shared_ptr<storage::segment> s,
   compaction::compaction_config cfg,
   probe& pb,
-  std::optional<size_t> new_cmp_idx_size) {
+  std::optional<size_t> new_cmp_idx_size,
+  std::optional<segment_full_path> new_path) {
     co_await s->reader().close();
 
+    const auto target_path = new_path.value_or(s->reader().path());
     ss::sstring old_name = compacted.string();
     vlog(
       gclog.trace,
       "swapping compacted segment temp file {} with the segment {}",
       old_name,
-      s->reader().filename());
-    co_await ss::rename_file(old_name, s->reader().filename());
+      target_path);
+    co_await ss::rename_file(old_name, target_path.string());
+    if (new_path.has_value()) {
+        // the segment is adopting a new filename (e.g. a cross-term merge
+        // output upgrading to v2); drop the file under the old name
+        co_await ss::remove_file(s->reader().filename());
+    }
     // the on disk file is changing so clear the size cache
     s->clear_cached_disk_usage();
 
     auto r = std::make_unique<segment_reader>(
-      s->reader().path(),
+      target_path,
       config::shard_local_cfg().storage_read_buffer_size(),
       config::shard_local_cfg().storage_read_readahead_count(),
       cfg.sanitizer_config);
@@ -1214,8 +1221,24 @@ ss::future<chunked_vector<ss::rwlock::holder>> transfer_segment(
 
     // segment data file
     auto from_path = from->reader().path();
+    // a replacement that spans terms must not keep a v1 filename: the v1
+    // format promises a single term (the one in the name). Adopt the v2
+    // name; the reader, index and compacted index move with it.
+    const auto old_path = to->reader().path();
+    std::optional<segment_full_path> upgraded_path;
+    if (
+      from->offsets().term_spans().size() > 1
+      && old_path.get_version() != record_version_type::v2) {
+        upgraded_path = old_path.with_version(record_version_type::v2);
+    }
     co_await do_swap_data_file_handles(
-      from_path, to, cfg, probe, new_cmp_idx_size);
+      from_path, to, cfg, probe, new_cmp_idx_size, upgraded_path);
+    if (upgraded_path.has_value()) {
+        co_await ss::when_all_succeed(
+          maybe_remove_file(old_path.to_index().string()),
+          maybe_remove_file(old_path.to_compacted_index().string()));
+        to->index().set_path(upgraded_path->to_index());
+    }
 
     // offset index
     to->index().swap_index_state(
@@ -1251,7 +1274,8 @@ ss::future<compaction_result> concatenate_and_rebuild_target_segment(
   storage::readers_cache& readers_cache,
   storage_resources& resources,
   ss::sharded<features::feature_table>& feature_table,
-  ssx::mutex& segment_rewrite_lock) {
+  ssx::mutex& segment_rewrite_lock,
+  config_batch_term_hooks term_hooks) {
     vassert(
       segment_rewrite_lock.is_held(), "Segment rewrite lock should be held.");
 
@@ -1293,7 +1317,8 @@ ss::future<compaction_result> concatenate_and_rebuild_target_segment(
       readers_cache,
       resources,
       feature_table,
-      true);
+      true,
+      term_hooks);
     vlog(gclog.info, "Final compacted segment {}", replacement);
 
     /*

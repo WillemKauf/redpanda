@@ -143,6 +143,14 @@ public:
     segment_full_path to_index() const;
     segment_full_path to_compacted_index() const;
     segment_full_path to_compaction_staging() const;
+
+    /// Same path with a different filename version, e.g. upgrading a
+    /// cross-term merge output to v2.
+    segment_full_path with_version(record_version_type v) const {
+        auto copy = *this;
+        copy.file_part.version = v;
+        return copy;
+    }
     segment_full_path to_staging() const;
 
     /**

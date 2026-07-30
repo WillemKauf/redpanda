@@ -2553,6 +2553,187 @@ TEST_F(storage_test_fixture, recovery_rederives_configuration_term_flag) {
 }
 
 /**
+ * End to end upgrade path for pre-feature data: v1 segments whose
+ * configuration batches do not carry their term become mergeable across
+ * raft terms once a compaction rewrite stamps them, and the merge output
+ * adopts the v2 filename version. Terms stay fully recoverable from log
+ * data afterwards (index-less restart).
+ */
+TEST_F(storage_test_fixture, upgraded_v1_segments_merge_across_terms) {
+    auto cfg = default_log_config(test_dir);
+    cfg.batch_term_parser = make_test_batch_term_parser();
+    cfg.batch_term_stamper = make_test_batch_term_stamper();
+    storage::ntp_config::default_overrides overrides;
+    overrides.cleanup_policy_bitflags
+      = model::cleanup_policy_bitflags::compaction;
+    // give the compaction scheduler its production shape: without a dirty
+    // ratio threshold, needs_compaction() is unconditionally true and the
+    // scheduling assertions below would be meaningless
+    overrides.min_cleanable_dirty_ratio = tristate<double>(0.5);
+    auto ntp = model::ntp("default", "test_v1_upgrade", 0);
+    auto make_ntp_config = [&] {
+        return storage::ntp_config(
+          ntp,
+          cfg.base_dir,
+          std::make_unique<storage::ntp_config::default_overrides>(overrides));
+    };
+    ss::abort_source as;
+
+    // pre-upgrade cluster: v1 segments, one per term, each beginning with
+    // an unstamped configuration batch
+    feature_table
+      .invoke_on_all([](features::feature_table& f) {
+          f.testing_deactivate(features::feature::multi_term_segments);
+      })
+      .get();
+    {
+        storage::log_manager mgr = make_log_manager(cfg);
+        auto deferred = ss::defer([&mgr]() mutable { mgr.stop().get(); });
+        auto log = manage_log(mgr, make_ntp_config());
+
+        append_single_record_batch(log, 5, model::term_id(1), 1, true);
+        append_unstamped_configuration_batch(log, model::term_id(2));
+        append_single_record_batch(log, 5, model::term_id(2), 1, true);
+        append_unstamped_configuration_batch(log, model::term_id(3));
+        append_single_record_batch(log, 5, model::term_id(3), 1, true);
+        log->flush().get();
+
+        ASSERT_EQ(log->segment_count(), 3);
+        for (const auto& seg : log->segments()) {
+            ASSERT_NE(
+              seg->reader().path().get_version(),
+              storage::record_version_type::v2);
+        }
+
+        // compact while the feature is inactive, as a real cluster would
+        // before upgrading: the sealed segments become clean, which must
+        // not prevent the post-upgrade stamping rewrite
+        storage::housekeeping_config pre_cfg(
+          model::timestamp::min(),
+          std::nullopt,
+          model::offset::max(),
+          model::offset::max(),
+          model::offset::max(),
+          std::nullopt,
+          std::nullopt,
+          0ms,
+          as);
+        // several rounds, as a long-running cluster would have had: the
+        // sealed segments become fully clean
+        log->housekeeping(pre_cfg).get();
+        log->housekeeping(pre_cfg).get();
+        log->housekeeping(pre_cfg).get();
+        for (const auto& seg : log->segments()) {
+            if (!seg->has_appender()) {
+                ASSERT_TRUE(seg->has_self_compact_timestamp());
+                ASSERT_TRUE(seg->has_clean_compact_timestamp());
+            }
+        }
+        // fully clean and the feature is inactive: the compaction
+        // scheduler leaves the log alone
+        ASSERT_FALSE(log->needs_compaction());
+    }
+
+    // the upgrade completes: the feature activates
+    feature_table
+      .invoke_on_all(
+        [](features::feature_table& f) { f.testing_activate_all(); })
+      .get();
+
+    auto verify_terms = [&](ss::shared_ptr<storage::log> log) {
+        // offsets [0, 5) term 1, 5 = config, [6, 10] term 2, 11 = config,
+        // [12, 16] term 3
+        ASSERT_EQ(*log->get_term(model::offset(0)), model::term_id(1));
+        ASSERT_EQ(*log->get_term(model::offset(4)), model::term_id(1));
+        ASSERT_EQ(*log->get_term(model::offset(5)), model::term_id(2));
+        ASSERT_EQ(*log->get_term(model::offset(10)), model::term_id(2));
+        ASSERT_EQ(*log->get_term(model::offset(11)), model::term_id(3));
+        ASSERT_EQ(*log->get_term(model::offset(16)), model::term_id(3));
+        ASSERT_EQ(
+          *log->get_term_last_offset(model::term_id(1)), model::offset(4));
+        ASSERT_EQ(
+          *log->get_term_last_offset(model::term_id(2)), model::offset(10));
+        ASSERT_EQ(
+          *log->get_term_last_offset(model::term_id(3)), model::offset(16));
+    };
+
+    {
+        storage::log_manager mgr = make_log_manager(cfg);
+        auto deferred = ss::defer([&mgr]() mutable { mgr.stop().get(); });
+        auto log = manage_log(mgr, make_ntp_config());
+        ASSERT_EQ(log->segment_count(), 3);
+        ASSERT_NO_FATAL_FAILURE(verify_terms(log));
+
+        // the compaction scheduler is deliberately format-agnostic: a
+        // fully clean log is not rescheduled just because its segments
+        // await the stamp rewrite - stamping rides along whenever
+        // compaction runs for the usual reasons
+        ASSERT_FALSE(log->needs_compaction());
+
+        storage::housekeeping_config c_cfg(
+          model::timestamp::min(),
+          std::nullopt,
+          model::offset::max(),
+          model::offset::max(),
+          model::offset::max(),
+          std::nullopt,
+          std::nullopt,
+          0ms,
+          as);
+        // the first pass stamps the configuration batches and proves the
+        // segments; cross-term merging follows
+        log->housekeeping(c_cfg).get();
+        log->housekeeping(c_cfg).get();
+
+        ASSERT_EQ(log->segment_count(), 1);
+        const auto& merged = log->segments().front();
+        // the merge output spans terms, so it adopted the v2 filename
+        ASSERT_EQ(
+          merged->reader().path().get_version(),
+          storage::record_version_type::v2);
+        ASSERT_EQ(merged->offsets().term_spans().size(), 3);
+        ASSERT_TRUE(merged->index().config_batch_terms_verified());
+        ASSERT_FALSE(log->needs_compaction());
+        ASSERT_NO_FATAL_FAILURE(verify_terms(log));
+
+        // the stamped configuration batches carry their terms
+        const auto parser = make_test_batch_term_parser();
+        auto batches = read_and_validate_all_batches(log);
+        size_t configs = 0;
+        for (const auto& b : batches) {
+            if (
+              b.header().type == model::record_batch_type::raft_configuration) {
+                ++configs;
+                auto t = parser(b);
+                ASSERT_TRUE(t.has_value());
+                ASSERT_EQ(*t, b.term());
+            }
+        }
+        ASSERT_EQ(configs, 2);
+    }
+
+    // index-less restart: the merged segment's term spans are rebuilt from
+    // the stamped configuration batches alone
+    {
+        auto dir = storage::ntp_config(ntp, cfg.base_dir).work_directory();
+        for (const auto& e :
+             std::filesystem::directory_iterator(std::filesystem::path(dir))) {
+            if (e.path().extension() == ".base_index") {
+                std::filesystem::remove(e.path());
+            }
+        }
+        storage::log_manager mgr = make_log_manager(cfg);
+        auto deferred = ss::defer([&mgr]() mutable { mgr.stop().get(); });
+        auto log = manage_log(mgr, make_ntp_config());
+        ASSERT_EQ(log->segment_count(), 1);
+        ASSERT_NO_FATAL_FAILURE(verify_terms(log));
+        // recovery re-proved the segment
+        ASSERT_TRUE(
+          log->segments().front()->index().config_batch_terms_verified());
+    }
+}
+
+/**
  * Adjacent merge compaction combines a bunch of single-term segments from
  * differing raft terms into one segment, and the merged segment's
  * offset -> term map is verified exhaustively: every offset resolves to
@@ -7183,6 +7364,9 @@ TEST_F(storage_test_fixture, find_sliding_ranges) {
                     // considered in the adjacent compaction ranges
                     seg->index().maybe_set_self_compact_timestamp(
                       model::timestamp::now());
+                    // the self compaction rewrite also proves configuration
+                    // batch terms, a prerequisite for cross-term ranges
+                    seg->index().set_config_batch_terms_verified(true);
                 }
 
                 auto& ot = const_cast<storage::segment::offset_tracker&>(
