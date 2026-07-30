@@ -200,6 +200,98 @@ group_configuration deserialize_configuration(iobuf_parser& parser) {
 
     return reflection::adl<group_configuration>{}.from(parser);
 }
+std::optional<model::term_id>
+peek_configuration_batch_term(const model::record_batch& batch) noexcept {
+    if (
+      batch.header().type != model::record_batch_type::raft_configuration
+      || batch.compressed()) {
+        return std::nullopt;
+    }
+    try {
+        // Configuration batches only have one record, so this is cheap.
+        auto records = batch.copy_records();
+        if (records.size() != 1) {
+            return std::nullopt;
+        }
+        iobuf_parser parser(records.begin()->release_value());
+        return deserialize_configuration(parser).term();
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+std::optional<model::record_batch> maybe_stamp_configuration_batch_term(
+  const model::record_batch& batch) noexcept {
+    if (
+      batch.header().type != model::record_batch_type::raft_configuration
+      || batch.compressed()) {
+        return std::nullopt;
+    }
+    try {
+        auto records = batch.copy_records();
+        // configuration batches are expected to be serialized with exactly one
+        // record.
+        if (records.size() != 1) {
+            return std::nullopt;
+        }
+        auto& record = records.front();
+        iobuf_parser parser(record.release_value());
+        auto cfg = deserialize_configuration(parser);
+        if (cfg.term().has_value()) {
+            return std::nullopt;
+        }
+        // any historical version upgrades to the current one.
+        cfg.set_term(batch.term());
+        cfg.set_version(group_configuration::current_version);
+
+        storage::record_batch_builder builder(
+          model::record_batch_type::raft_configuration, batch.base_offset());
+        builder.add_raw_kv(
+          record.release_key(), serialize_configuration(std::move(cfg)));
+        auto data = std::move(builder).build().release_data();
+
+        auto hdr = batch.header();
+        hdr.reset_size_checksum_metadata(data);
+        auto stamped = model::record_batch(
+          hdr, std::move(data), model::record_batch::tag_ctor_ng{});
+        stamped.set_term(batch.term());
+        return stamped;
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+group_configuration
+extract_configuration_stamping_term(model::record_batch& batch) {
+    auto records = batch.copy_records();
+    auto& record = records.front();
+    iobuf_parser parser(record.release_value());
+    auto cfg = deserialize_configuration(parser);
+    if (cfg.term().has_value() || batch.compressed() || records.size() != 1) {
+        return cfg;
+    }
+    // configurations serialized before v_8 do not carry their term (e.g. old
+    // history shipped during recovery, or a batch from a leader that predates
+    // v_8); fill it in from the batch header so that the term is recoverable
+    // from the record itself, not just from the segment it lands in. Any
+    // historical version upgrades to the current one.
+    cfg.set_term(batch.term());
+    cfg.set_version(group_configuration::current_version);
+
+    storage::record_batch_builder builder(
+      model::record_batch_type::raft_configuration, batch.base_offset());
+    builder.add_raw_kv(record.release_key(), serialize_configuration(cfg));
+    auto data = std::move(builder).build().release_data();
+
+    auto hdr = batch.header();
+    hdr.reset_size_checksum_metadata(data);
+    auto stamped = model::record_batch(
+      hdr, std::move(data), model::record_batch::tag_ctor_ng{});
+    stamped.set_term(batch.term());
+    batch = std::move(stamped);
+    return cfg;
+}
+
 group_configuration deserialize_nested_configuration(iobuf_parser& parser) {
     const auto version = serde::peek_version(parser);
     if (likely(version >= group_configuration::v_6())) {

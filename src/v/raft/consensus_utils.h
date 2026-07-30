@@ -62,6 +62,31 @@ persist_snapshot(storage::simple_snapshot_manager&, snapshot_metadata, iobuf&&);
 
 group_configuration deserialize_configuration(iobuf_parser&);
 
+/// Extract the replication term from a raft_configuration batch payload.
+/// Returns nullopt if the configuration predates v_8 (no term in the
+/// payload) or if the batch cannot be decoded.
+std::optional<model::term_id>
+peek_configuration_batch_term(const model::record_batch&) noexcept;
+
+/// If the batch is a raft_configuration batch whose payload does not carry
+/// the replication term (serialized before v_8), returns a copy with the
+/// configuration re-serialized at the current version with the term filled
+/// in from the batch header, making the term transition recoverable from
+/// log data alone. Handles every historical configuration version. The
+/// original header is preserved; only the payload and checksums change.
+/// Returns nullopt when the batch needs no stamping (not a configuration,
+/// term already present) or its payload does not deserialize.
+std::optional<model::record_batch>
+maybe_stamp_configuration_batch_term(const model::record_batch&) noexcept;
+
+/// Deserializes the configuration carried by a raft_configuration batch and,
+/// if the payload does not already carry the replication term, rewrites
+/// \p batch in place so that it does. Single-pass equivalent of
+/// maybe_stamp_configuration_batch_term() followed by
+/// deserialize_configuration(), for the append path which needs both.
+group_configuration
+extract_configuration_stamping_term(model::record_batch& batch);
+
 group_configuration deserialize_nested_configuration(iobuf_parser&);
 
 /// looks up for the broker with request id in a vector of brokers
@@ -138,9 +163,11 @@ struct configuration_extracting_consumer {
     ss::future<ss::stop_iteration> operator()(model::record_batch& batch) {
         if (
           batch.header().type == model::record_batch_type::raft_configuration) {
-            iobuf_parser parser(batch.copy_records().begin()->release_value());
+            // stamps the payload with the batch's term if it carries none, so
+            // that every configuration batch reaching the log has a term that
+            // survives independently of the segment it lands in
             configurations.emplace_back(
-              next_offset, deserialize_configuration(parser));
+              next_offset, extract_configuration_stamping_term(batch));
         }
 
         // we have to calculate offsets manually because the batch may not

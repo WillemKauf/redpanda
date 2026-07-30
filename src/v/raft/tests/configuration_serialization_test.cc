@@ -118,9 +118,8 @@ SEASTAR_THREAD_TEST_CASE(roundtrip_raft_configuration_entry) {
 }
 
 SEASTAR_THREAD_TEST_CASE(configuration_term_version_compat) {
-    // a configuration serialized at a version older than v_8 must
-    // deserialize with an absent term, even if a term was set on the
-    // in-memory configuration before serialization
+    // this binary always writes the term field for serde-serialized
+    // configurations, regardless of the configuration version
     auto cfg = random_configuration();
     cfg.set_version(raft::group_configuration::v_7);
     cfg.set_term(model::term_id(42));
@@ -129,10 +128,10 @@ SEASTAR_THREAD_TEST_CASE(configuration_term_version_compat) {
     iobuf_parser parser(batch.copy_records().begin()->release_value());
     auto new_cfg = raft::details::deserialize_configuration(parser);
 
-    BOOST_REQUIRE(!new_cfg.term().has_value());
+    BOOST_REQUIRE(new_cfg.term() == model::term_id(42));
     BOOST_REQUIRE_EQUAL(new_cfg.version(), raft::group_configuration::v_7);
 
-    // and a v_8 configuration with no term set roundtrips a nullopt term
+    // a configuration with no term set roundtrips a nullopt term
     auto cfg_v8 = random_configuration();
     cfg_v8.set_version(raft::group_configuration::v_8);
     auto batch_v8 = raft::details::serialize_configuration_as_batch(cfg_v8);
@@ -141,6 +140,126 @@ SEASTAR_THREAD_TEST_CASE(configuration_term_version_compat) {
 
     BOOST_REQUIRE(!new_cfg_v8.term().has_value());
     BOOST_REQUIRE_EQUAL(new_cfg_v8.version(), raft::group_configuration::v_8);
+
+    // buffers written by pre-v_8 binaries use serde envelope version 7 and
+    // carry no term field; craft one by rewriting a fresh buffer to the old
+    // wire format (envelope version byte, envelope size, no trailing term)
+    auto old_cfg = random_configuration();
+    old_cfg.set_version(raft::group_configuration::v_7);
+    auto buf = raft::details::serialize_configuration(old_cfg);
+    auto bytes = iobuf_to_bytes(buf);
+    BOOST_REQUIRE_EQUAL(bytes[0], 8);
+    // a nullopt term serializes as a single false byte at the tail
+    BOOST_REQUIRE_EQUAL(bytes[bytes.size() - 1], 0);
+    bytes[0] = 7;
+    auto size = ss::read_le<serde::serde_size_t>(
+      reinterpret_cast<const char*>(bytes.data() + 2));
+    ss::write_le<serde::serde_size_t>(
+      reinterpret_cast<char*>(bytes.data() + 2), size - 1);
+    bytes.resize(bytes.size() - 1);
+    iobuf_parser old_parser(bytes_to_iobuf(bytes));
+    auto old_read = raft::details::deserialize_configuration(old_parser);
+
+    BOOST_REQUIRE(!old_read.term().has_value());
+    BOOST_REQUIRE_EQUAL(old_read.version(), raft::group_configuration::v_7);
+    BOOST_REQUIRE_EQUAL(old_read, old_cfg);
+}
+
+SEASTAR_THREAD_TEST_CASE(stamp_configuration_batch_term) {
+    // a pre-v_8 configuration batch is stamped with the batch header's term
+    auto cfg = random_configuration();
+    cfg.set_version(raft::group_configuration::v_7);
+    auto batch = raft::details::serialize_configuration_as_batch(cfg);
+    batch.set_term(model::term_id(7));
+    BOOST_REQUIRE(
+      !raft::details::peek_configuration_batch_term(batch).has_value());
+
+    auto stamped = raft::details::maybe_stamp_configuration_batch_term(batch);
+    BOOST_REQUIRE(stamped.has_value());
+    BOOST_REQUIRE_EQUAL(
+      raft::details::peek_configuration_batch_term(*stamped),
+      model::term_id(7));
+
+    // the header is preserved apart from the payload size and checksums
+    BOOST_REQUIRE_EQUAL(
+      stamped->header().base_offset, batch.header().base_offset);
+    BOOST_REQUIRE_EQUAL(
+      stamped->header().last_offset_delta, batch.header().last_offset_delta);
+    BOOST_REQUIRE_EQUAL(
+      stamped->header().first_timestamp, batch.header().first_timestamp);
+    BOOST_REQUIRE_EQUAL(
+      stamped->header().max_timestamp, batch.header().max_timestamp);
+    BOOST_REQUIRE_EQUAL(stamped->header().record_count, 1);
+    BOOST_REQUIRE_EQUAL(stamped->term(), model::term_id(7));
+
+    // the configuration itself is unchanged, modulo version and term
+    iobuf_parser parser(stamped->copy_records().begin()->release_value());
+    auto stamped_cfg = raft::details::deserialize_configuration(parser);
+    BOOST_REQUIRE_EQUAL(stamped_cfg.version(), raft::group_configuration::v_8);
+    cfg.set_version(raft::group_configuration::v_8);
+    BOOST_REQUIRE_EQUAL(stamped_cfg, cfg);
+
+    // stamping is idempotent: a batch that carries its term is untouched
+    BOOST_REQUIRE(!raft::details::maybe_stamp_configuration_batch_term(*stamped)
+                     .has_value());
+
+    // every historical version is stampable, including pre-serde (adl)
+    // configurations and configurations captured mid-change
+    for (auto v :
+         {raft::group_configuration::v_4,
+          raft::group_configuration::v_5,
+          raft::group_configuration::v_6,
+          raft::group_configuration::v_7}) {
+        auto old_cfg = random_configuration();
+        old_cfg.set_version(v);
+        auto old_batch = raft::details::serialize_configuration_as_batch(
+          old_cfg);
+        old_batch.set_term(model::term_id(11));
+        BOOST_REQUIRE(
+          !raft::details::peek_configuration_batch_term(old_batch).has_value());
+
+        auto old_stamped = raft::details::maybe_stamp_configuration_batch_term(
+          old_batch);
+        BOOST_REQUIRE(old_stamped.has_value());
+        BOOST_REQUIRE_EQUAL(
+          raft::details::peek_configuration_batch_term(*old_stamped),
+          model::term_id(11));
+
+        iobuf_parser old_parser(
+          old_stamped->copy_records().begin()->release_value());
+        auto old_stamped_cfg = raft::details::deserialize_configuration(
+          old_parser);
+        BOOST_REQUIRE_EQUAL(
+          old_stamped_cfg.version(),
+          raft::group_configuration::current_version);
+        old_cfg.set_version(raft::group_configuration::current_version);
+        BOOST_REQUIRE_EQUAL(old_stamped_cfg, old_cfg);
+    }
+
+    // non-configuration batches are untouched
+    storage::record_batch_builder data_builder(
+      model::record_batch_type::raft_data, model::offset(0));
+    data_builder.add_raw_kv(iobuf{}, iobuf{});
+    auto data_batch = std::move(data_builder).build();
+    BOOST_REQUIRE(
+      !raft::details::maybe_stamp_configuration_batch_term(data_batch)
+         .has_value());
+
+    // configuration batches carry exactly one record; a malformed
+    // multi-record batch (a writer bug) is refused rather than partially
+    // rewritten
+    auto multi_cfg = random_configuration();
+    multi_cfg.set_version(raft::group_configuration::v_7);
+    storage::record_batch_builder multi_builder(
+      model::record_batch_type::raft_configuration, model::offset(0));
+    multi_builder.add_raw_kv(
+      iobuf{}, raft::details::serialize_configuration(multi_cfg));
+    multi_builder.add_raw_kv(iobuf{}, iobuf{});
+    auto multi_batch = std::move(multi_builder).build();
+    multi_batch.set_term(model::term_id(3));
+    BOOST_REQUIRE(
+      !raft::details::maybe_stamp_configuration_batch_term(multi_batch)
+         .has_value());
 }
 
 struct test_consumer {
@@ -207,6 +326,10 @@ SEASTAR_THREAD_TEST_CASE(test_config_extracting) {
           auto& [offsets, configurations] = res;
           BOOST_REQUIRE_EQUAL(offsets[0], model::offset(101));
           BOOST_REQUIRE_EQUAL(configurations[0].offset, model::offset(101));
+          // extraction stamps configuration batches whose payload does not
+          // carry the term, re-serializing them at the current version
+          cfg_1.set_version(raft::group_configuration::current_version);
+          cfg_2.set_version(raft::group_configuration::current_version);
           BOOST_REQUIRE_EQUAL(configurations[0].cfg, cfg_1);
 
           BOOST_REQUIRE_EQUAL(configurations[1].offset, offsets[1]);
@@ -557,4 +680,78 @@ SEASTAR_THREAD_TEST_CASE(configuration_broker_many_endpoints) {
     BOOST_REQUIRE_EQUAL(
       cfg.brokers()[1].kafka_advertised_listeners(),
       node_1.kafka_advertised_listeners());
+}
+
+namespace {
+
+/// A ReferenceBatchReaderConsumer that keeps the batches handed to it, standing
+/// in for the log appender that consumes them in production.
+struct collecting_consumer {
+    ss::future<ss::stop_iteration> operator()(model::record_batch& b) {
+        batches.push_back(b.copy());
+        co_return ss::stop_iteration::no;
+    }
+    chunked_vector<model::record_batch> end_of_stream() {
+        return std::move(batches);
+    }
+
+    chunked_vector<model::record_batch> batches;
+};
+
+} // namespace
+
+// Every configuration batch reaching the log is stamped before the appender
+// sees it, so a term transition is recoverable from the record itself rather
+// than from the name of the segment it lands in.
+SEASTAR_THREAD_TEST_CASE(stamp_configuration_batch_term_on_append) {
+    auto cfg = random_configuration();
+    cfg.set_version(raft::group_configuration::v_7);
+    auto batch = raft::details::serialize_configuration_as_batch(cfg);
+    batch.set_term(model::term_id(9));
+    BOOST_REQUIRE(
+      !raft::details::peek_configuration_batch_term(batch).has_value());
+
+    auto [appended, configurations]
+      = raft::details::for_each_ref_extract_configuration(
+          model::offset(0),
+          chunked_vector<model::record_batch>::single(std::move(batch)),
+          collecting_consumer{})
+          .get();
+
+    // the batch handed to the appender carries the term in its payload
+    BOOST_REQUIRE_EQUAL(appended.size(), 1);
+    BOOST_REQUIRE_EQUAL(
+      raft::details::peek_configuration_batch_term(appended[0]),
+      model::term_id(9));
+
+    // and so does the configuration extracted for the configuration manager
+    BOOST_REQUIRE_EQUAL(configurations.size(), 1);
+    BOOST_REQUIRE_EQUAL(configurations[0].cfg.term(), model::term_id(9));
+    BOOST_REQUIRE_EQUAL(
+      configurations[0].cfg.version(), raft::group_configuration::v_8);
+}
+
+// A batch that already carries its term is appended untouched.
+SEASTAR_THREAD_TEST_CASE(append_leaves_stamped_configuration_batch_alone) {
+    auto cfg = random_configuration();
+    cfg.set_version(raft::group_configuration::v_8);
+    cfg.set_term(model::term_id(3));
+    auto batch = raft::details::serialize_configuration_as_batch(cfg);
+    batch.set_term(model::term_id(9));
+    const auto expected = batch.copy();
+
+    auto [appended, configurations]
+      = raft::details::for_each_ref_extract_configuration(
+          model::offset(0),
+          chunked_vector<model::record_batch>::single(std::move(batch)),
+          collecting_consumer{})
+          .get();
+
+    BOOST_REQUIRE_EQUAL(appended.size(), 1);
+    BOOST_REQUIRE_EQUAL(appended[0], expected);
+    // the payload term wins over the batch header's term
+    BOOST_REQUIRE_EQUAL(
+      raft::details::peek_configuration_batch_term(appended[0]),
+      model::term_id(3));
+    BOOST_REQUIRE_EQUAL(configurations[0].cfg.term(), model::term_id(3));
 }
