@@ -160,6 +160,46 @@ copy_data_segment_reducer::filter(model::record_batch batch) {
         co_return std::nullopt;
     }
 
+    // configuration batches are never filtered, but the rewrite is the
+    // opportunity to stamp historical batches whose payload does not carry
+    // the replication term (pre-v_8 configurations), making their term
+    // transitions recoverable from log data alone. The batch's term comes
+    // from the log reader, which stamped it from the source segment's
+    // metadata.
+    if (batch.header().type == model::record_batch_type::raft_configuration) {
+        _saw_configuration = true;
+        auto mode = filtered_batch::result::identical;
+        if (_term_hooks.stamper != nullptr && *_term_hooks.stamper) {
+            if (auto stamped = (*_term_hooks.stamper)(batch)) {
+                batch = std::move(*stamped);
+                mode = filtered_batch::result::rebuilt;
+            }
+        }
+        const bool has_term = _term_hooks.parser != nullptr
+                              && *_term_hooks.parser
+                              && (*_term_hooks.parser)(batch).has_value();
+        if (!has_term) {
+            _saw_configuration_without_term = true;
+            if (
+              _term_hooks.stamper != nullptr && *_term_hooks.stamper
+              && mode == filtered_batch::result::identical) {
+                // the stamper handles every configuration version, so the
+                // only way to get here is a payload that does not
+                // deserialize: a writer bug (the batch crc rules out disk
+                // corruption). The segment stays unverified and compaction
+                // will keep retrying it, so be loud.
+                vlog(
+                  gclog.error,
+                  "[{}] configuration batch at offset {} could not be "
+                  "stamped with its term; the segment cannot merge across "
+                  "raft terms",
+                  _ntp,
+                  batch.base_offset());
+            }
+        }
+        co_return filtered_batch{.mode = mode, .batch = std::move(batch)};
+    }
+
     // do not filter non-removable batch types under any circumstances
     if (!compaction::is_filterable(batch.header().type)) {
         co_return filtered_batch{

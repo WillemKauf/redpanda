@@ -350,7 +350,8 @@ ss::future<storage::index_state> do_copy_segment_data(
   storage_resources& resources,
   offset_delta_time apply_offset,
   ss::sharded<features::feature_table>& feature_table,
-  bool tx_batch_compaction_enabled) {
+  bool tx_batch_compaction_enabled,
+  config_batch_term_hooks term_hooks) {
     // preserve base_offset, broker_timestamp, and clean_compact_timestamp from
     // the segment's index
     auto old_base_offset = seg->index().base_offset();
@@ -455,7 +456,8 @@ ss::future<storage::index_state> do_copy_segment_data(
       stm_hookset,
       /*cidx=*/nullptr,
       /*inject_failure=*/false,
-      cfg.asrc);
+      cfg.asrc,
+      term_hooks);
 
     // create the segment, get the in-memory index for the new segment
     auto res = co_await create_segment_full_reader(
@@ -580,7 +582,8 @@ ss::future<compaction_result> do_self_compact_segment(
   offset_delta_time apply_offset,
   ss::rwlock::holder read_holder,
   ss::sharded<features::feature_table>& feature_table,
-  bool tx_batch_compaction_enabled) {
+  bool tx_batch_compaction_enabled,
+  config_batch_term_hooks term_hooks) {
     auto size_before = s->size_bytes();
 
     if (cfg.asrc) {
@@ -615,7 +618,8 @@ ss::future<compaction_result> do_self_compact_segment(
       resources,
       apply_offset,
       feature_table,
-      tx_batch_compaction_enabled);
+      tx_batch_compaction_enabled,
+      term_hooks);
     vlog(
       gclog.trace, "finished copying segment data for {}", s->reader().path());
 
@@ -809,7 +813,8 @@ ss::future<compaction_result> self_compact_segment(
   storage::readers_cache& readers_cache,
   storage_resources& resources,
   ss::sharded<features::feature_table>& feature_table,
-  bool force_compaction) {
+  bool force_compaction,
+  config_batch_term_hooks term_hooks) {
     if (s->has_appender()) {
         throw std::runtime_error(
           fmt::format(
@@ -821,9 +826,21 @@ ss::future<compaction_result> self_compact_segment(
     const bool may_remove_tombstones = may_have_removable_tombstones(s, cfg);
     const bool will_remove_transaction_batches
       = has_removable_transaction_batches(s, cfg, tx_batch_compaction_enabled);
+    // an unverified segment is rewritten so the stamp pass can prove its
+    // configuration batch terms (see
+    // index_state::config_batch_terms_verified). Forced even for segments
+    // already compacted clean before the feature activated - otherwise
+    // pre-upgrade data would never become eligible for cross-term merging.
+    const bool needs_config_term_stamping
+      = term_hooks.stamper != nullptr && *term_hooks.stamper
+        && term_hooks.parser != nullptr && *term_hooks.parser
+        && feature_table.local().is_active(
+          features::feature::multi_term_segments)
+        && !s->index().config_batch_terms_verified();
 
     auto should_force_compaction = force_compaction || may_remove_tombstones
-                                   || will_remove_transaction_batches;
+                                   || will_remove_transaction_batches
+                                   || needs_config_term_stamping;
 
     // force_compaction will not invalidate max_removable_local_log_offset.
     auto segment_needs_compaction
@@ -860,7 +877,8 @@ ss::future<compaction_result> self_compact_segment(
       apply_offset,
       std::move(read_holder),
       feature_table,
-      tx_batch_compaction_enabled);
+      tx_batch_compaction_enabled,
+      term_hooks);
 
     if (res.did_compact()) {
         pb.add_compaction_removed_bytes(

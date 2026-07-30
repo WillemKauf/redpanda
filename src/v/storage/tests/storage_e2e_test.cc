@@ -1324,6 +1324,85 @@ void append_single_record_batch(
 }
 
 /**
+ * Storage tests cannot depend on raft's group_configuration serialization,
+ * so term-aware tests emulate the raft convention with configuration-type
+ * batches that carry the term in the record key, plus matching
+ * parser/stamper hooks injected via the log_config.
+ */
+void append_configuration_batch(
+  ss::shared_ptr<storage::log> log, model::term_id term) {
+    storage::record_batch_builder builder(
+      model::record_batch_type::raft_configuration, model::offset(0));
+    builder.add_raw_kv(reflection::to_iobuf(term()), iobuf());
+    auto batch = std::move(builder).build();
+    batch.set_term(term);
+    auto reader = model::make_memory_record_batch_reader({std::move(batch)});
+    storage::log_append_config cfg{
+      .should_fsync = storage::log_append_config::fsync::no,
+    };
+    std::move(reader)
+      .for_each_ref(log->make_appender(cfg), model::no_timeout)
+      .get();
+}
+
+storage::config_batch_term_parser make_test_batch_term_parser() {
+    return [](const model::record_batch& b) -> std::optional<model::term_id> {
+        auto records = b.copy_records();
+        if (records.empty()) {
+            return std::nullopt;
+        }
+        auto key = records.begin()->release_key();
+        if (key.size_bytes() == 0) {
+            return std::nullopt;
+        }
+        return model::term_id(reflection::from_iobuf<int64_t>(std::move(key)));
+    };
+}
+
+/// A configuration batch with no term in its payload (an empty record key,
+/// which the test parser rejects) - the shape of pre-upgrade history.
+void append_unstamped_configuration_batch(
+  ss::shared_ptr<storage::log> log, model::term_id term) {
+    storage::record_batch_builder builder(
+      model::record_batch_type::raft_configuration, model::offset(0));
+    builder.add_raw_kv(iobuf(), iobuf());
+    auto batch = std::move(builder).build();
+    batch.set_term(term);
+    auto reader = model::make_memory_record_batch_reader({std::move(batch)});
+    storage::log_append_config cfg{
+      .should_fsync = storage::log_append_config::fsync::no,
+    };
+    std::move(reader)
+      .for_each_ref(log->make_appender(cfg), model::no_timeout)
+      .get();
+}
+
+/// Mirrors the raft convention the test parser reads: stamps the batch's
+/// term into the record key of a configuration batch that lacks one.
+storage::config_batch_term_stamper make_test_batch_term_stamper() {
+    return
+      [](const model::record_batch& b) -> std::optional<model::record_batch> {
+          auto records = b.copy_records();
+          if (records.empty()) {
+              return std::nullopt;
+          }
+          if (records.begin()->release_key().size_bytes() != 0) {
+              return std::nullopt;
+          }
+          storage::record_batch_builder builder(
+            model::record_batch_type::raft_configuration, b.base_offset());
+          builder.add_raw_kv(reflection::to_iobuf(b.term()()), iobuf());
+          auto data = std::move(builder).build().release_data();
+          auto hdr = b.header();
+          hdr.reset_size_checksum_metadata(data);
+          auto stamped = model::record_batch(
+            hdr, std::move(data), model::record_batch::tag_ctor_ng{});
+          stamped.set_term(b.term());
+          return stamped;
+      };
+}
+
+/**
  * Test scenario:
  *   1) append few single record batches in term 1
  *   2) truncate in the middle of segment
@@ -1875,6 +1954,82 @@ TEST_F(storage_test_fixture, adjacent_segment_compaction_terms) {
     for (int i = 0; i < 5; i++) {
         ASSERT_EQ(log->segments()[i]->offsets().get_term()(), i + 1);
     }
+}
+
+/**
+ * Compaction rewrites stamp configuration batches that do not carry their
+ * term in the payload (pre-upgrade history), and prove the result via
+ * index_state::config_batch_terms - the prerequisite for such segments
+ * to merge across raft terms.
+ */
+TEST_F(storage_test_fixture, compaction_stamps_configuration_batches) {
+    auto cfg = default_log_config(test_dir);
+    cfg.batch_term_parser = make_test_batch_term_parser();
+    cfg.batch_term_stamper = make_test_batch_term_stamper();
+    storage::ntp_config::default_overrides overrides;
+    overrides.cleanup_policy_bitflags
+      = model::cleanup_policy_bitflags::compaction;
+
+    // isolate the self-compaction rewrite from adjacent merging
+    scoped_config test_local_cfg;
+    test_local_cfg.get("log_compaction_merge_max_ranges")
+      .set_value(std::optional<uint32_t>(0));
+
+    ss::abort_source as;
+    storage::log_manager mgr = make_log_manager(cfg);
+    auto deferred = ss::defer([&mgr]() mutable { mgr.stop().get(); });
+    auto ntp = model::ntp("default", "test_stamp_compaction", 0);
+    auto log = manage_log(
+      mgr,
+      storage::ntp_config(
+        ntp,
+        mgr.config().base_dir,
+        std::make_unique<storage::ntp_config::default_overrides>(overrides)));
+
+    // an unstamped configuration batch cannot begin a term span, so the
+    // term transition rolls and the new segment begins with the unstamped
+    // batch - the shape a follower produces replaying pre-upgrade history
+    append_single_record_batch(log, 5, model::term_id(1), 1, true);
+    append_unstamped_configuration_batch(log, model::term_id(2));
+    append_single_record_batch(log, 5, model::term_id(2), 1, true);
+    log->force_roll().get();
+    log->flush().get();
+
+    ASSERT_EQ(log->segment_count(), 3);
+    // fresh indexes start unproven
+    ASSERT_FALSE(log->segments()[0]->index().config_batch_terms_verified());
+    ASSERT_FALSE(log->segments()[1]->index().config_batch_terms_verified());
+
+    storage::housekeeping_config c_cfg(
+      model::timestamp::min(),
+      std::nullopt,
+      model::offset::max(),
+      model::offset::max(),
+      model::offset::max(),
+      std::nullopt,
+      std::nullopt,
+      0ms,
+      as);
+    log->housekeeping(c_cfg).get();
+
+    // the rewrite stamped the configuration batch and proved both sealed
+    // segments
+    ASSERT_EQ(log->segment_count(), 3);
+    ASSERT_TRUE(log->segments()[0]->index().config_batch_terms_verified());
+    ASSERT_TRUE(log->segments()[1]->index().config_batch_terms_verified());
+
+    const auto parser = make_test_batch_term_parser();
+    auto batches = read_and_validate_all_batches(log);
+    size_t configs = 0;
+    for (const auto& b : batches) {
+        if (b.header().type == model::record_batch_type::raft_configuration) {
+            ++configs;
+            auto t = parser(b);
+            ASSERT_TRUE(t.has_value());
+            ASSERT_EQ(*t, model::term_id(2));
+        }
+    }
+    ASSERT_EQ(configs, 1);
 }
 
 TEST_F(storage_test_fixture, max_adjacent_segment_compaction) {

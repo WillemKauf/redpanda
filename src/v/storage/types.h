@@ -38,6 +38,29 @@ namespace storage {
 using log_clock = ss::lowres_clock;
 using jitter_percents = named_type<int, struct jitter_percents_tag>;
 
+/// Extracts the replication term from a raft_configuration batch payload,
+/// if present (raft::group_configuration >= v_8). Injected by the raft
+/// layer so that storage can attribute terms from log data without
+/// depending on raft serialization.
+using config_batch_term_parser
+  = std::function<std::optional<model::term_id>(const model::record_batch&)>;
+
+/// Rewrites a raft_configuration batch whose payload does not carry the
+/// replication term into one that does (raft::group_configuration v_8),
+/// stamping the term from the batch header. Returns nullopt when the batch
+/// needs no stamping or cannot be stamped losslessly. Injected by the raft
+/// layer so that compaction rewrites can stamp historical configuration
+/// batches without depending on raft serialization.
+using config_batch_term_stamper = std::function<
+  std::optional<model::record_batch>(const model::record_batch&)>;
+
+/// Term hooks handed to compaction rewrites. Both may be unset (e.g. the
+/// kvstore, tests without raft).
+struct config_batch_term_hooks {
+    const config_batch_term_parser* parser = nullptr;
+    const config_batch_term_stamper* stamper = nullptr;
+};
+
 // Helps to identify transactional stms in the registered list of stms.
 // Avoids an ugly dynamic cast to the base class.
 enum class stm_type : int8_t {

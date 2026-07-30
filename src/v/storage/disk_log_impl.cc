@@ -545,7 +545,8 @@ ss::future<compaction_result> disk_log_impl::segment_self_compact(
       *_readers_cache,
       _manager.resources(),
       _feature_table,
-      force_compaction);
+      force_compaction,
+      term_hooks());
 }
 
 ss::future<> disk_log_impl::adjacent_merge_compact(
@@ -1699,7 +1700,9 @@ ss::future<> disk_log_impl::rewrite_segment_with_offset_map(
           _stm_hookset,
           *_probe,
           storage::internal::should_apply_delta_time_offset(_feature_table),
-          _feature_table);
+          _feature_table,
+          /*inject_reader_failure=*/false,
+          term_hooks());
     } catch (...) {
         eptr = std::current_exception();
     }
@@ -2258,6 +2261,14 @@ ss::future<> disk_log_impl::force_roll() {
     add_segment_bytes(ptr, ptr->size_bytes());
     co_return co_await ptr->release_appender(_readers_cache.get())
       .then([this, next_offset, t] { return new_segment(next_offset, t); });
+}
+
+config_batch_term_hooks disk_log_impl::term_hooks() const {
+    const auto& c = _manager.config();
+    return {
+      .parser = c.batch_term_parser ? &c.batch_term_parser : nullptr,
+      .stamper = c.batch_term_stamper ? &c.batch_term_stamper : nullptr,
+    };
 }
 
 ss::future<> disk_log_impl::maybe_roll_unlocked(
