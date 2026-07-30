@@ -202,6 +202,22 @@ redpanda_cc_gtest(
 )
 
 redpanda_cc_gtest(
+    name = "term_span_set_test",
+    timeout = "short",
+    srcs = [
+        "term_span_set_test.cc",
+    ],
+    deps = [
+        "//src/v/container:chunked_vector",
+        "//src/v/model",
+        "//src/v/storage:term_span",
+        "//src/v/test_utils:gtest",
+        "@fmt",
+        "@googletest//:gtest",
+    ],
+)
+
+redpanda_cc_gtest(
     name = "log_segment_appender_test",
     timeout = "short",
     srcs = [

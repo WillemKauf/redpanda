@@ -68,6 +68,20 @@ redpanda_cc_library(
 )
 
 redpanda_cc_library(
+    name = "term_span",
+    hdrs = [
+        "term_span.h",
+    ],
+    deps = [
+        "//src/v/base",
+        "//src/v/container:chunked_vector",
+        "//src/v/model",
+        "//src/v/serde",
+        "@fmt",
+    ],
+)
+
+redpanda_cc_library(
     name = "index_state",
     srcs = [
         "index_state.cc",
