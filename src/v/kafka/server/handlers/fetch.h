@@ -377,6 +377,12 @@ struct read_result {
     model::partition_id partition;
     std::vector<cluster::tx::tx_range> aborted_transactions;
     fetch_units_holder memory_units;
+    // True if a reader was created and consumed for this result, i.e. data
+    // was available in the requested range and the read was not skipped. A
+    // result with attempted_read set and no data means the read stopped
+    // without consuming anything (e.g. the first batch exceeded the strict
+    // byte budget) and is a candidate for an obligatory (KIP-74) retry.
+    bool attempted_read{false};
 };
 // struct aggregating fetch requests and corresponding response iterators for
 // the same shard

@@ -67,16 +67,9 @@ fetch_memory_units_manager::units::~units() noexcept {
       "foreign units need to be released via the fetch_memory_units_manager");
 }
 
-fetch_memory_units fetch_memory_units_manager::allocate_memory_units(
-  const model::ktp& ktp,
-  size_t max_bytes,
-  size_t max_batch_size,
-  const size_t avg_batch_size,
-  const bool require_max_batch_size) {
-    vassert(!_gate.is_closed(), "fetch_memory_units_manager is stopped");
-
+size_t fetch_memory_units_manager::clamped_max_bytes(
+  const model::ktp& ktp, size_t max_bytes) const {
     static constexpr auto rate = 5min;
-
     if (max_bytes > _max_fetch_units) {
         thread_local static ss::logger::rate_limit rate_limit(rate);
         klog.log(
@@ -90,7 +83,12 @@ fetch_memory_units fetch_memory_units_manager::allocate_memory_units(
           _max_fetch_units);
         max_bytes = _max_fetch_units;
     }
+    return max_bytes;
+}
 
+size_t fetch_memory_units_manager::clamped_max_batch_size(
+  const model::ktp& ktp, size_t max_batch_size) const {
+    static constexpr auto rate = 5min;
     const auto& configured_max = _max_message_size();
     const size_t max_message_size = configured_max.has_value()
                                       ? static_cast<size_t>(*configured_max)
@@ -109,6 +107,18 @@ fetch_memory_units fetch_memory_units_manager::allocate_memory_units(
           max_message_size);
         max_batch_size = max_message_size;
     }
+    return max_batch_size;
+}
+
+fetch_memory_units fetch_memory_units_manager::allocate_memory_units(
+  const model::ktp& ktp,
+  size_t max_bytes,
+  size_t max_batch_size,
+  const size_t avg_batch_size) {
+    vassert(!_gate.is_closed(), "fetch_memory_units_manager is stopped");
+
+    max_bytes = clamped_max_bytes(ktp, max_bytes);
+    max_batch_size = clamped_max_batch_size(ktp, max_batch_size);
 
     const size_t available_units = std::min(
       _kafka_units.current(), _fetch_units.current());
@@ -119,19 +129,62 @@ fetch_memory_units fetch_memory_units_manager::allocate_memory_units(
     const auto max_units = std::max(max_bytes, max_batch_size);
 
     size_t units_to_alloc = 0;
-    if (require_max_batch_size) {
-        // If \ref require_max_batch_size is true then we must read at least
-        // \ref max_batch_size. Even if that means the memory semaphores result
-        // in negative units.
-        units_to_alloc = std::max(
-          max_batch_size, std::min(max_units, available_units));
-    } else if (available_units >= avg_batch_size) {
+    if (available_units >= avg_batch_size) {
         // Only reserve memory if we have space for at least \ref
         // avg_batch_size, otherwise allocate none.
         units_to_alloc = std::min(available_units, max_units);
     }
 
     return {allocate_units(units_to_alloc), _local_instance_fn};
+}
+
+ss::future<std::optional<fetch_memory_units>>
+fetch_memory_units_manager::allocate_memory_units_wait(
+  const model::ktp& ktp,
+  size_t max_bytes,
+  size_t max_batch_size,
+  model::timeout_clock::time_point deadline) {
+    vassert(!_gate.is_closed(), "fetch_memory_units_manager is stopped");
+    auto holder = _gate.hold();
+
+    max_bytes = clamped_max_bytes(ktp, max_bytes);
+    max_batch_size = clamped_max_batch_size(ktp, max_batch_size);
+
+    // The obligatory read must be able to return the first batch, so at least
+    // max_batch_size units are needed. Reserving more (up to max_bytes) would
+    // let the read return additional batches, but waiting for more than the
+    // minimum could stall the fetch behind memory it doesn't strictly need.
+    const size_t units_needed = std::max(max_batch_size, size_t{1});
+
+    // The semaphores use a different clock than the fetch deadline.
+    const auto remaining = deadline - model::timeout_clock::now();
+    const auto sem_deadline = ssx::semaphore::clock::now() + remaining;
+
+    try {
+        // Wait on the (typically smaller) fetch semaphore first so that
+        // nothing is held while waiting on the long pole. All waiters acquire
+        // in the same order, so there is no ordering deadlock.
+        auto fetch_units = co_await ss::get_units(
+          _fetch_units, units_needed, sem_deadline);
+        auto kafka_units = co_await ss::get_units(
+          _kafka_units, units_needed, sem_deadline);
+        co_return fetch_memory_units{
+          units{std::move(kafka_units), std::move(fetch_units)},
+          _local_instance_fn};
+    } catch (const ss::semaphore_timed_out&) {
+        static constexpr auto rate = 5min;
+        thread_local static ss::logger::rate_limit rate_limit(rate);
+        klog.log(
+          ss::log_level::warn,
+          rate_limit,
+          "{}: timed out waiting for {} units of fetch memory for an "
+          "obligatory batch read. The fetch will return an empty response.",
+          ktp,
+          units_needed);
+        co_return std::nullopt;
+    } catch (const ss::broken_semaphore&) {
+        co_return std::nullopt;
+    }
 }
 
 fetch_memory_units fetch_memory_units_manager::zero_units() {

@@ -51,6 +51,7 @@
 
 #include <boost/range/irange.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <memory>
@@ -195,7 +196,7 @@ static ss::future<read_result> read_from_partition(
         co_await ss::coroutine::return_exception_ptr(std::move(e));
     }
 
-    co_return read_result(
+    auto ret = read_result(
       std::move(data),
       start_o,
       data_base_offset,
@@ -205,6 +206,8 @@ static ss::future<read_result> read_from_partition(
       lso,
       delta_from_tip_ms,
       std::move(aborted_transactions));
+    ret.attempted_read = true;
+    co_return ret;
 }
 
 // Clone a shared read into a fresh read_result for one response. Share the
@@ -218,7 +221,7 @@ static read_result clone_read_result(const read_result& src) {
           src.high_watermark,
           src.last_stable_offset);
     }
-    return read_result(
+    auto ret = read_result(
       src.share_data(),
       src.start_offset,
       src.data_base_offset,
@@ -228,6 +231,8 @@ static read_result clone_read_result(const read_result& src) {
       src.last_stable_offset,
       src.delta_from_tip_ms,
       src.aborted_transactions);
+    ret.attempted_read = src.attempted_read;
+    return ret;
 }
 
 // Allocate memory units, read, and adjust the reservation to the result size.
@@ -240,12 +245,34 @@ static ss::future<read_result> read_with_units(
   bool obligatory_batch_read) {
     auto memory_units = units_mgr.zero_units();
     if (!ntp_config.cfg.skip_read) {
-        memory_units = units_mgr.allocate_memory_units(
-          ntp_config.ktp(),
-          ntp_config.cfg.max_bytes,
-          ntp_config.cfg.max_batch_size,
-          ntp_config.cfg.avg_batch_size,
-          obligatory_batch_read);
+        if (obligatory_batch_read) {
+            // An obligatory read (see KIP-74) must return at least the first
+            // batch, so it needs max_batch_size units regardless of what is
+            // currently available. Wait for the memory rather than
+            // overdrawing the semaphores: the fetch holds no other data or
+            // units at this point (an obligatory read only runs when nothing
+            // has been read yet), so waiting cannot deadlock, and FIFO
+            // admission bounds total fetch memory by the semaphore capacity.
+            auto units = co_await units_mgr.allocate_memory_units_wait(
+              ntp_config.ktp(),
+              ntp_config.cfg.max_bytes,
+              ntp_config.cfg.max_batch_size,
+              deadline.value_or(model::timeout_clock::now()));
+            if (!units.has_value()) {
+                // Timed out waiting for memory. Return an empty result: the
+                // client will poll again and rejoin the FIFO queue, so the
+                // fetch still makes progress eventually.
+                co_return read_result(
+                  part.start_offset(), part.high_watermark(), lso);
+            }
+            memory_units = std::move(*units);
+        } else {
+            memory_units = units_mgr.allocate_memory_units(
+              ntp_config.ktp(),
+              ntp_config.cfg.max_bytes,
+              ntp_config.cfg.max_batch_size,
+              ntp_config.cfg.avg_batch_size);
+        }
         if (!memory_units.has_units()) {
             ntp_config.cfg.skip_read = true;
         } else if (ntp_config.cfg.max_bytes > memory_units.num_units()) {
@@ -254,8 +281,9 @@ static ss::future<read_result> read_with_units(
     }
     auto result = co_await read_from_partition(
       std::move(part), lso, ntp_config.cfg, deadline);
-    // Units can be increased here too: an obligatory read has no strict limit
-    // and may return a batch larger than the reserved size.
+    // Units can be increased here too: an obligatory read reserves
+    // max_batch_size, which bounds the first batch, but the read may return
+    // additional batches within its byte budget.
     memory_units.adjust_units(result.data_size_bytes());
     result.memory_units = fetch_units_holder{std::move(memory_units)};
     co_return result;
@@ -576,6 +604,53 @@ static ss::future<chunked_vector<read_result>> fetch_ntps(
       deadline.value_or(model::timeout_clock::time_point::min()),
       fetch_deadline);
 
+    const auto read_one =
+      [&](size_t cfg_idx, bool obligatory_batch_read) -> ss::future<> {
+        auto& ntp_cfg = ntp_fetch_configs[cfg_idx];
+        return do_read_from_ntp(
+                 cluster_pm,
+                 md_cache,
+                 replica_selector,
+                 ntp_cfg,
+                 fetch_deadline,
+                 obligatory_batch_read,
+                 units_mgr,
+                 coalescer)
+          .then([&, cfg_idx](read_result&& res) {
+              auto& ntp_cfg = ntp_fetch_configs[cfg_idx];
+              res.partition = ntp_cfg.ktp().get_partition();
+
+              auto read_size = res.data_size_bytes();
+              total_read_size += read_size;
+
+              if (res.delta_from_tip_ms.has_value()) {
+                  read_probe.add_read_event_delta_from_tip(
+                    res.delta_from_tip_ms.value());
+              }
+
+              results[cfg_idx] = std::move(res);
+          })
+          .handle_exception([&, cfg_idx](const std::exception_ptr& e) {
+              auto& ntp_cfg = ntp_fetch_configs[cfg_idx];
+              bool is_shutdown = ssx::is_shutdown_exception(e);
+              // Return not_leader_for_partition error to force clients retry
+              // for potential transient errors.
+              auto ec = error_code::not_leader_for_partition;
+              vlogl(
+                klog,
+                is_shutdown ? ss::log_level::debug : ss::log_level::warn,
+                "ntp {}: caught unhandled exception {} in fetch path",
+                ntp_cfg.ktp(),
+                e);
+              auto res = make_errored_read_result(md_cache, ntp_cfg.ktp(), ec);
+              res.partition = ntp_cfg.ktp().get_partition();
+              results[cfg_idx] = std::move(res);
+          });
+    };
+
+    // First pass: all reads are strict, i.e. a partition whose next batch
+    // exceeds its byte budget returns no data rather than materializing an
+    // over-budget batch.
     co_await ss::max_concurrent_for_each(
       config_indexes,
       config::shard_local_cfg().fetch_max_read_concurrency(),
@@ -589,52 +664,34 @@ static ss::future<chunked_vector<read_result>> fetch_ntps(
               ntp_cfg.cfg.skip_read = true;
           }
 
-          // In Kafka first non-empty partition in a request or session
-          // is considered the `obligatory` batch read. The logic below
-          // is designed to approximate this behavior. Up to
-          // `fetch_max_read_concurrency` partition reads will be considered
-          // obligatory until a batch is read.
-          const bool obligatory_batch_read = total_read_size == 0;
-
-          return do_read_from_ntp(
-                   cluster_pm,
-                   md_cache,
-                   replica_selector,
-                   ntp_cfg,
-                   fetch_deadline,
-                   obligatory_batch_read,
-                   units_mgr,
-                   coalescer)
-            .then([&, cfg_idx](read_result&& res) {
-                res.partition = ntp_cfg.ktp().get_partition();
-
-                auto read_size = res.data_size_bytes();
-                total_read_size += read_size;
-
-                if (res.delta_from_tip_ms.has_value()) {
-                    read_probe.add_read_event_delta_from_tip(
-                      res.delta_from_tip_ms.value());
-                }
-
-                results[cfg_idx] = std::move(res);
-            })
-            .handle_exception([&, cfg_idx](const std::exception_ptr& e) {
-                bool is_shutdown = ssx::is_shutdown_exception(e);
-                // Return not_leader_for_partition error to force clients retry
-                // for potential transient errors.
-                auto ec = error_code::not_leader_for_partition;
-                vlogl(
-                  klog,
-                  is_shutdown ? ss::log_level::debug : ss::log_level::warn,
-                  "ntp {}: caught unhandled exception {} in fetch path",
-                  ntp_cfg.ktp(),
-                  e);
-                auto res = make_errored_read_result(
-                  md_cache, ntp_cfg.ktp(), ec);
-                res.partition = ntp_cfg.ktp().get_partition();
-                results[cfg_idx] = std::move(res);
-            });
+          return read_one(cfg_idx, false);
       });
+
+    // Second pass (KIP-74): a fetch must always make progress -- if the
+    // partitions have data, at least one batch is returned irrespective of
+    // the size limits. If the strict pass read nothing, retry the first
+    // partition whose read attempt found data but returned none of it (i.e.
+    // its first batch exceeded the strict byte budget), this time exempting
+    // the first batch from the budget. Exactly one partition per fetch gets
+    // this exemption, so a response overshoots its limits by at most one
+    // batch.
+    //
+    // If the strict pass skipped every read because no memory was available
+    // at all, there is no retry candidate and the fetch returns an empty
+    // response. That is intentional: the client polls again (paced by
+    // fetch.max.wait.ms) while the in-flight responses holding the memory
+    // drain, instead of the fetch growing memory usage while the shard is
+    // already at its limit.
+    if (total_read_size == 0) {
+        auto it = std::ranges::find_if(config_indexes, [&](size_t cfg_idx) {
+            const auto& res = results[cfg_idx];
+            return res.error == error_code::none && res.attempted_read
+                   && res.data_size_bytes() == 0;
+        });
+        if (it != config_indexes.end()) {
+            co_await read_one(*it, true);
+        }
+    }
 
     vlog(
       klog.trace,

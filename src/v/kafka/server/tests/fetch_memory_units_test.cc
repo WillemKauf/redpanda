@@ -131,7 +131,7 @@ TEST_F_CORO(fetch_memory_units_test_fixture, test_cross_shard_free) {
     auto get_remote_units = [&](size_t n) {
         return sharded_manager().invoke_on(other_shard_id, [n](auto& mgr) {
             return std::make_optional(
-              mgr.allocate_memory_units(model::ktp{}, n, n, n, false));
+              mgr.allocate_memory_units(model::ktp{}, n, n, n));
         });
     };
 
@@ -171,13 +171,18 @@ TEST_F_CORO(fetch_memory_units_test_fixture, test_max_units) {
     co_await set_fetch_units(1000);
     co_await set_max_message_size(10);
 
-    auto units = mgr.allocate_memory_units(model::ktp{}, 1, 100, 1, false);
-    EXPECT_EQ(units.num_units(), 10);
-    units = mgr.allocate_memory_units(model::ktp{}, 1, 100, 1, true);
+    auto units = mgr.allocate_memory_units(model::ktp{}, 1, 100, 1);
     EXPECT_EQ(units.num_units(), 10);
 
+    // The waiting variant reserves the (clamped) max_batch_size.
+    auto waited = co_await mgr.allocate_memory_units_wait(
+      model::ktp{}, 1, 100, model::timeout_clock::now() + 1s);
+    ASSERT_TRUE_CORO(waited.has_value());
+    EXPECT_EQ(waited->num_units(), 10);
+    waited.reset();
+
     // `max_bytes` should still be reserved if there are enough units.
-    units = mgr.allocate_memory_units(model::ktp{}, 100, 1, 1, false);
+    units = mgr.allocate_memory_units(model::ktp{}, 100, 1, 1);
     EXPECT_EQ(units.num_units(), 100);
 }
 
@@ -187,7 +192,7 @@ TEST_F_CORO(fetch_memory_units_test_fixture, test_adjust_units) {
     co_await set_kafka_units(10);
     co_await set_fetch_units(10);
 
-    auto units = mgr.allocate_memory_units(model::ktp{}, 10, 10, 10, false);
+    auto units = mgr.allocate_memory_units(model::ktp{}, 10, 10, 10);
     EXPECT_EQ(units.num_units(), 10);
     units.adjust_units(5);
     EXPECT_EQ(units.num_units(), 5);
@@ -203,14 +208,9 @@ TEST_F_CORO(fetch_memory_units_test_fixture, test_allocate_memory_units) {
     co_await set_kafka_units(100_MiB);
     co_await set_fetch_units(50_MiB);
 
-    const auto test_case =
-      [&mgr](size_t max_bytes, bool obligatory_batch_read) -> size_t {
+    const auto test_case = [&mgr](size_t max_bytes) -> size_t {
         auto mu = mgr.allocate_memory_units(
-          model::ktp{},
-          max_bytes,
-          batch_size,
-          batch_size,
-          obligatory_batch_read);
+          model::ktp{}, max_bytes, batch_size, batch_size);
         return mu.num_units();
     };
 
@@ -225,18 +225,12 @@ TEST_F_CORO(fetch_memory_units_test_fixture, test_allocate_memory_units) {
     // *** plenty of memory cases
     // kafka_mem > fetch_mem > batch_size
     // Reserved memory is limited by the fetch memory semaphore
-    EXPECT_EQ(test_case(batch_size / 100, false), batch_size);
-    EXPECT_EQ(test_case(batch_size / 100, true), batch_size);
-    EXPECT_EQ(test_case(batch_size, false), batch_size);
-    EXPECT_EQ(test_case(batch_size, true), batch_size);
-    EXPECT_EQ(test_case(batch_size * 3, false), batch_size * 3);
-    EXPECT_EQ(test_case(batch_size * 3, true), batch_size * 3);
-    EXPECT_EQ(test_case(fetch_mem, false), fetch_mem);
-    EXPECT_EQ(test_case(fetch_mem, true), fetch_mem);
-    EXPECT_EQ(test_case(fetch_mem + 1, false), fetch_mem);
-    EXPECT_EQ(test_case(fetch_mem + 1, true), fetch_mem);
-    EXPECT_EQ(test_case(kafka_mem, false), fetch_mem);
-    EXPECT_EQ(test_case(kafka_mem, true), fetch_mem);
+    EXPECT_EQ(test_case(batch_size / 100), batch_size);
+    EXPECT_EQ(test_case(batch_size), batch_size);
+    EXPECT_EQ(test_case(batch_size * 3), batch_size * 3);
+    EXPECT_EQ(test_case(fetch_mem), fetch_mem);
+    EXPECT_EQ(test_case(fetch_mem + 1), fetch_mem);
+    EXPECT_EQ(test_case(kafka_mem), fetch_mem);
 
     // *** still a lot of mem but kafka mem somewhat used:
     // fetch_mem > kafka_mem > batch_size (fetch_mem - kafka_mem < batch_size)
@@ -249,14 +243,10 @@ TEST_F_CORO(fetch_memory_units_test_fixture, test_allocate_memory_units) {
     EXPECT_TRUE(kafka_mem < fetch_mem);
     EXPECT_TRUE(kafka_mem > batch_size + 1000);
 
-    EXPECT_EQ(test_case(batch_size, false), batch_size);
-    EXPECT_EQ(test_case(batch_size, true), batch_size);
-    EXPECT_EQ(test_case(kafka_mem - 100, false), kafka_mem - 100);
-    EXPECT_EQ(test_case(kafka_mem - 100, true), kafka_mem - 100);
-    EXPECT_EQ(test_case(kafka_mem + 100, false), kafka_mem);
-    EXPECT_EQ(test_case(kafka_mem + 100, true), kafka_mem);
-    EXPECT_EQ(test_case(fetch_mem + 100, false), kafka_mem);
-    EXPECT_EQ(test_case(fetch_mem + 100, true), kafka_mem);
+    EXPECT_EQ(test_case(batch_size), batch_size);
+    EXPECT_EQ(test_case(kafka_mem - 100), kafka_mem - 100);
+    EXPECT_EQ(test_case(kafka_mem + 100), kafka_mem);
+    EXPECT_EQ(test_case(fetch_mem + 100), kafka_mem);
 
     memsemunits.return_all();
     kafka_mem = local_kafka_semaphore().available_units();
@@ -273,14 +263,10 @@ TEST_F_CORO(fetch_memory_units_test_fixture, test_allocate_memory_units) {
     EXPECT_TRUE(kafka_mem > batch_size);
     EXPECT_TRUE(fetch_mem < batch_size);
 
-    EXPECT_EQ(test_case(fetch_mem - 100, false), 0);
-    EXPECT_EQ(test_case(fetch_mem - 100, true), batch_size);
-    EXPECT_EQ(test_case(batch_size - 100, false), 0);
-    EXPECT_EQ(test_case(batch_size - 100, true), batch_size);
-    EXPECT_EQ(test_case(kafka_mem - 100, false), 0);
-    EXPECT_EQ(test_case(kafka_mem - 100, true), batch_size);
-    EXPECT_EQ(test_case(kafka_mem + 100, false), 0);
-    EXPECT_EQ(test_case(kafka_mem + 100, true), batch_size);
+    EXPECT_EQ(test_case(fetch_mem - 100), 0);
+    EXPECT_EQ(test_case(batch_size - 100), 0);
+    EXPECT_EQ(test_case(kafka_mem - 100), 0);
+    EXPECT_EQ(test_case(kafka_mem + 100), 0);
 
     memsemunits.return_all();
     fetch_mem = local_fetch_semaphore().available_units();
@@ -294,18 +280,53 @@ TEST_F_CORO(fetch_memory_units_test_fixture, test_allocate_memory_units) {
     EXPECT_TRUE(kafka_mem < batch_size);
     EXPECT_TRUE(fetch_mem > batch_size);
 
-    EXPECT_EQ(test_case(kafka_mem - 100, false), 0);
-    EXPECT_EQ(test_case(kafka_mem - 100, true), batch_size);
-    EXPECT_EQ(test_case(batch_size - 100, false), 0);
-    EXPECT_EQ(test_case(batch_size - 100, true), batch_size);
-    EXPECT_EQ(test_case(batch_size + 100, false), 0);
-    EXPECT_EQ(test_case(batch_size + 100, true), batch_size);
-    EXPECT_EQ(test_case(fetch_mem - 100, false), 0);
-    EXPECT_EQ(test_case(fetch_mem - 100, true), batch_size);
-    EXPECT_EQ(test_case(fetch_mem + 100, false), 0);
-    EXPECT_EQ(test_case(fetch_mem + 100, true), batch_size);
+    EXPECT_EQ(test_case(kafka_mem - 100), 0);
+    EXPECT_EQ(test_case(batch_size - 100), 0);
+    EXPECT_EQ(test_case(batch_size + 100), 0);
+    EXPECT_EQ(test_case(fetch_mem - 100), 0);
+    EXPECT_EQ(test_case(fetch_mem + 100), 0);
 
     memsemunits.return_all();
     kafka_mem = local_kafka_semaphore().available_units();
     EXPECT_EQ(kafka_mem, 100_MiB);
+}
+
+TEST_F_CORO(fetch_memory_units_test_fixture, test_wait_for_units) {
+    static constexpr size_t batch_size = 1_MiB;
+
+    kafka::fetch_memory_units_manager& mgr = local_manager();
+
+    co_await set_kafka_units(10_MiB);
+    co_await set_fetch_units(10_MiB);
+
+    // Plenty of memory: the wait returns immediately with max_batch_size
+    // units.
+    auto units = co_await mgr.allocate_memory_units_wait(
+      model::ktp{},
+      batch_size * 4,
+      batch_size,
+      model::timeout_clock::now() + 1s);
+    ASSERT_TRUE_CORO(units.has_value());
+    EXPECT_EQ(units->num_units(), batch_size);
+    units.reset();
+
+    // Starve the fetch semaphore: the wait times out, no units are allocated
+    // and, crucially, the semaphore is not overdrawn.
+    co_await set_fetch_units(batch_size - 1);
+    auto starved = co_await mgr.allocate_memory_units_wait(
+      model::ktp{}, batch_size, batch_size, model::timeout_clock::now() + 10ms);
+    EXPECT_FALSE(starved.has_value());
+    EXPECT_EQ(
+      local_fetch_semaphore().available_units(),
+      static_cast<ssize_t>(batch_size - 1));
+
+    // A waiter is admitted once units are released back to the semaphore.
+    auto fut = mgr.allocate_memory_units_wait(
+      model::ktp{}, batch_size, batch_size, model::timeout_clock::now() + 10s);
+    EXPECT_FALSE(fut.available());
+    local_fetch_semaphore().signal(1);
+    auto woken = co_await std::move(fut);
+    ASSERT_TRUE_CORO(woken.has_value());
+    EXPECT_EQ(woken->num_units(), batch_size);
+    EXPECT_EQ(local_fetch_semaphore().available_units(), 0);
 }

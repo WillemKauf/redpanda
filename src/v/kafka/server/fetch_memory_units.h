@@ -13,6 +13,7 @@
 #include "config/property.h"
 #include "container/chunked_hash_map.h"
 #include "model/ktp.h"
+#include "model/timeout_clock.h"
 #include "ssx/semaphore.h"
 
 #include <seastar/core/gate.hh>
@@ -60,21 +61,33 @@ public:
      * available resources: if none, there is no memory for the operation;
      * if less than \p max_bytes, the fetch should be capped to that size.
      *
-     * \param max_units The maximum number of units the function will attempt to
-     * allocate.
-     * \param min_units The minimum number of units the function will attempt to
-     * allocate. If it can't allocate at least this many units no units will be
-     * allocated.
-     * \param require_min_units If true then at least \ref min_units will be
-     * allocated regardless of the units available in \ref memory_sem and \ref
-     * memory_fetch_sem.
+     * This never waits and never overdraws the semaphores: if less than
+     * \p avg_batch_size units are available, no units are allocated.
      */
     fetch_memory_units allocate_memory_units(
       const model::ktp& ktp,
       size_t max_bytes,
       size_t max_batch_size,
-      const size_t avg_batch_size,
-      const bool require_max_batch_size);
+      const size_t avg_batch_size);
+
+    /** Reserve memory for an obligatory batch read (see KIP-74), which must
+     * return at least the first batch of the partition regardless of the
+     * fetch's size limits and so needs \p max_batch_size units up front.
+     *
+     * Unlike \ref allocate_memory_units this waits (FIFO) on the memory
+     * semaphores until the units are available or \p deadline expires, rather
+     * than overdrawing them. Total obligatory-read memory is thereby bounded
+     * by the semaphore capacity instead of by the number of concurrent fetch
+     * requests.
+     *
+     * Returns std::nullopt if the deadline expires or the semaphores are
+     * broken (e.g. shutdown) before the units could be allocated.
+     */
+    ss::future<std::optional<fetch_memory_units>> allocate_memory_units_wait(
+      const model::ktp& ktp,
+      size_t max_bytes,
+      size_t max_batch_size,
+      model::timeout_clock::time_point deadline);
 
     /** Returns a fetch_memory_units object with zero units.
      */
@@ -110,6 +123,9 @@ private:
     };
 
     units allocate_units(const size_t);
+    size_t clamped_max_bytes(const model::ktp&, size_t max_bytes) const;
+    size_t
+    clamped_max_batch_size(const model::ktp&, size_t max_batch_size) const;
     void release_units_to_manager(units&& u);
     void release_units_to_semaphore(units&& u);
     void release_all_units_to_semaphore();
