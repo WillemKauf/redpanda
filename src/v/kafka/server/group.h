@@ -30,6 +30,7 @@
 #include "kafka/server/group_metadata.h"
 #include "kafka/server/group_probe.h"
 #include "kafka/server/member.h"
+#include "kafka/server/offset_commit_batcher.h"
 #include "model/fundamental.h"
 #include "model/record.h"
 #include "model/timestamp.h"
@@ -291,7 +292,8 @@ public:
       ss::lw_shared_ptr<cluster::partition> partition,
       model::term_id,
       ss::sharded<cluster::tx_gateway_frontend>& tx_frontend,
-      ss::sharded<features::feature_table>&);
+      ss::sharded<features::feature_table>&,
+      ss::lw_shared_ptr<offset_commit_batcher> commit_batcher = nullptr);
 
     // constructor used when loading state from log
     group(
@@ -302,7 +304,8 @@ public:
       ss::lw_shared_ptr<cluster::partition> partition,
       model::term_id,
       ss::sharded<cluster::tx_gateway_frontend>& tx_frontend,
-      ss::sharded<features::feature_table>&);
+      ss::sharded<features::feature_table>&,
+      ss::lw_shared_ptr<offset_commit_batcher> commit_batcher = nullptr);
 
     ~group() noexcept;
 
@@ -642,12 +645,12 @@ public:
     store_txn_offsets(txn_offset_commit_request r);
 
     struct prepared_offset_commits {
-        model::record_batch batch;
+        chunked_vector<group_metadata_serializer::key_value> records;
         chunked_vector<std::pair<model::topic_partition, offset_metadata>>
           commits;
     };
 
-    /// Builds the record batch for an offset commit request and registers the
+    /// Serializes the records for an offset commit request and registers the
     /// offsets as pending commits. Returns std::nullopt if the request
     /// contains no offsets.
     std::optional<prepared_offset_commits>
@@ -992,6 +995,7 @@ private:
     config::configuration& _conf;
     ss::lw_shared_ptr<ss::rwlock> _catchup_lock;
     ss::lw_shared_ptr<cluster::partition> _partition;
+    ss::lw_shared_ptr<offset_commit_batcher> _commit_batcher;
     chunked_hash_map<
       model::topic_partition,
       std::unique_ptr<offset_metadata_with_probe>>

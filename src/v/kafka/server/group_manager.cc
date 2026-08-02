@@ -68,6 +68,7 @@ group_manager::attached_partition::attached_partition(
   : loading(true)
   , partition(std::move(p)) {
     catchup_lock = ss::make_lw_shared<ss::rwlock>();
+    commit_batcher = ss::make_lw_shared<offset_commit_batcher>(partition);
 }
 
 group_manager::attached_partition::~attached_partition() noexcept = default;
@@ -1239,7 +1240,8 @@ ss::future<> group_manager::do_recover_group(
               p->partition,
               term,
               _tx_frontend,
-              _feature_table);
+              _feature_table,
+              p->commit_batcher);
             _groups.emplace(group_id, group);
             group->reschedule_all_member_heartbeats();
         }
@@ -1448,7 +1450,8 @@ group::join_group_stages group_manager::join_group(join_group_request&& r) {
           p,
           it->second->term,
           _tx_frontend,
-          _feature_table);
+          _feature_table,
+          it->second->commit_batcher);
         _groups.emplace(r.data.group_id, group);
         _groups.rehash(0);
         is_new_group = true;
@@ -1597,7 +1600,8 @@ group_manager::txn_offset_commit(txn_offset_commit_request&& r) {
           p->partition,
           p->term,
           _tx_frontend,
-          _feature_table);
+          _feature_table,
+          p->commit_batcher);
         _groups.emplace(r.data.group_id, group);
         _groups.rehash(0);
     }
@@ -1686,7 +1690,8 @@ group_manager::begin_tx(cluster::begin_group_tx_request&& r) {
           p->partition,
           p->term,
           _tx_frontend,
-          _feature_table);
+          _feature_table,
+          p->commit_batcher);
         _groups.emplace(r.group_id, group);
         _groups.rehash(0);
     }
@@ -1756,7 +1761,8 @@ group_manager::offset_commit(offset_commit_request&& r) {
               p->partition,
               p->term,
               _tx_frontend,
-              _feature_table);
+              _feature_table,
+              p->commit_batcher);
             _groups.emplace(r.data.group_id, group);
             _groups.rehash(0);
         } else {

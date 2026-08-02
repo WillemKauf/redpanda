@@ -1372,3 +1372,34 @@ redpanda_cc_bench(
         "@seastar//:benchmark",
     ],
 )
+
+redpanda_cc_bench(
+    name = "group_offset_commit_full_rpbench",
+    timeout = "moderate",
+    srcs = [
+        "group_offset_commit_full_bench.cc",
+    ],
+    cpu = 2,
+    memory = "4GiB",
+    redirect_stderr = True,
+    deps = [
+        "//src/v/cluster",
+        "//src/v/cluster:leader_balancer_strategy",
+        "//src/v/cluster:node_status_backend",
+        "//src/v/cluster:self_test",
+        "//src/v/cluster:topic_metrics_watcher",
+        "//src/v/container:chunked_vector",
+        "//src/v/kafka/protocol",
+        "//src/v/kafka/protocol:find_coordinator",
+        "//src/v/kafka/protocol:offset_commit",
+        "//src/v/kafka/server",
+        "//src/v/model",
+        "//src/v/redpanda/tests:fixture",
+        "//src/v/test_utils:async",
+        "//src/v/test_utils:scoped_config",
+        "@boost//:test",
+        "@fmt",
+        "@seastar",
+        "@seastar//:benchmark",
+    ],
+)

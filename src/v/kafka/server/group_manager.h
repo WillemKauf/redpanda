@@ -258,6 +258,7 @@ private:
         ss::abort_source as;
         ss::lw_shared_ptr<cluster::partition> partition;
         ss::lw_shared_ptr<ss::rwlock> catchup_lock;
+        ss::lw_shared_ptr<offset_commit_batcher> commit_batcher;
         model::term_id term{-1};
         group_block_info_map group_blocks;
         ssx::mutex block_lock{"k/group-mgr::block-lock"};

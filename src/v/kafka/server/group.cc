@@ -112,7 +112,8 @@ group::group(
   ss::lw_shared_ptr<cluster::partition> partition,
   model::term_id term,
   ss::sharded<cluster::tx_gateway_frontend>& tx_frontend,
-  ss::sharded<features::feature_table>& feature_table)
+  ss::sharded<features::feature_table>& feature_table,
+  ss::lw_shared_ptr<offset_commit_batcher> commit_batcher)
   : _id(std::move(id))
   , _state(s)
   , _state_timestamp(model::timestamp::now())
@@ -122,6 +123,7 @@ group::group(
   , _conf(conf)
   , _catchup_lock(std::move(catchup_lock))
   , _partition(std::move(partition))
+  , _commit_batcher(std::move(commit_batcher))
   , _probe(_members, _static_members, _offsets, _lag_metrics)
   , _ctxlog(cg_klog, *this)
   , _ctx_txlog(cluster::txlog, *this)
@@ -146,7 +148,8 @@ group::group(
   ss::lw_shared_ptr<cluster::partition> partition,
   model::term_id term,
   ss::sharded<cluster::tx_gateway_frontend>& tx_frontend,
-  ss::sharded<features::feature_table>& feature_table)
+  ss::sharded<features::feature_table>& feature_table,
+  ss::lw_shared_ptr<offset_commit_batcher> commit_batcher)
   : _id(std::move(id))
   , _state(md.members.empty() ? group_state::empty : group_state::stable)
   , _state_timestamp(
@@ -162,6 +165,7 @@ group::group(
   , _conf(conf)
   , _catchup_lock(std::move(catchup_lock))
   , _partition(std::move(partition))
+  , _commit_batcher(std::move(commit_batcher))
   , _probe(_members, _static_members, _offsets, _lag_metrics)
   , _ctxlog(cg_klog, *this)
   , _ctx_txlog(cluster::txlog, *this)
@@ -2203,8 +2207,7 @@ bool group::try_upsert_offset(
 
 std::optional<group::prepared_offset_commits>
 group::prepare_offset_commits(const offset_commit_request& r) {
-    cluster::simple_batch_builder builder(
-      model::record_batch_type::raft_data, model::offset(0));
+    chunked_vector<group_metadata_serializer::key_value> records;
 
     chunked_vector<std::pair<model::topic_partition, offset_metadata>>
       offset_commits;
@@ -2248,8 +2251,7 @@ group::prepare_offset_commits(const offset_commit_request& r) {
             if (expiry_timestamp.has_value()) {
                 value.expiry_timestamp = expiry_timestamp.value();
             }
-            auto kv = group_metadata_serializer::to_kv(key, value);
-            builder.add_raw_kv(std::move(kv.key), std::move(*kv.value));
+            records.push_back(group_metadata_serializer::to_kv(key, value));
 
             model::topic_partition tp(t.name, p.partition_index);
 
@@ -2276,11 +2278,11 @@ group::prepare_offset_commits(const offset_commit_request& r) {
             offset_commits.emplace_back(std::move(tp), std::move(md));
         }
     }
-    if (builder.empty()) {
+    if (records.empty()) {
         return std::nullopt;
     }
     return prepared_offset_commits{
-      .batch = std::move(builder).build(),
+      .records = std::move(records),
       .commits = std::move(offset_commits),
     };
 }
@@ -2294,13 +2296,33 @@ group::store_offsets(offset_commit_request&& r) {
     }
     auto offset_commits = std::move(prepared->commits);
 
-    auto replicate_stages = _partition->raft()->replicate_in_stages(
-      chunked_vector<model::record_batch>::single(std::move(prepared->batch)),
-      raft::replicate_options(raft::consistency_level::quorum_ack, _term));
+    auto replicate_stages = [&]() -> offset_commit_batcher::stages {
+        if (likely(_commit_batcher)) {
+            return _commit_batcher->replicate(
+              _term, std::move(prepared->records));
+        }
+        // groups constructed without a coordinator partition batcher (e.g.
+        // in unit tests) replicate their records as their own batch
+        cluster::simple_batch_builder builder(
+          model::record_batch_type::raft_data, model::offset(0));
+        for (auto& kv : prepared->records) {
+            builder.add_raw_kv(std::move(kv.key), std::move(kv.value));
+        }
+        auto stages = _partition->raft()->replicate_in_stages(
+          chunked_vector<model::record_batch>::single(
+            std::move(builder).build()),
+          raft::replicate_options(raft::consistency_level::quorum_ack, _term));
+        auto committed = stages.replicate_finished.then(
+          [](result<raft::replicate_result> r) {
+              return r ? result<model::offset>(r.value().last_offset)
+                       : result<model::offset>(r.error());
+          });
+        return {std::move(stages.request_enqueued), std::move(committed)};
+    }();
 
-    auto f = replicate_stages.replicate_finished.then(
-      [this, commits = std::move(offset_commits)](
-        result<raft::replicate_result> r) mutable {
+    auto f = replicate_stages.committed.then(
+      [this,
+       commits = std::move(offset_commits)](result<model::offset> r) mutable {
           auto error = error_code::none;
           if (!r) {
               vlog(
@@ -2315,7 +2337,7 @@ group::store_offsets(offset_commit_request&& r) {
 
           if (error == error_code::none) {
               for (auto& e : commits) {
-                  e.second.log_offset = r.value().last_offset;
+                  e.second.log_offset = r.value();
                   complete_offset_commit(e.first, std::move(e.second));
               }
           } else {
@@ -2326,7 +2348,7 @@ group::store_offsets(offset_commit_request&& r) {
 
           return error;
       });
-    return {std::move(replicate_stages.request_enqueued), std::move(f)};
+    return {std::move(replicate_stages.dispatched), std::move(f)};
 }
 
 ss::future<cluster::commit_group_tx_reply>
