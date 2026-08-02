@@ -129,6 +129,47 @@ struct group_bench {
         return inner_iters;
     }
 
+    /// all-topics offset fetch (topics == null) over a group with tracked
+    /// offsets. the require_stable variant seeds pending offset commits
+    /// (never completed), the state a backlogged coordinator is in, where
+    /// every fetched partition consults the pending set.
+    ss::future<size_t> run_fetch_all(
+      size_t topics, size_t partitions, bool require_stable, size_t pending) {
+        if (!fetch_populated) {
+            for (size_t t = 0; t < topics; ++t) {
+                model::topic topic(fmt::format("fetch-topic-{}", t));
+                for (size_t p = 0; p < partitions; ++p) {
+                    g.insert_offset(
+                      model::topic_partition(
+                        topic, model::partition_id(static_cast<int32_t>(p))),
+                      group::offset_metadata{
+                        .log_offset = model::offset(++log_offset),
+                        .offset = model::offset(++committed_offset),
+                        .committed_leader_epoch = kafka::leader_epoch(5),
+                      });
+                }
+            }
+            if (pending > 0) {
+                auto prepared = g.prepare_offset_commits(
+                  make_request(1, pending, ++committed_offset));
+                perf_tests::do_not_optimize(prepared);
+            }
+            fetch_populated = true;
+        }
+        perf_tests::start_measuring_time();
+        for (size_t i = 0; i < inner_iters; ++i) {
+            offset_fetch_request_group req{
+              .group_id = kafka::group_id("bench-group")};
+            auto resp = co_await g.handle_offset_fetch(
+              std::move(req), require_stable);
+            perf_tests::do_not_optimize(resp);
+        }
+        perf_tests::stop_measuring_time();
+        co_return inner_iters;
+    }
+
+    bool fetch_populated{false};
+
     /// response echo construction alone (copies the request's topic
     /// partition structure into the response)
     size_t run_response(size_t topics, size_t partitions) {
@@ -155,5 +196,15 @@ PERF_TEST_F(group_bench, cycle_4t_64p) { return run_cycle(4, 64); }
 
 PERF_TEST_F(group_bench, response_1t_1p) { return run_response(1, 1); }
 PERF_TEST_F(group_bench, response_4t_64p) { return run_response(4, 64); }
+
+PERF_TEST_CN(group_bench, fetch_all_1t_256p) {
+    co_return co_await this->run_fetch_all(1, 256, false, 0);
+}
+PERF_TEST_CN(group_bench, fetch_all_32t_8p) {
+    co_return co_await this->run_fetch_all(32, 8, false, 0);
+}
+PERF_TEST_CN(group_bench, fetch_all_stable_1t_256p) {
+    co_return co_await this->run_fetch_all(1, 256, true, 512);
+}
 
 } // namespace kafka

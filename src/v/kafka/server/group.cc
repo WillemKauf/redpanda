@@ -2187,15 +2187,39 @@ bool group::try_upsert_offset(
         }
         return false;
     } else {
-        _offsets.emplace(
+        auto entry = std::make_unique<offset_metadata_with_probe>(
+          std::move(md),
+          _id,
           tp,
-          std::make_unique<offset_metadata_with_probe>(
-            std::move(md),
-            _id,
-            tp,
-            _conf.enable_consumer_group_metrics.bind(
-              std::function{enabled_metrics::from_vector})));
+          _conf.enable_consumer_group_metrics.bind(
+            std::function{enabled_metrics::from_vector}));
+        auto* ptr = entry.get();
+        _offsets.emplace(tp, std::move(entry));
+        offsets_index_add(tp, ptr);
         return true;
+    }
+}
+
+void group::offsets_index_add(
+  const model::topic_partition& tp, const offset_metadata_with_probe* md) {
+    _offsets_by_topic[tp.topic].emplace_back(tp.partition, md);
+}
+
+void group::offsets_index_remove(const model::topic_partition& tp) {
+    auto it = _offsets_by_topic.find(tp.topic);
+    if (it == _offsets_by_topic.end()) {
+        return;
+    }
+    auto& entries = it->second;
+    for (auto e_it = entries.begin(); e_it != entries.end(); ++e_it) {
+        if (e_it->first == tp.partition) {
+            *e_it = entries.back();
+            entries.pop_back();
+            break;
+        }
+    }
+    if (entries.empty()) {
+        _offsets_by_topic.erase(it);
     }
 }
 
@@ -2505,34 +2529,44 @@ group::handle_offset_fetch(offset_fetch_request_group r, bool require_stable) {
     offset_fetch_response_group resp{
       .group_id = r.group_id, .error_code = error_code::none};
 
+    /*
+     * a partition's offset can only be unstable when there is a pending
+     * commit or an open transaction; check that once per request instead of
+     * consulting the pending state for every fetched partition.
+     */
+    const bool check_unstable
+      = require_stable
+        && (!_pending_offset_commits.empty() || has_transactions_in_progress());
+
     // retrieve all topics available
     if (!r.topics) {
-        chunked_hash_map<
-          model::topic,
-          chunked_vector<offset_fetch_response_partitions>>
-          tmp;
-        for (const auto& e : _offsets) {
-            offset_fetch_response_partitions p = {
-              .partition_index = e.first.partition,
-              .committed_offset = model::offset(-1),
-              .metadata = "",
-              .error_code = error_code::none,
-            };
+        resp.topics.reserve(_offsets_by_topic.size());
+        for (const auto& [topic, entries] : _offsets_by_topic) {
+            offset_fetch_response_topics t;
+            t.name = topic;
+            t.partitions.reserve(entries.size());
+            for (const auto& [id, md] : entries) {
+                offset_fetch_response_partitions p = {
+                  .partition_index = id,
+                  .committed_offset = model::offset(-1),
+                  .metadata = "",
+                  .error_code = error_code::none,
+                };
 
-            if (require_stable && has_pending_transaction(e.first)) {
-                p.error_code = error_code::unstable_offset_commit;
-            } else {
-                p.committed_offset = e.second->metadata.offset;
-                p.committed_leader_epoch
-                  = e.second->metadata.committed_leader_epoch;
-                p.metadata = e.second->metadata.metadata;
+                if (
+                  check_unstable
+                  && has_pending_transaction(
+                    model::topic_partition(topic, id))) {
+                    p.error_code = error_code::unstable_offset_commit;
+                } else {
+                    p.committed_offset = md->metadata.offset;
+                    p.committed_leader_epoch
+                      = md->metadata.committed_leader_epoch;
+                    p.metadata = md->metadata.metadata;
+                }
+                t.partitions.push_back(std::move(p));
             }
-            tmp[e.first.topic].push_back(std::move(p));
-        }
-
-        for (auto& e : tmp) {
-            resp.topics.push_back(
-              {.name = e.first, .partitions = std::move(e.second)});
+            resp.topics.push_back(std::move(t));
         }
 
         co_return resp;
@@ -2552,7 +2586,7 @@ group::handle_offset_fetch(offset_fetch_request_group r, bool require_stable) {
               .error_code = error_code::none,
             };
 
-            if (require_stable && has_pending_transaction(tp)) {
+            if (check_unstable && has_pending_transaction(tp)) {
                 p.error_code = error_code::unstable_offset_commit;
             } else {
                 auto res = offset(tp);
@@ -2705,6 +2739,7 @@ ss::future<> group::remove_topic_partitions(
     for (const auto& tp : tps) {
         _pending_offset_commits.erase(tp);
         if (auto offset = _offsets.extract(tp); offset) {
+            offsets_index_remove(tp);
             removed.emplace_back(
               std::move(offset->first), std::move(offset->second->metadata));
         }
@@ -3646,6 +3681,7 @@ group::delete_expired_offsets(std::chrono::seconds retention_period) {
     for (const auto& offset : offsets) {
         vlog(_ctxlog.debug, "Expiring group offset {}", offset);
         _offsets.erase(offset);
+        offsets_index_remove(offset);
     }
 
     /*
@@ -3669,6 +3705,7 @@ group::delete_offsets(const chunked_vector<model::topic_partition>& offsets) {
         if (!subscribed(offset.topic)) {
             vlog(_ctxlog.debug, "Deleting group offset {}", offset);
             _offsets.erase(offset);
+            offsets_index_remove(offset);
             _pending_offset_commits.erase(offset);
             deleted_offsets.push_back(offset);
         }
