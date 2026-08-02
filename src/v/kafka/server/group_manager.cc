@@ -1067,27 +1067,15 @@ group_manager::do_bulk_write_offsets(group_offsets_snapshot snap, bool merge) {
           offsets_ntp);
         auto stages = offset_commit(std::move(kafka_r));
         co_await std::move(stages.dispatched);
-        auto kafka_res = co_await std::move(stages.result);
-        error_code first_error = error_code::none;
-        for (const auto& kafka_t : kafka_res.data.topics) {
-            for (const auto& kafka_p : kafka_t.partitions) {
-                if (kafka_p.error_code != kafka::error_code::none) {
-                    vlog(
-                      cg_klog.warn,
-                      "Error on {}/{} while restoring group {} on {}: {}",
-                      kafka_t.name,
-                      kafka_p.partition_index,
-                      group_id,
-                      offsets_ntp,
-                      kafka_p.error_code);
-                    if (first_error != error_code::none) {
-                        first_error = kafka_p.error_code;
-                    }
-                }
-            }
-        }
-        if (first_error != error_code::none) {
-            co_return first_error;
+        auto error = co_await std::move(stages.result);
+        if (error != error_code::none) {
+            vlog(
+              cg_klog.warn,
+              "Error while restoring group {} on {}: {}",
+              group_id,
+              offsets_ntp,
+              error);
+            co_return error;
         }
     }
     co_return error_code::none;
@@ -1746,12 +1734,12 @@ group_manager::abort_tx(cluster::abort_group_tx_request&& r) {
       .finally([unit = std::move(*maybe_holder), group] {});
 }
 
-group::offset_commit_stages
+group::offset_commit_result_stages
 group_manager::offset_commit(offset_commit_request&& r) {
     auto error = validate_group_status(
       r.ntp, r.data.group_id, offset_commit_api::key, false);
     if (error != error_code::none) {
-        return group::offset_commit_stages(offset_commit_response(r, error));
+        return group::offset_commit_result_stages(error);
     }
 
     auto group = get_group(r.data.group_id);
@@ -1774,8 +1762,8 @@ group_manager::offset_commit(offset_commit_request&& r) {
         } else {
             // <kafka>or this is a request coming from an older generation.
             // either way, reject the commit</kafka>
-            return group::offset_commit_stages(
-              offset_commit_response(r, error_code::illegal_generation));
+            return group::offset_commit_result_stages(
+              error_code::illegal_generation);
         }
     }
 

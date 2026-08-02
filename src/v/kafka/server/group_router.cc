@@ -12,8 +12,10 @@
 
 #include "kafka/protocol/offset_fetch.h"
 #include "kafka/server/logger.h"
+#include "ssx/future-util.h"
 
 #include <seastar/core/coroutine.hh>
+#include <seastar/core/smp.hh>
 #include <seastar/core/with_scheduling_group.hh>
 
 #include <algorithm>
@@ -308,9 +310,72 @@ group_router::offset_delete(offset_delete_request&& request) {
     return route(std::move(request), &group_manager::offset_delete);
 }
 
-group::offset_commit_stages
+group::offset_commit_result_stages
 group_router::offset_commit(offset_commit_request&& request) {
-    return route_stages(std::move(request), &group_manager::offset_commit);
+    auto m = shard_for(request.data.group_id);
+    if (!m) {
+        vlog(
+          cg_klog.trace,
+          "in offset_commit() not coordinator for {}",
+          request.data.group_id);
+        return group::offset_commit_result_stages(error_code::not_coordinator);
+    }
+    request.ntp = std::move(m->first);
+    auto coordinator_shard = m->second;
+    auto origin_shard = ss::this_shard_id();
+
+    /*
+     * Unlike route_stages() this makes a single trip to the coordinator
+     * shard. The invoke_on future resolves when the dispatch stage completes,
+     * releasing the smp service group units exactly as route_stages() does,
+     * and the result - a bare error code - is pushed back to this shard with
+     * a one-way submit_to once replication finishes. route_stages() needs its
+     * second trip because a stage result may be held for an unbounded time
+     * (e.g. a join response held until the rebalance completes) and its
+     * responses are heavyweight; neither applies to offset commits.
+     */
+    auto result = std::make_unique<ss::promise<error_code>>();
+    auto result_f = result->get_future();
+
+    auto dispatched_f = with_scheduling_group(
+      _sg,
+      [this,
+       coordinator_shard,
+       origin_shard,
+       r = std::move(request),
+       result = ss::make_foreign(std::move(result))]() mutable {
+          return get_group_manager().invoke_on(
+            coordinator_shard,
+            _ssg,
+            [origin_shard, r = std::move(r), result = std::move(result)](
+              group_manager& mgr) mutable {
+                auto stages = mgr.offset_commit(std::move(r));
+                // push the result back to the origin shard when replication
+                // completes. this continuation is detached from the dispatch
+                // future returned below; the result future is bounded by the
+                // raft gate, and the promise is set (or dropped, breaking
+                // the promise) on its home shard via submit_to.
+                ssx::background = stages.result.then_wrapped(
+                  [origin_shard, result = std::move(result)](
+                    ss::future<error_code> f) mutable {
+                      auto e = f.failed() ? f.get_exception() : nullptr;
+                      auto ec = e ? error_code::none : f.get();
+                      return ss::smp::submit_to(
+                        origin_shard,
+                        [e = std::move(e),
+                         ec,
+                         result = std::move(result)]() mutable {
+                            if (e) {
+                                result->set_exception(std::move(e));
+                            } else {
+                                result->set_value(ec);
+                            }
+                        });
+                  });
+                return std::move(stages.dispatched);
+            });
+      });
+    return {std::move(dispatched_f), std::move(result_f)};
 }
 
 ss::future<txn_offset_commit_response>

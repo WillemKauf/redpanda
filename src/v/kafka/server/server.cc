@@ -2118,6 +2118,10 @@ offset_commit_handler::handle(request_context ctx, ss::smp_service_group ssg) {
           chunked_vector<offset_commit_response_partition>>
           unauthorized_tps;
 
+        // response echo skeleton, built on the connection shard before the
+        // request is moved to the group coordinator shard
+        offset_commit_response echo;
+
         offset_commit_ctx(
           request_context&& rctx,
           offset_commit_request&& request,
@@ -2269,10 +2273,25 @@ offset_commit_handler::handle(request_context ctx, ss::smp_service_group ssg) {
     auto f = ss::do_with(
       std::move(octx),
       [dispatch = std::move(dispatch)](offset_commit_ctx& octx) mutable {
+          /*
+           * the group coordinator applies a single error to every partition
+           * of the request and returns only that error code, so the response
+           * echo is built here, on the connection shard, before the request
+           * is moved to the (single, easily saturated) coordinator shard.
+           */
+          octx.echo = offset_commit_response(octx.request, error_code::none);
           auto stages = octx.rctx.groups().offset_commit(
             std::move(octx.request));
           stages.dispatched.forward_to(std::move(dispatch));
-          return stages.result.then([&octx](offset_commit_response resp) {
+          return stages.result.then([&octx](error_code error) {
+              auto resp = std::move(octx.echo);
+              if (unlikely(error != error_code::none)) {
+                  for (auto& topic : resp.data.topics) {
+                      for (auto& partition : topic.partitions) {
+                          partition.error_code = error;
+                      }
+                  }
+              }
               if (unlikely(!octx.nonexistent_tps.empty())) {
                   /*
                    * copy over partitions for topics that had some partitions

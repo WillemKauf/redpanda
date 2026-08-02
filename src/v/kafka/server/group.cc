@@ -2285,12 +2285,12 @@ group::prepare_offset_commits(const offset_commit_request& r) {
     };
 }
 
-group::offset_commit_stages group::store_offsets(offset_commit_request&& r) {
+group::offset_commit_result_stages
+group::store_offsets(offset_commit_request&& r) {
     auto prepared = prepare_offset_commits(r);
     if (!prepared) {
         vlog(_ctxlog.debug, "Empty offsets committed request");
-        return offset_commit_stages(
-          offset_commit_response(std::move(r), error_code::none));
+        return offset_commit_result_stages(error_code::none);
     }
     auto offset_commits = std::move(prepared->commits);
 
@@ -2299,7 +2299,7 @@ group::offset_commit_stages group::store_offsets(offset_commit_request&& r) {
       raft::replicate_options(raft::consistency_level::quorum_ack, _term));
 
     auto f = replicate_stages.replicate_finished.then(
-      [this, req = std::move(r), commits = std::move(offset_commits)](
+      [this, commits = std::move(offset_commits)](
         result<raft::replicate_result> r) mutable {
           auto error = error_code::none;
           if (!r) {
@@ -2310,7 +2310,7 @@ group::offset_commit_stages group::store_offsets(offset_commit_request&& r) {
               error = map_store_offset_error_code(r.error());
           }
           if (in_state(group_state::dead)) {
-              return offset_commit_response(std::move(req), error);
+              return error;
           }
 
           if (error == error_code::none) {
@@ -2324,7 +2324,7 @@ group::offset_commit_stages group::store_offsets(offset_commit_request&& r) {
               }
           }
 
-          return offset_commit_response(std::move(req), error);
+          return error;
       });
     return {std::move(replicate_stages.request_enqueued), std::move(f)};
 }
@@ -2463,11 +2463,11 @@ group::handle_abort_tx(cluster::abort_group_tx_request r) {
     }
 }
 
-group::offset_commit_stages
+group::offset_commit_result_stages
 group::handle_offset_commit(offset_commit_request&& r) {
     if (in_state(group_state::dead)) {
-        return offset_commit_stages(
-          offset_commit_response(r, error_code::coordinator_not_available));
+        return offset_commit_result_stages(
+          error_code::coordinator_not_available);
 
     } else if (r.data.generation_id < 0 && in_state(group_state::empty)) {
         // <kafka>The group is only using Kafka to store offsets.</kafka>
@@ -2477,11 +2477,10 @@ group::handle_offset_commit(offset_commit_request&& r) {
       auto ec = validate_existing_member(
         r.data.member_id, r.data.group_instance_id, "offset-commit");
       ec != error_code::none) {
-        return offset_commit_stages(offset_commit_response(r, ec));
+        return offset_commit_result_stages(ec);
 
     } else if (r.data.generation_id != generation()) {
-        return offset_commit_stages(
-          offset_commit_response(r, error_code::illegal_generation));
+        return offset_commit_result_stages(error_code::illegal_generation);
     } else if (
       in_state(group_state::stable)
       || in_state(group_state::preparing_rebalance)) {
@@ -2492,11 +2491,10 @@ group::handle_offset_commit(offset_commit_request&& r) {
         schedule_next_heartbeat_expiration(member);
         return store_offsets(std::move(r));
     } else if (in_state(group_state::completing_rebalance)) {
-        return offset_commit_stages(
-          offset_commit_response(r, error_code::rebalance_in_progress));
+        return offset_commit_result_stages(error_code::rebalance_in_progress);
     } else {
-        return offset_commit_stages(
-          ss::make_exception_future<offset_commit_response>(std::runtime_error(
+        return offset_commit_result_stages(
+          ss::make_exception_future<error_code>(std::runtime_error(
             fmt::format("Unexpected group state {} for {}", _state, *this))));
     }
 }

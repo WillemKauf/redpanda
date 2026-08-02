@@ -169,6 +169,13 @@ public:
         ss::future<Result> result;
     };
     using offset_commit_stages = stages<offset_commit_response>;
+    /**
+     * The store path assigns one uniform error to every partition of an
+     * offset commit request, so only the error code crosses back to the
+     * connection shard; the response echo is built there instead of on the
+     * (single, easily saturated) group coordinator shard.
+     */
+    using offset_commit_result_stages = stages<error_code>;
     using join_group_stages = stages<join_group_response>;
     using sync_group_stages = stages<sync_group_response>;
     /**
@@ -646,7 +653,7 @@ public:
     std::optional<prepared_offset_commits>
     prepare_offset_commits(const offset_commit_request& r);
 
-    offset_commit_stages store_offsets(offset_commit_request&& r);
+    offset_commit_result_stages store_offsets(offset_commit_request&& r);
 
     ss::future<txn_offset_commit_response>
     handle_txn_offset_commit(txn_offset_commit_request r);
@@ -657,7 +664,7 @@ public:
     ss::future<cluster::abort_group_tx_reply>
     handle_abort_tx(cluster::abort_group_tx_request r);
 
-    offset_commit_stages handle_offset_commit(offset_commit_request&& r);
+    offset_commit_result_stages handle_offset_commit(offset_commit_request&& r);
 
     ss::future<cluster::commit_group_tx_reply>
     handle_commit_tx(cluster::commit_group_tx_request r);

@@ -990,6 +990,10 @@ public:
 
     ss::future<kafka::offset_commit_response>
     offset_commit(kafka::offset_commit_request req) final {
+        // the group coordinator applies a single error to every partition
+        // and returns only that error code; the response echo is built here
+        // before the request is moved to the router.
+        kafka::offset_commit_response response(req, kafka::error_code::none);
         auto stages = _router->local().offset_commit(std::move(req));
 
         auto dispatched = co_await ss::coroutine::as_future(
@@ -1012,7 +1016,14 @@ public:
             std::rethrow_exception(error);
         }
 
-        co_return result.get();
+        if (auto ec = result.get(); ec != kafka::error_code::none) {
+            for (auto& topic : response.data.topics) {
+                for (auto& partition : topic.partitions) {
+                    partition.error_code = ec;
+                }
+            }
+        }
+        co_return std::move(response);
     }
 
     ss::future<bool> assure_topic_exists() final {
