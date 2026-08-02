@@ -679,19 +679,24 @@ public:
         if (auto o_it = _offsets.find(tp); o_it != _offsets.end()) {
             o_it->second->metadata = std::move(md);
         } else {
-            _offsets.emplace(
+            auto entry = std::make_unique<offset_metadata_with_probe>(
+              std::move(md),
+              _id,
               tp,
-              std::make_unique<offset_metadata_with_probe>(
-                std::move(md),
-                _id,
-                tp,
-                _conf.enable_consumer_group_metrics.bind(
-                  std::function{enabled_metrics::from_vector})));
+              _conf.enable_consumer_group_metrics.bind(
+                std::function{enabled_metrics::from_vector}));
+            auto* ptr = entry.get();
+            _offsets.emplace(tp, std::move(entry));
+            offsets_index_add(tp, ptr);
         }
     }
 
     bool
     try_upsert_offset(const model::topic_partition& tp, offset_metadata md);
+
+    void offsets_index_add(
+      const model::topic_partition& tp, const offset_metadata_with_probe* md);
+    void offsets_index_remove(const model::topic_partition& tp);
 
     void
     insert_ongoing_tx(model::producer_identity pid, ongoing_transaction tx);
@@ -899,11 +904,7 @@ private:
     bool has_transactions_in_progress() const;
 
     bool has_pending_transaction(const model::topic_partition& tp) {
-        if (
-          std::any_of(
-            _pending_offset_commits.begin(),
-            _pending_offset_commits.end(),
-            [&tp](const auto& tp_info) { return tp_info.first == tp; })) {
+        if (_pending_offset_commits.contains(tp)) {
             return true;
         }
 
@@ -996,6 +997,17 @@ private:
     ss::lw_shared_ptr<ss::rwlock> _catchup_lock;
     ss::lw_shared_ptr<cluster::partition> _partition;
     ss::lw_shared_ptr<offset_commit_batcher> _commit_batcher;
+    /*
+     * tracked offsets grouped by topic, maintained in lockstep with
+     * _offsets; serves the all-topics offset fetch path without building a
+     * temporary per-request map. values point at the entries owned by
+     * _offsets, which are stable across rehashing.
+     */
+    chunked_hash_map<
+      model::topic,
+      chunked_vector<
+        std::pair<model::partition_id, const offset_metadata_with_probe*>>>
+      _offsets_by_topic;
     chunked_hash_map<
       model::topic_partition,
       std::unique_ptr<offset_metadata_with_probe>>
