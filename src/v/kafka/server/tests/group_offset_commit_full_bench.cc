@@ -101,14 +101,22 @@ struct group_commit_fixture : redpanda_thread_fixture {
         return req;
     }
 
+    /// fire all commits without waiting in between, as a saturated
+    /// coordinator would see them arrive from many client connections,
+    /// then await completion of the whole burst
     ss::future<> commit_burst(size_t concurrency) {
+        std::vector<ss::future<>> dispatched;
         std::vector<ss::future<kafka::error_code>> results;
+        dispatched.reserve(concurrency);
         results.reserve(concurrency);
         for (size_t i = 0; i < concurrency; ++i) {
             auto stages = app.group_router.local().offset_commit(
               make_request(i % n_groups));
-            co_await std::move(stages.dispatched);
+            dispatched.push_back(std::move(stages.dispatched));
             results.push_back(std::move(stages.result));
+        }
+        for (auto& f : dispatched) {
+            co_await std::move(f);
         }
         for (auto& f : results) {
             auto ec = co_await std::move(f);
