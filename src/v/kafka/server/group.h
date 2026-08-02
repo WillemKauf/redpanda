@@ -614,7 +614,7 @@ public:
     const auto& offsets() const { return _offsets; }
 
     void complete_offset_commit(
-      const model::topic_partition& tp, const offset_metadata& md);
+      const model::topic_partition& tp, offset_metadata md);
 
     void fail_offset_commit(
       const model::topic_partition& tp, const offset_metadata& md);

@@ -67,11 +67,12 @@ make_request(size_t topics, size_t partitions_per_topic, int64_t offset) {
           fmt::format("bench.topic.with.a.realistic.name.length-{}", t));
         topic.partitions.reserve(partitions_per_topic);
         for (size_t p = 0; p < partitions_per_topic; ++p) {
-            topic.partitions.push_back(offset_commit_request_partition{
-              .partition_index = model::partition_id(static_cast<int32_t>(p)),
-              .committed_offset = model::offset(offset),
-              .committed_leader_epoch = kafka::leader_epoch(5),
-            });
+            topic.partitions.push_back(
+              offset_commit_request_partition{
+                .partition_index = model::partition_id(static_cast<int32_t>(p)),
+                .committed_offset = model::offset(offset),
+                .committed_leader_epoch = kafka::leader_epoch(5),
+              });
         }
         req.data.topics.push_back(std::move(topic));
     }
@@ -118,9 +119,10 @@ struct group_bench {
             auto prepared = g.prepare_offset_commits(req);
             for (auto& e : prepared->commits) {
                 e.second.log_offset = model::offset(++log_offset);
-                g.complete_offset_commit(e.first, e.second);
+                g.complete_offset_commit(e.first, std::move(e.second));
             }
-            auto resp = offset_commit_response(req, error_code::none);
+            auto resp = offset_commit_response(
+              std::move(req), error_code::none);
             perf_tests::do_not_optimize(resp);
         }
         perf_tests::stop_measuring_time();

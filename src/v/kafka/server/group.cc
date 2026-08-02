@@ -1788,16 +1788,18 @@ kafka::error_code group::member_leave_group(
 }
 
 void group::complete_offset_commit(
-  const model::topic_partition& tp, const offset_metadata& md) {
+  const model::topic_partition& tp, offset_metadata md) {
     // check if tp is pending
     auto p_it = _pending_offset_commits.find(tp);
     if (p_it != _pending_offset_commits.end()) {
+        // clear pending for this tp
+        const auto erase_pending = p_it->second.offset == md.offset;
+
         // save the tp commit if it hasn't yet been seen, or we are completing
         // for an instance that is newer based on log offset
-        try_upsert_offset(tp, md);
+        try_upsert_offset(tp, std::move(md));
 
-        // clear pending for this tp
-        if (p_it->second.offset == md.offset) {
+        if (erase_pending) {
             _pending_offset_commits.erase(p_it);
         }
     }
@@ -2168,6 +2170,7 @@ void group::update_store_offset_builder(
       offset_metadata_kv{.key = std::move(key), .value = std::move(value)});
     builder.add_raw_kv(std::move(kv.key), std::move(kv.value));
 }
+
 bool group::try_upsert_offset(
   const model::topic_partition& tp, offset_metadata md) {
     if (auto o_it = _offsets.find(tp); o_it != _offsets.end()) {
@@ -2206,35 +2209,47 @@ group::prepare_offset_commits(const offset_commit_request& r) {
     chunked_vector<std::pair<model::topic_partition, offset_metadata>>
       offset_commits;
 
-    const auto expiry_timestamp = [&r]() -> std::optional<model::timestamp> {
+    const auto now = model::timestamp::now();
+
+    const auto expiry_timestamp = [&r,
+                                   now]() -> std::optional<model::timestamp> {
         if (r.data.retention_time_ms == -1) {
             return std::nullopt;
         }
-        return model::timestamp(
-          model::timestamp::now().value() + r.data.retention_time_ms);
+        return model::timestamp(now.value() + r.data.retention_time_ms);
     }();
 
     const auto get_commit_timestamp =
-      [](const offset_commit_request_partition& p) {
+      [now](const offset_commit_request_partition& p) {
           if (p.commit_timestamp == -1) {
-              return model::timestamp::now();
+              return now;
           }
           return model::timestamp(p.commit_timestamp);
       };
 
     for (const auto& t : r.data.topics) {
         offset_commits.reserve(offset_commits.size() + t.partitions.size());
+        // the key's group id and topic name are invariant across the
+        // topic's partitions; reuse them rather than copying per record.
+        offset_metadata_key key{
+          .group_id = _id,
+          .topic = t.name,
+        };
         for (const auto& p : t.partitions) {
             const auto commit_timestamp = get_commit_timestamp(p);
-            update_store_offset_builder(
-              builder,
-              t.name,
-              p.partition_index,
-              p.committed_offset,
-              p.committed_leader_epoch,
-              p.committed_metadata.value_or(""),
-              commit_timestamp,
-              expiry_timestamp);
+
+            key.partition = p.partition_index;
+            offset_metadata_value value{
+              .offset = p.committed_offset,
+              .leader_epoch = p.committed_leader_epoch,
+              .metadata = p.committed_metadata.value_or(""),
+              .commit_timestamp = commit_timestamp,
+            };
+            if (expiry_timestamp.has_value()) {
+                value.expiry_timestamp = expiry_timestamp.value();
+            }
+            auto kv = group_metadata_serializer::to_kv(key, value);
+            builder.add_raw_kv(std::move(kv.key), std::move(*kv.value));
 
             model::topic_partition tp(t.name, p.partition_index);
 
@@ -2248,17 +2263,17 @@ group::prepare_offset_commits(const offset_commit_request& r) {
              */
             offset_metadata md{
               .offset = p.committed_offset,
-              .metadata = p.committed_metadata.value_or(""),
+              .metadata = std::move(value.metadata),
               .committed_leader_epoch = p.committed_leader_epoch,
               .commit_timestamp = commit_timestamp,
               .expiry_timestamp = expiry_timestamp,
             };
 
-            offset_commits.emplace_back(tp, md);
-
             // record the offset commits as pending commits which will be
             // inspected after the append to catch concurrent updates.
-            _pending_offset_commits[tp] = md;
+            _pending_offset_commits.insert_or_assign(tp, md);
+
+            offset_commits.emplace_back(std::move(tp), std::move(md));
         }
     }
     if (builder.empty()) {
@@ -2275,7 +2290,7 @@ group::offset_commit_stages group::store_offsets(offset_commit_request&& r) {
     if (!prepared) {
         vlog(_ctxlog.debug, "Empty offsets committed request");
         return offset_commit_stages(
-          offset_commit_response(r, error_code::none));
+          offset_commit_response(std::move(r), error_code::none));
     }
     auto offset_commits = std::move(prepared->commits);
 
@@ -2295,13 +2310,13 @@ group::offset_commit_stages group::store_offsets(offset_commit_request&& r) {
               error = map_store_offset_error_code(r.error());
           }
           if (in_state(group_state::dead)) {
-              return offset_commit_response(req, error);
+              return offset_commit_response(std::move(req), error);
           }
 
           if (error == error_code::none) {
               for (auto& e : commits) {
                   e.second.log_offset = r.value().last_offset;
-                  complete_offset_commit(e.first, e.second);
+                  complete_offset_commit(e.first, std::move(e.second));
               }
           } else {
               for (const auto& e : commits) {
@@ -2309,7 +2324,7 @@ group::offset_commit_stages group::store_offsets(offset_commit_request&& r) {
               }
           }
 
-          return offset_commit_response(req, error);
+          return offset_commit_response(std::move(req), error);
       });
     return {std::move(replicate_stages.request_enqueued), std::move(f)};
 }
