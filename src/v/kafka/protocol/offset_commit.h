@@ -53,14 +53,21 @@ struct offset_commit_response final {
 
     offset_commit_response(
       const offset_commit_request& request, error_code error) {
+        data.topics.reserve(request.data.topics.size());
         for (const auto& t : request.data.topics) {
             offset_commit_response_topic tmp{.name = t.name};
-            for (const auto& p : t.partitions) {
-                tmp.partitions.push_back({
-                  .partition_index = p.partition_index,
-                  .error_code = error,
-                });
-            }
+            append_partitions(tmp, t, error);
+            data.topics.push_back(std::move(tmp));
+        }
+    }
+
+    // move overload for the offset commit hot path: steals the topic names
+    // from a request that is no longer needed instead of copying them
+    offset_commit_response(offset_commit_request&& request, error_code error) {
+        data.topics.reserve(request.data.topics.size());
+        for (auto& t : request.data.topics) {
+            offset_commit_response_topic tmp{.name = std::move(t.name)};
+            append_partitions(tmp, t, error);
             data.topics.push_back(std::move(tmp));
         }
     }
@@ -75,6 +82,20 @@ struct offset_commit_response final {
 
     fmt::iterator format_to(fmt::iterator it) const {
         return fmt::format_to(it, "{}", data);
+    }
+
+private:
+    static void append_partitions(
+      offset_commit_response_topic& topic,
+      const offset_commit_request_topic& t,
+      error_code error) {
+        topic.partitions.reserve(t.partitions.size());
+        for (const auto& p : t.partitions) {
+            topic.partitions.push_back({
+              .partition_index = p.partition_index,
+              .error_code = error,
+            });
+        }
     }
 };
 

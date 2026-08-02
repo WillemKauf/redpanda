@@ -382,6 +382,14 @@ key_value to_kv(offset_metadata_kv md) {
     return ret;
 }
 
+key_value
+to_kv(const offset_metadata_key& key, const offset_metadata_value& value) {
+    group_metadata_serializer::key_value ret;
+    ret.key = metadata_to_iobuf(key);
+    ret.value = metadata_to_iobuf(value);
+    return ret;
+}
+
 group_metadata_kv decode_group_metadata(model::record record) {
     group_metadata_kv ret;
     protocol::decoder k_reader(maybe_unwrap_from_iobuf(record.release_key()));

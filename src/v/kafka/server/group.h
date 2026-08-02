@@ -614,7 +614,7 @@ public:
     const auto& offsets() const { return _offsets; }
 
     void complete_offset_commit(
-      const model::topic_partition& tp, const offset_metadata& md);
+      const model::topic_partition& tp, offset_metadata md);
 
     void fail_offset_commit(
       const model::topic_partition& tp, const offset_metadata& md);
@@ -909,9 +909,13 @@ private:
         return false;
     }
 
+    /// Appends an offset commit record to the builder. The key's group id
+    /// and topic are provided by the caller so they can be constructed once
+    /// and reused across a topic's partitions; only the partition field is
+    /// stamped here.
     void update_store_offset_builder(
       cluster::simple_batch_builder& builder,
-      const model::topic& name,
+      offset_metadata_key& key,
       model::partition_id partition,
       model::offset commited_offset,
       leader_epoch commited_leader_epoch,

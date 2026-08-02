@@ -207,6 +207,11 @@ struct key_value {
 group_metadata_type get_metadata_type(iobuf buf);
 key_value to_kv(group_metadata_kv md);
 key_value to_kv(offset_metadata_kv md);
+/// Encodes an offset commit key/value pair without taking ownership of the
+/// inputs, so callers on the offset commit hot path can reuse the key across
+/// records instead of copying its strings for every partition.
+key_value
+to_kv(const offset_metadata_key& key, const offset_metadata_value& value);
 group_metadata_kv decode_group_metadata(model::record record);
 offset_metadata_kv decode_offset_metadata(model::record record);
 }; // namespace group_metadata_serializer
