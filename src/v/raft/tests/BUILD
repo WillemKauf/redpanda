@@ -510,6 +510,7 @@ redpanda_cc_gtest(
     deps = [
         "//src/v/model",
         "//src/v/raft",
+        "//src/v/storage",
         "//src/v/raft/tests:raft_fixture",
         "//src/v/random:generators",
         "//src/v/storage:record_batch_builder",
