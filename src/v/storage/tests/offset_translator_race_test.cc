@@ -94,6 +94,87 @@ struct ground_truth {
 
 class ot_race_fixture : public storage_test_fixture {};
 
+// Regression test for translator state loss on an append that fails after
+// the batch became visible in the log.
+//
+// segment::do_append advances the segment offset tracker (making the batch
+// visible to readers and to raft) before the index and batch cache updates;
+// an exception from those escapes disk_log_appender::operator() before the
+// offset translator processed the batch. Raft replies failure and the leader
+// retries, but the retry skip-matches the already-present batch without
+// re-appending it, so the translator would permanently miss the gap: this
+// replica's deltas diverge from its peers' with nothing but a (possibly
+// debug-level) log line ever emitted.
+//
+// The appender must therefore account for any batch that became visible even
+// when failing the append. Uses the storage::log::failure_probes append
+// injection point, which fires exactly between batch visibility and the
+// translator update.
+TEST_F(ot_race_fixture, append_failure_after_visibility_keeps_translation) {
+    auto cfg = default_log_config(test_dir);
+    storage::log_manager mgr(std::move(cfg), kvstore, resources, feature_table);
+    auto ntp = model::ntp("redpanda", "ot-append-failure", 0);
+    auto group = raft::group_id(44);
+    std::optional<log_holder> log_h;
+    log_h.emplace(manage_log(
+      mgr,
+      {ntp, mgr.config().base_dir},
+      group,
+      {model::record_batch_type::raft_configuration}));
+    ss::abort_source as;
+    (*log_h)->start(std::nullopt, as).get();
+    storage::log* logp = log_h->get();
+    auto deferred = ss::defer([&]() mutable {
+        log_h.reset();
+        mgr.stop().get();
+    });
+
+    auto append = [&](std::vector<model::record_batch_type> types) {
+        auto appender = logp->make_appender(
+          storage::log_append_config{storage::log_append_config::fsync::no});
+        for (auto t : types) {
+            auto b = make_batch(t, 1, model::term_id(1));
+            appender(b).get();
+        }
+        return appender.end_of_stream().get();
+    };
+
+    constexpr auto data = model::record_batch_type::raft_data;
+    constexpr auto conf = model::record_batch_type::raft_configuration;
+
+    // offsets 0..2: config at 2
+    append({data, data, conf});
+    ASSERT_EQ(logp->offset_delta(model::offset(3))(), 1);
+
+    // fail the append of the next config batch after it becomes visible
+    auto& dl = *dynamic_cast<storage::disk_log_impl*>(logp);
+    dl.get_failure_probes().set_exception("append");
+    EXPECT_THROW(append({conf}), std::runtime_error);
+    dl.get_failure_probes().unset("append");
+
+    // the batch is in the log regardless of the failed append...
+    auto lstats = logp->offsets();
+    ASSERT_EQ(lstats.dirty_offset, model::offset(3));
+    // ...so the translator must account for it
+    EXPECT_EQ(logp->offset_delta(model::offset(4))(), 2);
+
+    // a raft-style retry skip-matches the visible batch and continues with
+    // subsequent entries; translation must stay consistent...
+    append({data});
+    EXPECT_EQ(logp->offset_delta(model::offset(5))(), 2);
+
+    // ...including across a restart
+    storage::offset_translator fresh(
+      {model::record_batch_type::raft_configuration},
+      group,
+      ntp,
+      kvstore,
+      resources);
+    fresh.start(storage::offset_translator::must_reset::no).get();
+    fresh.sync_with_log(*logp, std::nullopt).get();
+    EXPECT_EQ(fresh.state()->delta(model::offset(5)), 2);
+}
+
 // Regression test for the stale-HKO reconstruction hazard.
 //
 // Before the two-phase truncation fix, a suffix truncation whose translator
