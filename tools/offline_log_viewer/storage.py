@@ -33,6 +33,12 @@ HDR_FMT_CRC = "hiqqqhii"
 HDR_FMT_RP = HDR_FMT_RP_PREFIX + HDR_FMT_CRC
 HEADER_SIZE = struct.calcsize(HDR_FMT_RP)
 
+# v2 segments append the batch's raft term (int64, little endian) to the
+# packed v1 header layout. The term is not covered by either crc and the
+# batch_size field still counts the v1 header plus the records.
+V2_TERM_FMT = "<q"
+V2_TERM_SIZE = struct.calcsize(V2_TERM_FMT)
+
 Header = collections.namedtuple(
     "Header",
     (
@@ -246,7 +252,7 @@ class Batch:
         return struct.pack(">" + HDR_FMT_CRC, *self.header[5:])
 
     @staticmethod
-    def from_stream(f, index):
+    def from_stream(f, index, version=1):
         data = f.read(HEADER_SIZE)
         if len(data) == HEADER_SIZE:
             header = Header(*struct.unpack(HDR_FMT_RP, data))
@@ -257,6 +263,13 @@ class Batch:
                     f"Truncation point detected at {f.tell()} (all zeros in header)"
                 )
                 return
+            term = None
+            if version >= 2:
+                term_data = f.read(V2_TERM_SIZE)
+                if len(term_data) < V2_TERM_SIZE:
+                    # Short read, probably end of a partially written log.
+                    return None
+                term = struct.unpack(V2_TERM_FMT, term_data)[0]
             records_size = header.batch_size - HEADER_SIZE
             data = f.read(records_size)
             if len(data) < records_size:
@@ -266,7 +279,9 @@ class Batch:
                 )
                 return None
             assert len(data) == records_size
-            return Batch(index, header, data)
+            batch = Batch(index, header, data)
+            batch.term = term
+            return batch
 
         if len(data) < HEADER_SIZE:
             # Short read, probably log being actively written or unclean shutdown
@@ -280,14 +295,15 @@ class Batch:
 
 
 class BatchIterator:
-    def __init__(self, path, term):
+    def __init__(self, path, term, version):
         self.path = path
         self.term = term
+        self.version = version
         self.file = open(path, "rb")
         self.idx = 0
 
     def __next__(self):
-        b = Batch.from_stream(self.file, self.idx)
+        b = Batch.from_stream(self.file, self.idx, self.version)
 
         if b is None:
             fsize = os.stat(self.path).st_size
@@ -297,7 +313,10 @@ class BatchIterator:
                 )
             raise StopIteration()
         self.idx += 1
-        b.term = self.term
+        if b.term is None:
+            # v1 segments do not persist per-batch terms: every batch in the
+            # segment carries the term from the segment's filename
+            b.term = self.term
         return b
 
     def __del__(self):
@@ -307,17 +326,14 @@ class BatchIterator:
 class Segment:
     def __init__(self, path):
         self.path = path
-        self.term = self._parse_term()
-
-    def _parse_term(self):
         m = SEGMENT_NAME_PATTERN.match(os.path.basename(self.path))
         if m is None:
             raise RuntimeError(f"Invalid segment path: {self.path}")
-
-        return int(m["term"])
+        self.term = int(m["term"])
+        self.version = int(m["version"])
 
     def __iter__(self):
-        return BatchIterator(self.path, self.term)
+        return BatchIterator(self.path, self.term, self.version)
 
 
 class Ntp:

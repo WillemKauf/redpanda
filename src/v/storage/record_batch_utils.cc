@@ -10,6 +10,7 @@
 #include "storage/record_batch_utils.h"
 
 #include "model/record.h"
+#include "model/record_utils.h"
 #include "reflection/adl.h"
 
 #include <cstring>
@@ -68,9 +69,9 @@ model::record_batch_header parse_header(Parser& parser) {
     auto base_sequence = reflection::adl<int32_t>{}.from(parser);
     auto record_count = reflection::adl<int32_t>{}.from(parser);
     vassert(
-      parser.bytes_consumed() == model::packed_record_batch_header_size,
+      parser.bytes_consumed() == v1_record_batch_header_size,
       "Error in header parsing. Must consume:{} bytes, but consumed:{}",
-      model::packed_record_batch_header_size,
+      v1_record_batch_header_size,
       parser.bytes_consumed());
     auto hdr = model::record_batch_header{
       .header_crc = header_crc,
@@ -87,6 +88,18 @@ model::record_batch_header parse_header(Parser& parser) {
       .base_sequence = base_sequence,
       .record_count = record_count};
     hdr.ctx.owner_shard = ss::this_shard_id();
+    return hdr;
+}
+
+template<typename Parser>
+model::record_batch_header parse_v2_header(Parser& parser) {
+    auto hdr = parse_header(parser);
+    hdr.ctx.term = model::term_id(reflection::adl<int64_t>{}.from(parser));
+    vassert(
+      parser.bytes_consumed() == v2_record_batch_header_size,
+      "Error in v2 header parsing. Must consume:{} bytes, but consumed:{}",
+      v2_record_batch_header_size,
+      parser.bytes_consumed());
     return hdr;
 }
 
@@ -110,9 +123,9 @@ iobuf batch_header_to_disk_iobuf(const model::record_batch_header& h) {
       h.base_sequence,
       h.record_count);
     vassert(
-      b.size_bytes() == model::packed_record_batch_header_size,
+      b.size_bytes() == v1_record_batch_header_size,
       "disk headers must be of static size:{}, but got{}",
-      model::packed_record_batch_header_size,
+      v1_record_batch_header_size,
       b.size_bytes());
     return b;
 }
@@ -125,12 +138,39 @@ model::record_batch_header batch_header_from_disk_iobuf(iobuf b) {
 model::record_batch_header
 batch_header_from_disk_buf(std::span<const char> data) {
     vassert(
-      data.size() == model::packed_record_batch_header_size,
+      data.size() == v1_record_batch_header_size,
       "disk headers must be of static size {}, but got {}",
-      model::packed_record_batch_header_size,
+      v1_record_batch_header_size,
       data.size());
     buffer_parser parser(data);
     return parse_header(parser);
+}
+
+iobuf v2_batch_header_to_disk_iobuf(const model::record_batch_header& h) {
+    auto b = batch_header_to_disk_iobuf(h);
+    reflection::serialize(b, h.ctx.term());
+    vassert(
+      b.size_bytes() == v2_record_batch_header_size,
+      "v2 disk headers must be of static size:{}, but got:{}",
+      v2_record_batch_header_size,
+      b.size_bytes());
+    return b;
+}
+
+model::record_batch_header v2_batch_header_from_disk_iobuf(iobuf b) {
+    iobuf_const_parser parser(b);
+    return parse_v2_header(parser);
+}
+
+model::record_batch_header
+v2_batch_header_from_disk_buf(std::span<const char> data) {
+    vassert(
+      data.size() == v2_record_batch_header_size,
+      "v2 disk headers must be of static size {}, but got {}",
+      v2_record_batch_header_size,
+      data.size());
+    buffer_parser parser(data);
+    return parse_v2_header(parser);
 }
 
 } // namespace storage

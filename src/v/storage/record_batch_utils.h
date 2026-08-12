@@ -17,13 +17,32 @@
 
 namespace storage {
 
-// Serializes the header to a buffer suitable to be stored on disk. Note that
-// this is different from serde::envelope serialization in that only the exact
-// batch header fields are serialized, with no additional bytes for size,
-// versions, etc.
+/// Size of the on-disk batch header of version v1 segments.
+inline constexpr size_t v1_record_batch_header_size
+  = model::packed_record_batch_header_size;
+static_assert(v1_record_batch_header_size == 61);
+
+// Serializes the header to a buffer suitable to be stored on disk in version
+// v1 segments. Note that this is different from serde::envelope serialization
+// in that only the exact batch header fields are serialized, with no
+// additional bytes for size, versions, etc.
 iobuf batch_header_to_disk_iobuf(const model::record_batch_header& h);
 model::record_batch_header batch_header_from_disk_iobuf(iobuf b);
 model::record_batch_header
 batch_header_from_disk_buf(std::span<const char> data);
+
+/// Size of the on-disk batch header of version v2 segments (includes the raft
+/// term in addition to everything in a version v1 segment)
+inline constexpr size_t v2_record_batch_header_size
+  = model::packed_record_batch_header_size
+    + sizeof(model::record_batch_header::context::term);
+static_assert(v2_record_batch_header_size == 69);
+
+// Serializes the header to a buffer suitable to be stored on disk in version v2
+// segments.
+iobuf v2_batch_header_to_disk_iobuf(const model::record_batch_header& h);
+model::record_batch_header v2_batch_header_from_disk_iobuf(iobuf b);
+model::record_batch_header
+v2_batch_header_from_disk_buf(std::span<const char> data);
 
 } // namespace storage

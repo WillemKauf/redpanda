@@ -422,6 +422,7 @@ redpanda_cc_gtest(
         "record_batch_utils_test.cc",
     ],
     deps = [
+        "//src/v/bytes",
         "//src/v/bytes:iobuf",
         "//src/v/model",
         "//src/v/random:generators",

@@ -9,6 +9,7 @@
  * by the Apache License, Version 2.0
  */
 
+#include "bytes/bytes.h"
 #include "bytes/iobuf.h"
 #include "model/record.h"
 #include "model/record_batch_types.h"
@@ -196,5 +197,30 @@ TEST(record_batch_utils, disk_buf_matches_iobuf) {
         auto from_buf = storage::batch_header_from_disk_buf(stack_buf);
         auto from_iobuf = storage::batch_header_from_disk_iobuf(std::move(buf));
         expect_all_fields_eq(from_buf, from_iobuf);
+    }
+}
+
+TEST(record_batch_utils, v2_disk_buf_round_trips_all_fields) {
+    for (int i = 0; i < 100; ++i) {
+        auto hdr = random_header();
+        hdr.ctx.term = model::term_id(random_generators::get_int<int64_t>());
+        auto buf = storage::v2_batch_header_to_disk_iobuf(hdr);
+        EXPECT_EQ(buf.size_bytes(), storage::v2_record_batch_header_size);
+        auto got = storage::v2_batch_header_from_disk_iobuf(std::move(buf));
+        expect_all_fields_eq(got, hdr);
+        EXPECT_EQ(got.ctx.term, hdr.ctx.term);
+    }
+}
+
+// The v2 layout is the frozen v1 layout with the term appended. The first 61
+// bytes must be byte-identical to the v1 serialization of the same header.
+TEST(record_batch_utils, v2_disk_buf_is_v1_plus_term) {
+    for (int i = 0; i < 100; ++i) {
+        auto hdr = random_header();
+        hdr.ctx.term = model::term_id(random_generators::get_int<int64_t>());
+        auto v1 = iobuf_to_bytes(storage::batch_header_to_disk_iobuf(hdr));
+        auto v2 = iobuf_to_bytes(storage::v2_batch_header_to_disk_iobuf(hdr));
+        ASSERT_EQ(v2.size(), v1.size() + sizeof(int64_t));
+        EXPECT_TRUE(std::equal(v1.begin(), v1.end(), v2.begin()));
     }
 }
