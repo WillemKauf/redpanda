@@ -440,6 +440,21 @@ redpanda_cc_gtest(
 )
 
 redpanda_cc_gtest(
+    name = "fs_utils_test",
+    timeout = "short",
+    srcs = [
+        "fs_utils_test.cc",
+    ],
+    deps = [
+        "//src/v/model",
+        "//src/v/storage",
+        "//src/v/storage:version",
+        "//src/v/test_utils:gtest",
+        "@googletest//:gtest",
+    ],
+)
+
+redpanda_cc_gtest(
     name = "record_batch_utils_test",
     timeout = "short",
     srcs = [

@@ -206,6 +206,19 @@ redpanda_cc_library(
 )
 
 redpanda_cc_library(
+    name = "version",
+    hdrs = [
+        "version.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/v/base",
+        "@fmt",
+        "@seastar",
+    ],
+)
+
+redpanda_cc_library(
     name = "segment_appender",
     srcs = [
         "segment_appender.cc",
@@ -316,7 +329,6 @@ redpanda_cc_library(
         "spill_key_index.h",
         "translating_reader.h",
         "types.h",
-        "version.h",
     ],
     implementation_deps = [
         ":log_manager_probe",
@@ -338,6 +350,7 @@ redpanda_cc_library(
         ":resources",
         ":scoped_file_tracker",
         ":segment_appender",
+        ":version",
         "//src/v/base",
         "//src/v/bytes",
         "//src/v/bytes:iobuf",
