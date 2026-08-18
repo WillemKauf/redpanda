@@ -125,7 +125,8 @@ std::unique_ptr<storage::continuous_batch_parser> make_recording_batch_parser(
     auto parser = std::make_unique<storage::continuous_batch_parser>(
       std::make_unique<recording_batch_consumer>(
         headers, records, file_offsets),
-      storage::segment_reader_handle(std::move(stream)));
+      storage::segment_reader_handle(std::move(stream)),
+      storage::record_version_type::v1);
     return parser;
 }
 

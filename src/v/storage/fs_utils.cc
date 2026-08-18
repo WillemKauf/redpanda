@@ -72,7 +72,8 @@ std::optional<segment_full_path> segment_full_path::parse(
       partition_path(dir_part), std::move(*file_part_opt));
 }
 
-segment_full_path segment_full_path::mock(ss::sstring str_path) {
+segment_full_path
+segment_full_path::mock(ss::sstring str_path, record_version_type version) {
     auto ntp = model::ntp(
       model::kafka_namespace,
       model::topic_partition(
@@ -83,7 +84,7 @@ segment_full_path segment_full_path::mock(ss::sstring str_path) {
     auto sp = segment_path::metadata{
       .base_offset = model::offset{123},
       .term = model::term_id{456},
-      .version = record_version_type::v1};
+      .version = version};
 
     return segment_full_path(str_path, pp, sp);
 }

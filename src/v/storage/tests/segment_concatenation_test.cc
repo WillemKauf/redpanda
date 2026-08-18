@@ -20,6 +20,7 @@
 #include "storage/segment_utils.h"
 #include "storage/tests/utils/disk_log_builder.h"
 #include "storage/types.h"
+#include "storage/version.h"
 
 #include <seastar/core/shared_ptr.hh>
 #include <seastar/util/defer.hh>
@@ -97,7 +98,9 @@ segment_comparision_fields concat_read_segments(
               num_records += h.record_count;
               size_bytes += h.record_count;
               return storage::batch_consumer::consume_result::accept_batch;
-          })
+          },
+          segments.front()->reader().path().get_version(),
+          segments.front()->reader().path().get_version())
           .get();
 
     res.attrs_result = segment_attrs_result{

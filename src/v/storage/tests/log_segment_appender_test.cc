@@ -11,10 +11,13 @@
 #include "bytes/iobuf.h"
 #include "bytes/iostream.h"
 #include "config/configuration.h"
+#include "model/tests/random_batch.h"
 #include "random/generators.h"
 #include "storage/chunk_cache.h"
+#include "storage/record_batch_utils.h"
 #include "storage/segment_appender.h"
 #include "storage/storage_resources.h"
+#include "storage/version.h"
 #include "test_utils/random_bytes.h"
 
 #include <seastar/core/file.hh>
@@ -102,7 +105,8 @@ segment_appender make_segment_appender(
   segment_appender::stats_ptr stats = nullptr) {
     return segment_appender(
       std::move(file),
-      segment_appender::options(std::nullopt, resources, std::move(stats)));
+      segment_appender::options(
+        std::nullopt, resources, std::move(stats), record_version_type::v1));
 }
 
 iobuf make_random_data(size_t len) {
@@ -292,6 +296,41 @@ static void run_test_can_append_10MB(size_t fallocate_size) {
 
     // we expect 0 merges with the A+F pattern
     EXPECT_EQ(stats->merged_writes, 0);
+}
+
+// Appending record batches must serialize headers in the format configured
+// on the appender: the packed v1 layout or the serde-based v2 format.
+TEST(log_segment_appender_test, test_append_record_version_types) {
+    for (auto fmt : {record_version_type::v1, record_version_type::v2}) {
+        auto f = open_file("test.segment_appender_batch_format.log");
+        storage::storage_resources resources(
+          config::mock_binding<size_t>(16_KiB));
+        resources.start().get();
+        auto appender = segment_appender(
+          f, segment_appender::options(std::nullopt, resources, nullptr, fmt));
+        auto close = ss::defer([&appender, &resources] {
+            appender.close().get();
+            resources.stop().get();
+        });
+
+        auto batches = model::test::make_random_batches(model::offset(0)).get();
+        iobuf expected;
+        for (const auto& b : batches) {
+            expected.append(
+              fmt == record_version_type::v1
+                ? storage::batch_header_to_disk_iobuf(b.header())
+                : storage::v2_batch_header_to_disk_iobuf(b.header()));
+            expected.append(b.data().copy());
+            appender.append(b).get();
+        }
+        appender.flush().get();
+        ASSERT_EQ(appender.file_byte_offset(), expected.size_bytes());
+
+        auto in = make_file_input_stream(f, 0);
+        iobuf result = read_iobuf_exactly(in, expected.size_bytes()).get();
+        EXPECT_EQ(result, expected);
+        in.close().get();
+    }
 }
 
 TEST(log_segment_appender_test, test_can_append_10MB) {

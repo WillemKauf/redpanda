@@ -34,6 +34,7 @@
 #include "storage/logger.h"
 #include "storage/offset_to_filepos.h"
 #include "storage/readers_cache.h"
+#include "storage/record_batch_utils.h"
 #include "storage/scoped_file_tracker.h"
 #include "storage/segment.h"
 #include "storage/segment_deduplication_utils.h"
@@ -2464,8 +2465,7 @@ struct batch_size_accumulator {
                   *max_timestamp, b.header().max_timestamp);
                 co_return ss::stop_iteration::yes;
             }
-            *result_size_bytes += model::packed_record_batch_header_size
-                                  + b.data().size_bytes();
+            *result_size_bytes += batch_on_disk_size(b.header(), version);
             if (b.header().last_offset() == target) {
                 *max_timestamp = b.header().max_timestamp;
             }
@@ -2474,8 +2474,7 @@ struct batch_size_accumulator {
             if (b.base_offset() >= target) {
                 co_return ss::stop_iteration::yes;
             }
-            *result_size_bytes += model::packed_record_batch_header_size
-                                  + b.data().size_bytes();
+            *result_size_bytes += batch_on_disk_size(b.header(), version);
             *max_timestamp = b.header().max_timestamp;
             co_return ss::stop_iteration::no;
         }
@@ -2483,6 +2482,7 @@ struct batch_size_accumulator {
     bool end_of_stream() const { return false; }
 
     size_t* result_size_bytes{nullptr};
+    record_version_type version{record_version_type::v1};
     model::offset target;
     boundary_type boundary;
     model::timestamp* base_timestamp{nullptr};
@@ -2506,6 +2506,7 @@ auto disk_log_impl::get_file_offset(
     model::timestamp max_timestamp = model::timestamp::max();
     details::batch_size_accumulator acc{
       .result_size_bytes = &size_bytes,
+      .version = s->reader().path().get_version(),
       .target = target,
       .boundary = boundary,
       .base_timestamp = &base_timestamp,
@@ -3653,11 +3654,12 @@ ss::future<> disk_log_impl::do_truncate(
     // an unchecked reader is created which does not enforce the logical
     // starting offset. this is needed because we really do want to read
     // all the data in the segment to find the correct physical offset.
+    const auto version = last->reader().path().get_version();
     auto reader = co_await make_unchecked_reader(
       local_log_reader_config(start, model::offset::max()));
     auto phs = co_await std::move(reader).consume(
       internal::offset_to_filepos_consumer(
-        start, cfg.base_offset, initial_size, initial_timestamp),
+        start, cfg.base_offset, initial_size, initial_timestamp, version),
       model::no_timeout);
 
     // all segments were deleted, return

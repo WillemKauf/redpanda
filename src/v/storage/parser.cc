@@ -19,6 +19,7 @@
 #include "storage/parser.h"
 #include "storage/parser_utils.h"
 #include "storage/record_batch_utils.h"
+#include "storage/version.h"
 
 #include <seastar/core/coroutine.hh>
 #include <seastar/core/when_all.hh>
@@ -26,6 +27,7 @@
 
 #include <algorithm>
 #include <exception>
+#include <span>
 
 namespace storage {
 using stop_parser = batch_consumer::stop_parser;
@@ -80,13 +82,13 @@ ss::future<result<stop_parser>> continuous_batch_parser::consume_header() {
             co_return stop_parser::yes;
         case batch_consumer::consume_result::accept_batch:
             _consumer->consume_batch_start(
-              *_header, _physical_base_offset, _header->size_bytes);
-            _physical_base_offset += _header->size_bytes;
+              *_header, _physical_base_offset, consumed_batch_bytes());
+            _physical_base_offset += consumed_batch_bytes();
             co_return stop_parser::no;
         case batch_consumer::consume_result::skip_batch:
             _consumer->skip_batch_start(
-              *_header, _physical_base_offset, _header->size_bytes);
-            _physical_base_offset += _header->size_bytes;
+              *_header, _physical_base_offset, consumed_batch_bytes());
+            _physical_base_offset += consumed_batch_bytes();
             auto remaining = _header->size_bytes
                              - model::packed_record_batch_header_size;
             auto b = co_await verify_read_iobuf(
@@ -103,30 +105,50 @@ ss::future<result<stop_parser>> continuous_batch_parser::consume_header() {
     }
 }
 
+static size_t disk_header_size(record_version_type version) {
+    switch (version) {
+    case record_version_type::v1:
+        return v1_record_batch_header_size;
+    case record_version_type::v2:
+        return v2_record_batch_header_size;
+    }
+}
+
+static model::record_batch_header
+parse_disk_header(std::span<const char> buf, record_version_type version) {
+    switch (version) {
+    case record_version_type::v1:
+        return batch_header_from_disk_buf(buf);
+    case record_version_type::v2:
+        return v2_batch_header_from_disk_buf(buf);
+    }
+}
+
 template<class Consumer>
 static ss::future<result<model::record_batch_header>> read_header_impl(
   ss::input_stream<char>& input,
   const Consumer& consumer,
+  record_version_type version,
   bool recovery = false) {
-    auto b = co_await input.read_exactly(
-      model::packed_record_batch_header_size);
+    const auto header_size = disk_header_size(version);
+    auto b = co_await input.read_exactly(header_size);
 
     if (b.empty()) {
         // benign outcome. happens at end of file
         co_return parser_errc::end_of_stream;
     }
-    if (b.size() != model::packed_record_batch_header_size) {
+    if (b.size() != header_size) {
         if (!recovery) {
             stlog.error(
               "Could not parse header. Expected:{}, but Got:{}. consumer:{}",
-              model::packed_record_batch_header_size,
+              header_size,
               b.size(),
               consumer);
         } else {
             stlog.debug(
               "End of recovery with parse error. Expected:{}, but Got:{}. "
               "consumer:{})",
-              model::packed_record_batch_header_size,
+              header_size,
               b.size(),
               consumer);
         }
@@ -138,8 +160,7 @@ static ss::future<result<model::record_batch_header>> read_header_impl(
         // happens when we fallocate the file
         co_return parser_errc::fallocated_file_read_zero_bytes_for_header;
     }
-    auto header = batch_header_from_disk_buf({b.get(), b.size()});
-
+    auto header = parse_disk_header({b.get(), b.size()}, version);
     if (
       auto computed_crc = model::internal_header_only_crc(header);
       unlikely(header.header_crc != computed_crc)) {
@@ -169,7 +190,7 @@ static ss::future<result<model::record_batch_header>> read_header_impl(
 
 ss::future<result<model::record_batch_header>>
 continuous_batch_parser::read_header() {
-    return read_header_impl(get_stream(), *_consumer, _recovery);
+    return read_header_impl(get_stream(), *_consumer, _version, _recovery);
 }
 
 ss::future<result<stop_parser>> continuous_batch_parser::consume_one() {
@@ -188,7 +209,7 @@ ss::future<result<stop_parser>> continuous_batch_parser::consume_one() {
 }
 
 size_t continuous_batch_parser::consumed_batch_bytes() const {
-    return _header->size_bytes;
+    return batch_on_disk_size(*_header, _version);
 }
 
 void continuous_batch_parser::add_bytes_and_reset() {
@@ -271,20 +292,25 @@ public:
       ss::input_stream<char> input,
       ss::output_stream<char> output,
       record_batch_transform_predicate pred,
+      record_version_type in_version,
+      record_version_type out_version,
       model::opt_abort_source_t as)
       : _input(std::move(input))
       , _output(std::move(output))
       , _pred(std::move(pred))
+      , _in_version(in_version)
+      , _out_version(out_version)
       , _as(as) {}
 
     ss::future<result<model::record_batch_header>> read_header() {
-        return read_header_impl(_input, ss::sstring("copy_helper"));
+        return read_header_impl(
+          _input, ss::sstring("copy_helper"), _in_version);
     }
 
     /// Copy data.
     /// Return number of bytes copied.
     ss::future<result<size_t>> run() {
-        size_t consumed = 0;
+        size_t written = 0;
         bool stop = false;
         while (!stop
                && (!_as.has_value() || !_as.value().get().abort_requested())) {
@@ -320,11 +346,15 @@ public:
                 // might change it in-place (this is a low level tool)
                 // we're also need to update header only crc
                 _header.header_crc = model::internal_header_only_crc(_header);
-                iobuf hdr = batch_header_to_disk_iobuf(_header);
+                iobuf hdr = _out_version == record_version_type::v1
+                              ? batch_header_to_disk_iobuf(_header)
+                              : v2_batch_header_to_disk_iobuf(_header);
+                auto header_size = hdr.size_bytes();
+                auto records_size = body.value().size_bytes();
+                written += header_size + records_size;
                 co_await write_iobuf_to_output_stream(std::move(hdr), _output);
                 co_await write_iobuf_to_output_stream(
                   std::move(body.value()), _output);
-                consumed += _header.size_bytes;
                 break;
             }
             case batch_consumer::consume_result::stop_parser:
@@ -333,7 +363,7 @@ public:
             };
         }
         co_await _output.flush();
-        co_return consumed;
+        co_return written;
     }
 
     ss::future<> close() {
@@ -360,6 +390,8 @@ public:
     ss::input_stream<char> _input;
     ss::output_stream<char> _output;
     record_batch_transform_predicate _pred;
+    record_version_type _in_version;
+    record_version_type _out_version;
     model::record_batch_header _header{};
     model::opt_abort_source_t _as;
 };
@@ -368,8 +400,16 @@ ss::future<result<size_t>> transform_stream(
   ss::input_stream<char> in,
   ss::output_stream<char> out,
   record_batch_transform_predicate pred,
+  record_version_type in_version,
+  record_version_type out_version,
   model::opt_abort_source_t as) {
-    copy_helper helper(std::move(in), std::move(out), std::move(pred), as);
+    copy_helper helper(
+      std::move(in),
+      std::move(out),
+      std::move(pred),
+      in_version,
+      out_version,
+      as);
     co_return co_await helper.run().finally(
       [&helper] { return helper.close(); });
 }

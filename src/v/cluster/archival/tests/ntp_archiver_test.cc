@@ -1423,7 +1423,9 @@ calculate_segment_stats(const http_test_utils::request_info& req) {
     counting_batch_consumer::stream_stats stats{};
     auto consumer = std::make_unique<counting_batch_consumer>(std::ref(stats));
     storage::continuous_batch_parser parser(
-      std::move(consumer), storage::segment_reader_handle(std::move(stream)));
+      std::move(consumer),
+      storage::segment_reader_handle(std::move(stream)),
+      storage::record_version_type::v1);
     parser.consume().get();
     parser.close().get();
     return stats;

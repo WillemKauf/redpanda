@@ -39,7 +39,12 @@ ss::future<stream_stats> offset_translator::copy_stream(
           return storage::batch_consumer::consume_result::accept_batch;
       };
     auto len = co_await storage::transform_stream(
-      std::move(src), std::move(dst), pred, _as);
+      std::move(src),
+      std::move(dst),
+      pred,
+      storage::record_version_type::v1,
+      storage::record_version_type::v1,
+      _as);
     if (len.has_error()) {
         co_await ss::coroutine::return_exception(
           std::system_error(len.error()));

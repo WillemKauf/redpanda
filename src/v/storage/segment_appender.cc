@@ -185,7 +185,9 @@ ss::future<> segment_appender::append(const model::record_batch& batch) {
     _batch_types_to_write |= 1LU << static_cast<uint8_t>(batch.header().type);
 
     auto hdrbuf = std::make_unique<iobuf>(
-      storage::batch_header_to_disk_iobuf(batch.header()));
+      _opts.segment_version == record_version_type::v1
+        ? storage::batch_header_to_disk_iobuf(batch.header())
+        : storage::v2_batch_header_to_disk_iobuf(batch.header()));
     auto ptr = hdrbuf.get();
     return append(*ptr).then(
       [this, &batch, cpy = std::move(hdrbuf)] { return append(batch.data()); });

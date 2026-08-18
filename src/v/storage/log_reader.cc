@@ -20,6 +20,7 @@
 #include "storage/logger.h"
 #include "storage/offset_translator_state.h"
 #include "storage/parser_errc.h"
+#include "storage/record_batch_utils.h"
 #include "storage/segment_set.h"
 #include "storage/types.h"
 
@@ -182,7 +183,8 @@ log_segment_batch_reader::initialize(
     auto input = co_await _seg.offset_data_stream(_config.start_offset);
     co_return std::make_unique<continuous_batch_parser>(
       std::make_unique<skipping_consumer>(*this, timeout, next_cached_batch),
-      std::move(input));
+      std::move(input),
+      _seg.reader().path().get_version());
 }
 
 ss::future<> log_segment_batch_reader::close() {
@@ -197,7 +199,7 @@ void log_segment_batch_reader::add_one(model::record_batch&& batch) {
     _state.buffer.emplace_back(std::move(batch));
     const auto& b = _state.buffer.back();
     _config.start_offset = b.header().last_offset() + model::offset(1);
-    const auto size_bytes = b.header().size_bytes;
+    const auto size_bytes = b.size_bytes();
     _config.bytes_consumed += size_bytes;
     _state.buffer_size += size_bytes;
     _probe.add_bytes_read(size_bytes);

@@ -20,6 +20,7 @@
 #include "storage/failure_probes.h"
 #include "storage/parser_errc.h"
 #include "storage/segment_reader.h"
+#include "storage/version.h"
 #include "utils/vint.h"
 
 #include <seastar/core/byteorder.hh>
@@ -88,10 +89,12 @@ public:
     continuous_batch_parser(
       std::unique_ptr<batch_consumer> consumer,
       segment_reader_handle input,
+      record_version_type version,
       bool recovery = false) noexcept
       : _consumer(std::move(consumer))
       , _input(std::move(input))
-      , _recovery(recovery) {}
+      , _recovery(recovery)
+      , _version(version) {}
     continuous_batch_parser(const continuous_batch_parser&) = delete;
     continuous_batch_parser& operator=(const continuous_batch_parser&) = delete;
     continuous_batch_parser(continuous_batch_parser&&) noexcept = default;
@@ -137,6 +140,7 @@ private:
     parser_errc _err = parser_errc::none;
     size_t _bytes_consumed{0};
     size_t _physical_base_offset{0};
+    record_version_type _version{record_version_type::v1};
 };
 
 using record_batch_transform_predicate = ss::noncopyable_function<
@@ -149,6 +153,10 @@ using record_batch_transform_predicate = ss::noncopyable_function<
 /// stream. The predicate can also update record batch header in-place
 /// or stop the transfer.
 ///
+/// Batch headers are re-serialized on the way out, so the stream can also be
+/// converted between segment versions by passing different in/out versions
+/// (e.g. rewriting a v1 segment as a v2 segment).
+///
 /// \param in is an input stream with record batches
 /// \param out is an output stream that should receive the resulting batches
 /// \return number of bytes written to the 'out'
@@ -156,6 +164,8 @@ ss::future<result<size_t>> transform_stream(
   ss::input_stream<char> in,
   ss::output_stream<char> out,
   record_batch_transform_predicate pred,
+  record_version_type in_version,
+  record_version_type out_version,
   model::opt_abort_source_t as = std::nullopt);
 
 } // namespace storage

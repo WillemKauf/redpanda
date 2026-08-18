@@ -199,6 +199,7 @@ redpanda_cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":version",
         "//src/v/bytes:iobuf",
         "//src/v/model",
     ],
@@ -223,6 +224,7 @@ redpanda_cc_library(
         ":config",
         ":record_batch_utils",
         ":resources",
+        ":version",
         "//src/v/base",
         "//src/v/bytes",
         "//src/v/container:chunked_vector",

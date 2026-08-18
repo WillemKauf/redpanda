@@ -16,6 +16,7 @@
 #include "storage/file_sanitizer.h"
 #include "storage/log_replayer.h"
 #include "storage/logger.h"
+#include "storage/record_batch_utils.h"
 #include "storage/segment.h"
 #include "storage/segment_index.h"
 #include "storage/segment_reader.h"
@@ -32,6 +33,11 @@ using namespace storage; // NOLINT
 namespace storage {
 class log_replayer_fixture {
 public:
+    explicit log_replayer_fixture(
+      record_version_type version = record_version_type::v1)
+      : _version(version) {}
+
+    record_version_type _version;
     ss::sharded<features::feature_table> _feature_table;
     storage::storage_resources resources;
     ss::lw_shared_ptr<segment> _seg;
@@ -66,7 +72,9 @@ public:
             ntp_sanitizer_config{.sanitize_only = true})));
 
         auto appender = std::make_unique<segment_appender>(
-          fd, segment_appender::options(std::nullopt, resources, nullptr));
+          fd,
+          segment_appender::options(
+            std::nullopt, resources, nullptr, _version));
         auto indexer = segment_index(
           segment_full_path::mock(base_name + ".index"),
           std::move(fidx),
@@ -74,7 +82,7 @@ public:
           4096,
           _feature_table);
         auto reader = std::make_unique<segment_reader>(
-          segment_full_path::mock(base_name), 128_KiB, 10);
+          segment_full_path::mock(base_name, _version), 128_KiB, 10);
         reader->load_size().get();
         _seg = ss::make_lw_shared<segment>(
           segment::offset_tracker(model::term_id(0), base),
@@ -212,6 +220,81 @@ TEST(log_replayer_test, test_unrecovered_multiple_batches) {
         EXPECT_EQ(recovered.last_offset.value(), last_offset);
     }
 }
+// v2 segments store serde-serialized batch headers; recovery must parse them
+// end to end, and partial recovery on a corrupted tail must behave like v1.
+TEST(log_replayer_test, test_can_recover_v2_segment) {
+    log_replayer_fixture ctx(record_version_type::v2);
+    auto batches = model::test::make_random_batches(model::offset(1), 10).get();
+    auto last_offset = batches.back().last_offset();
+    ctx.write(batches);
+    auto recovered = ctx.replayer().recover_in_thread();
+    ASSERT_TRUE(bool(recovered));
+    EXPECT_EQ(recovered.last_offset.value(), last_offset);
+}
+
+TEST(log_replayer_test, test_partial_recovery_v2_segment) {
+    log_replayer_fixture ctx(record_version_type::v2);
+    auto batches = model::test::make_random_batches(model::offset(1), 10).get();
+    batches.back().header().crc = 10;
+    auto last_offset = (batches.end() - 2)->last_offset();
+    ctx.write(batches);
+    auto recovered = ctx.replayer().recover_in_thread();
+    ASSERT_TRUE(bool(recovered));
+    EXPECT_EQ(recovered.last_offset.value(), last_offset);
+}
+
+TEST(log_replayer_test, test_malformed_v2_segment) {
+    log_replayer_fixture ctx(record_version_type::v2);
+    ctx.write_garbage();
+    ctx.initialize(model::offset(0));
+    auto recovered = ctx.replayer().recover_in_thread();
+    EXPECT_FALSE(bool(recovered));
+}
+
+// Index entries rebuilt during recovery must point at the physical start of
+// each batch, which may differ depending on the version of the segment/header.
+// Both formats should work correctly.
+TEST(log_replayer_test, test_recovery_rebuilds_index_positions) {
+    for (auto version : {record_version_type::v1, record_version_type::v2}) {
+        log_replayer_fixture ctx(version);
+        auto batches = model::test::make_random_batches(
+                         model::test::record_batch_spec{
+                           .offset = model::offset(1),
+                           .allow_compression = false,
+                           .count = 10,
+                           .records = 10,
+                           .record_sizes = std::vector<size_t>(10, 1024)})
+                         .get();
+
+        // physical file position of each batch as it will be laid out on disk
+        std::map<model::offset, size_t> physical_starts;
+        size_t pos = 0;
+        for (const auto& b : batches) {
+            physical_starts[b.base_offset()] = pos;
+            pos += storage::batch_on_disk_size(b.header(), version);
+        }
+
+        ctx.write(batches);
+        auto recovered = ctx.replayer().recover_in_thread();
+        ASSERT_TRUE(bool(recovered));
+
+        // the fixture's index samples every 4KiB, so several batches beyond
+        // the first must have been tracked; each tracked entry must sit at
+        // the batch's true physical position
+        size_t verified = 0;
+        for (const auto& [offset, filepos] : physical_starts) {
+            auto entry = ctx._seg->index().find_nearest(offset);
+            if (entry && entry->offset == offset) {
+                EXPECT_EQ(entry->filepos, filepos)
+                  << "index entry for offset " << offset << " version "
+                  << to_string(version);
+                ++verified;
+            }
+        }
+        EXPECT_GT(verified, 1);
+    }
+}
+
 TEST(log_replayer_test, test_reset_index) {
     // bad crc test
     log_replayer_fixture ctx;

@@ -5,6 +5,7 @@
 #include "storage/chunk_cache.h"
 #include "storage/segment_appender.h"
 #include "storage/storage_resources.h"
+#include "storage/version.h"
 #include "test_utils/async.h"
 #include "test_utils/manual_file.h"
 #include "test_utils/random_bytes.h"
@@ -56,7 +57,8 @@ public:
           ss::file_open_options{});
 
         resources.start().get();
-        storage::segment_appender::options opts(std::nullopt, resources, stats);
+        storage::segment_appender::options opts(
+          std::nullopt, resources, stats, storage::record_version_type::v1);
         appender = std::make_unique<storage::segment_appender>(
           std::move(file), opts);
     }
@@ -351,7 +353,8 @@ struct SegmentAppenderManualFileFixture : seastar_test {
           .set_value(std::chrono::milliseconds(600'000));
 
         co_await resources.start();
-        storage::segment_appender::options opts(std::nullopt, resources, stats);
+        storage::segment_appender::options opts(
+          std::nullopt, resources, stats, storage::record_version_type::v1);
         appender = std::make_unique<storage::segment_appender>(
           manual_file::make_file(_device, dma_alignment), opts);
     }

@@ -32,6 +32,7 @@
 #include "ssx/watchdog.h"
 #include "storage/parser.h"
 #include "storage/segment_index.h"
+#include "storage/version.h"
 #include "utils/retry_chain_node.h"
 #include "utils/stream_utils.h"
 
@@ -1575,7 +1576,8 @@ remote_segment_batch_reader::init_parser(
     auto parser = std::make_unique<storage::continuous_batch_parser>(
       std::make_unique<remote_segment_batch_consumer>(
         _config, *this, _seg->get_term(), _seg->get_ntp(), _rtc, deadline),
-      storage::segment_reader_handle(std::move(stream_off.stream)));
+      storage::segment_reader_handle(std::move(stream_off.stream)),
+      storage::record_version_type::v1);
     _cur_rp_offset = stream_off.rp_offset;
     _cur_delta = stream_off.rp_offset - stream_off.kafka_offset;
     co_return parser;

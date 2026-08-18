@@ -637,7 +637,9 @@ ss::future<> kvstore::replay_segments(segment_set segs) {
 
         auto reader_handle = co_await seg->reader().data_stream(0);
         auto parser = std::make_unique<continuous_batch_parser>(
-          std::make_unique<replay_consumer>(this), std::move(reader_handle));
+          std::make_unique<replay_consumer>(this),
+          std::move(reader_handle),
+          seg->reader().path().get_version());
         auto p = parser.get();
         co_await p->consume()
           .discard_result()

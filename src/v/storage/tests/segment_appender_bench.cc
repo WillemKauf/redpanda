@@ -9,6 +9,7 @@
 
 #include "ssx/future-util.h"
 #include "storage/segment_appender.h"
+#include "storage/version.h"
 #include "test_utils/tmpbuf_file.h"
 
 #include <seastar/core/future.hh>
@@ -20,7 +21,7 @@ struct appender_fixture {
         auto file = ss::file(ss::make_shared<tmpbuf_file>(store));
 
         storage::segment_appender::options opts(
-          std::nullopt, _resources, nullptr);
+          std::nullopt, _resources, nullptr, storage::record_version_type::v1);
 
         co_return std::make_unique<storage::segment_appender>(
           std::move(file), opts);

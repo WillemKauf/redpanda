@@ -12,6 +12,7 @@
 #pragma once
 #include "bytes/iobuf.h"
 #include "model/record.h"
+#include "storage/version.h"
 
 #include <span>
 
@@ -44,5 +45,10 @@ iobuf v2_batch_header_to_disk_iobuf(const model::record_batch_header& h);
 model::record_batch_header v2_batch_header_from_disk_iobuf(iobuf b);
 model::record_batch_header
 v2_batch_header_from_disk_buf(std::span<const char> data);
+
+// Returns the total on disk size of the provided record batch (e.g. the sum
+// of the size of records and of the header itself).
+size_t batch_on_disk_size(
+  const model::record_batch_header& h, record_version_type version);
 
 } // namespace storage

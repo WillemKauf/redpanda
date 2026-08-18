@@ -158,7 +158,9 @@ public:
      * For unit tests: construct a path object that has a raw filename inside
      * it, and some metadata that doesn't have to match that filename.
      */
-    static segment_full_path mock(ss::sstring str_path);
+    static segment_full_path mock(
+      ss::sstring str_path,
+      record_version_type version = record_version_type::v1);
 
     /**
      * On malformed input, returns nullopt (does not throw)
@@ -166,9 +168,9 @@ public:
     static std::optional<segment_full_path>
     parse(const partition_path& dir_part, const ss::sstring& filename) noexcept;
 
-    model::term_id get_term() { return file_part.term; }
-    model::offset get_base_offset() { return file_part.base_offset; }
-    record_version_type get_version() { return file_part.version; };
+    model::term_id get_term() const { return file_part.term; }
+    model::offset get_base_offset() const { return file_part.base_offset; }
+    record_version_type get_version() const { return file_part.version; }
     const model::ntp& get_ntp() const { return dir_part.ntp; }
 
     /**

@@ -20,6 +20,7 @@
 #include "storage/compaction_key.h"
 #include "storage/index_state.h"
 #include "storage/logger.h"
+#include "storage/record_batch_utils.h"
 #include "storage/segment_utils.h"
 
 #include <seastar/core/future.hh>
@@ -435,11 +436,13 @@ ss::future<ss::stop_iteration> copy_data_segment_reducer::filter_and_append(
         _acc = 0;
     }
     co_await _appender->append(to_append);
+    const auto batch_disk_size = batch_on_disk_size(
+      to_append.header(), _appender->segment_version());
     vassert(
-      _appender->file_byte_offset() == start_pos + header_size,
+      _appender->file_byte_offset() == start_pos + batch_disk_size,
       "Size must be deterministic. Expected:{} == {}",
       _appender->file_byte_offset(),
-      start_pos + header_size);
+      start_pos + batch_disk_size);
 
     co_return stop_t::no;
 }

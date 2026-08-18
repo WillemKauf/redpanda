@@ -261,6 +261,7 @@ redpanda_cc_library(
         "//src/v/ssx:task_local",
         "//src/v/ssx:watchdog",
         "//src/v/storage",
+        "//src/v/storage:version",
         "//src/v/utils:adjustable_semaphore",
         "//src/v/utils:delta_for",
         "//src/v/utils:directory_walker",

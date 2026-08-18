@@ -122,7 +122,9 @@ TEST(
           [](model::record_batch_header h) {
               EXPECT_EQ(h.type, model::record_batch_type::user_management_cmd);
               return batch_consumer::consume_result::accept_batch;
-          })
+          },
+          segments.front()->reader().path().get_version(),
+          segments.front()->reader().path().get_version())
           .get();
     EXPECT_FALSE(result.has_error());
     EXPECT_EQ(

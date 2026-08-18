@@ -537,6 +537,16 @@ struct record_batch_header
     /// it is encoded in little endian format.
     uint32_t header_crc{0};
 
+    /// \brief the canonical size of the batch, which is the size of the records
+    /// plus `packed_record_batch_header_size`. The total size of the records in
+    /// this batch must always be derivable by taking `size_bytes -
+    /// packed_record_batch_header_size`.
+    ///
+    /// This is what the Kafka and Raft wire encodings carry, as well as the
+    /// size of the fields covered by header_crc. It is NOT the batch's on-disk
+    /// footprint, since that depends on the segment's version (v2 headers also
+    /// carry the batch's term). If you are looking for the on-disk batch size,
+    /// see `storage::batch_on_disk_size()`.
     int32_t size_bytes{0};
     offset base_offset;
     /// \brief redpanda extension

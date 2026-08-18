@@ -16,6 +16,7 @@
 #include "model/fundamental.h"
 #include "model/record_batch_types.h"
 #include "storage/parser.h"
+#include "storage/version.h"
 
 #include <seastar/util/log.hh>
 
@@ -94,7 +95,8 @@ make_remote_segment_index_builder(
     auto parser = ss::make_lw_shared<storage::continuous_batch_parser>(
       std::make_unique<remote_segment_index_builder>(
         ntp, ix, initial_delta, sampling_step, maybe_stats),
-      storage::segment_reader_handle(std::move(stream)));
+      storage::segment_reader_handle(std::move(stream)),
+      storage::record_version_type::v1);
     return parser;
 }
 

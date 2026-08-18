@@ -16,6 +16,7 @@
 #include "model/fundamental.h"
 #include "model/record.h"
 #include "storage/fwd.h"
+#include "storage/version.h"
 
 #include <seastar/core/future-util.hh>
 
@@ -36,7 +37,8 @@ public:
       model::offset log_start_offset,
       model::offset target,
       size_t initial,
-      model::timestamp initial_timestamp);
+      model::timestamp initial_timestamp,
+      record_version_type version);
 
     ss::future<ss::stop_iteration> operator()(::model::record_batch batch);
 
@@ -50,6 +52,7 @@ private:
     model::offset _prev_batch_last_offset;
     model::timestamp _prev_batch_max_timestamp;
     size_t _prev_end_pos;
+    record_version_type _version;
 };
 
 } // namespace internal

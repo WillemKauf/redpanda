@@ -44,6 +44,7 @@ public:
       size_t physical_base_offset,
       size_t size_on_disk) override {
         _header = header;
+        _physical_base_offset = physical_base_offset;
         _file_pos_to_end_of_batch = size_on_disk + physical_base_offset;
         _crc = crc::crc32c();
         model::crc_record_batch_header(_crc, header);
@@ -59,13 +60,11 @@ public:
             _cfg.truncate_file_pos = _file_pos_to_end_of_batch;
             _cfg.last_max_timestamp = std::max(
               _header.first_timestamp, _header.max_timestamp);
-            const auto physical_base_offset = _file_pos_to_end_of_batch
-                                              - _header.size_bytes;
             // new_broker_ts is nullopt, in the happy case the index was
             // recovered and it's not use to set it to now, in the bad case we
             // have no good way to recover it so just fallback to max_timestamp
             _seg->index().maybe_track(
-              _header, std::nullopt, physical_base_offset);
+              _header, std::nullopt, _physical_base_offset);
             _header = {};
             co_return stop_parser::no;
         }
@@ -88,6 +87,7 @@ private:
     segment* _seg;
     log_replayer::checkpoint& _cfg;
     crc::crc32c _crc;
+    size_t _physical_base_offset{0};
     size_t _file_pos_to_end_of_batch{0};
 };
 
@@ -98,7 +98,10 @@ log_replayer::checkpoint log_replayer::recover_in_thread() {
     auto data_stream = _seg->reader().data_stream(0).get();
     auto consumer = std::make_unique<checksumming_consumer>(_seg, _ckpt);
     auto parser = continuous_batch_parser(
-      std::move(consumer), std::move(data_stream), true);
+      std::move(consumer),
+      std::move(data_stream),
+      _seg->reader().path().get_version(),
+      /*recovery=*/true);
     try {
         parser.consume().get();
     } catch (...) {

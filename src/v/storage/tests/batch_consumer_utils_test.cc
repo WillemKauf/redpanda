@@ -12,6 +12,7 @@
 #include "storage/parser.h"
 #include "storage/segment_reader.h"
 #include "storage/tests/utils/disk_log_builder.h"
+#include "storage/version.h"
 #include "test_utils/tmp_dir.h"
 
 #include <seastar/util/defer.hh>
@@ -158,7 +159,9 @@ TEST(batch_consumer_utils_test, test_chained_consumers_round_robin) {
     auto str = s->offset_data_stream(s->offsets().get_base_offset()).get();
 
     auto parser = ss::make_lw_shared<storage::continuous_batch_parser>(
-      std::move(cc), storage::segment_reader_handle(std::move(str)));
+      std::move(cc),
+      storage::segment_reader_handle(std::move(str)),
+      s->reader().path().get_version());
 
     auto close = ss::defer([parser] { parser->close().get(); });
 
@@ -212,7 +215,9 @@ TEST(batch_consumer_utils_test, test_chained_consumers_early_stop) {
     auto str = s->offset_data_stream(s->offsets().get_base_offset()).get();
 
     auto parser = ss::make_lw_shared<storage::continuous_batch_parser>(
-      std::move(cc), storage::segment_reader_handle(std::move(str)));
+      std::move(cc),
+      storage::segment_reader_handle(std::move(str)),
+      s->reader().path().get_version());
 
     auto close = ss::defer([parser] { parser->close().get(); });
 
@@ -264,7 +269,9 @@ TEST(batch_consumer_utils_test, test_chained_consumers_stop_all) {
     auto str = s->offset_data_stream(s->offsets().get_base_offset()).get();
 
     auto parser = ss::make_lw_shared<storage::continuous_batch_parser>(
-      std::move(cc), storage::segment_reader_handle(std::move(str)));
+      std::move(cc),
+      storage::segment_reader_handle(std::move(str)),
+      s->reader().path().get_version());
 
     auto close = ss::defer([parser] { parser->close().get(); });
 
@@ -315,7 +322,9 @@ TEST(batch_consumer_utils_test, test_chained_consumers_skip_all) {
     auto str = s->offset_data_stream(s->offsets().get_base_offset()).get();
 
     auto parser = ss::make_lw_shared<storage::continuous_batch_parser>(
-      std::move(cc), storage::segment_reader_handle(std::move(str)));
+      std::move(cc),
+      storage::segment_reader_handle(std::move(str)),
+      s->reader().path().get_version());
 
     auto close = ss::defer([parser] { parser->close().get(); });
 
@@ -362,7 +371,9 @@ TEST(batch_consumer_utils_test, test_chained_consumers_exception_propagation) {
     auto str = s->offset_data_stream(s->offsets().get_base_offset()).get();
 
     auto parser = ss::make_lw_shared<storage::continuous_batch_parser>(
-      std::move(cc), storage::segment_reader_handle(std::move(str)));
+      std::move(cc),
+      storage::segment_reader_handle(std::move(str)),
+      s->reader().path().get_version());
 
     auto close = ss::defer([parser] { parser->close().get(); });
 

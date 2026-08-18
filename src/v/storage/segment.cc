@@ -21,6 +21,7 @@
 #include "storage/fwd.h"
 #include "storage/logger.h"
 #include "storage/readers_cache.h"
+#include "storage/record_batch_utils.h"
 #include "storage/segment_utils.h"
 #include "storage/storage_resources.h"
 #include "storage/types.h"
@@ -558,8 +559,9 @@ ss::future<append_result> segment::do_append(const model::record_batch& b) {
             b.header())));
     }
     const auto start_physical_offset = _appender->file_byte_offset();
-    const auto expected_end_physical = start_physical_offset
-                                       + b.header().size_bytes;
+    const auto expected_end_physical
+      = start_physical_offset
+        + batch_on_disk_size(b.header(), _appender->segment_version());
 
     advance_generation();
 
@@ -587,7 +589,7 @@ ss::future<append_result> segment::do_append(const model::record_batch& b) {
           auto ret = append_result{
             .base_offset = b.base_offset(),
             .last_offset = b.last_offset(),
-            .byte_size = (size_t)b.size_bytes()};
+            .byte_size = expected_end_physical - start_physical_offset};
 
           // cache always copies the batch
           cache_put(

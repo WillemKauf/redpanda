@@ -19,6 +19,7 @@
 #include "storage/config.h"
 #include "storage/segment_appender_chunk.h"
 #include "storage/storage_resources.h"
+#include "storage/version.h"
 
 #include <seastar/core/file.hh>
 #include <seastar/core/shared_ptr.hh>
@@ -89,10 +90,14 @@ public:
 
     struct options {
         options(
-          std::optional<uint64_t> s, storage_resources& r, stats_ptr shared)
+          std::optional<uint64_t> s,
+          storage_resources& r,
+          stats_ptr shared,
+          record_version_type version)
           : segment_size(s)
           , resources(r)
-          , shared_stats(std::move(shared)) {}
+          , shared_stats(std::move(shared))
+          , segment_version(version) {}
 
         // Generally a segment appender doesn't need to know the target size
         // of the segment it's appending to, but this is used as an input
@@ -103,6 +108,10 @@ public:
         // Optional shared stats for shard-level metrics aggregation.
         // May be null in which case stats will not be collected.
         stats_ptr shared_stats;
+        // Version of the segment being appended to, which determines the
+        // on-disk serialization format of batch headers appended via
+        // append(const model::record_batch&).
+        record_version_type segment_version;
     };
 
     segment_appender(ss::file f, options opts);
@@ -166,6 +175,11 @@ public:
 
     // Returns the shared stats pointer.
     stats_ptr get_stats() const { return _opts.shared_stats; }
+
+    // The version of the segment being appended to.
+    record_version_type segment_version() const {
+        return _opts.segment_version;
+    }
 
     fmt::iterator format_to(fmt::iterator) const;
 

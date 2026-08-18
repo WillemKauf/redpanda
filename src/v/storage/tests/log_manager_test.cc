@@ -12,10 +12,14 @@
 #include "model/tests/random_batch.h"
 #include "storage/api.h"
 #include "storage/directories.h"
+#include "storage/log_replayer.h"
+#include "storage/parser.h"
 #include "storage/segment.h"
 #include "storage/segment_appender.h"
 #include "storage/segment_reader.h"
+#include "storage/version.h"
 #include "test_utils/random_bytes.h"
+#include "utils/null_output_stream.h"
 
 #include <seastar/util/defer.hh>
 
@@ -61,6 +65,91 @@ ntp_config config_from_ntp(const model::ntp& ntp) {
 
 constexpr size_t default_segment_readahead_size = 128 * 1024;
 constexpr unsigned default_segment_readahead_count = 10;
+
+// A v2 segment created through the log manager must carry the v2 filename,
+// serialize appended batch headers via serde (persisting the term), and be
+// readable and recoverable end to end.
+TEST(LogManagerTest, test_v2_segment_round_trip) {
+    auto conf = make_config();
+
+    ss::sharded<features::feature_table> feature_table;
+    feature_table.start().get();
+    feature_table
+      .invoke_on_all(
+        [](features::feature_table& f) { f.testing_activate_all(); })
+      .get();
+
+    storage::api store(
+      [conf]() {
+          return storage::kvstore_config(
+            1_MiB,
+            config::mock_binding(10ms),
+            conf.base_dir,
+            storage::make_sanitized_file_config());
+      },
+      [conf]() { return conf; },
+      feature_table);
+    store.start().get();
+    auto stop_kvstore = ss::defer([&store, &feature_table] {
+        store.stop().get();
+        feature_table.stop().get();
+    });
+
+    const auto term = model::term_id(3);
+    auto ntp_cfg = config_from_ntp(model::ntp("kafka", "topic-v2", 0));
+    directories::initialize(ntp_cfg.work_directory()).get();
+    auto seg = store.log_mgr()
+                 .make_log_segment(
+                   ntp_cfg,
+                   model::offset(0),
+                   term,
+                   default_segment_readahead_size,
+                   default_segment_readahead_count,
+                   1_MiB,
+                   record_version_type::v2)
+                 .get();
+    auto close_seg = ss::defer([&seg] { seg->close().get(); });
+    ASSERT_EQ(seg->reader().path().get_version(), record_version_type::v2);
+    ASSERT_TRUE(seg->reader().filename().ends_with("-3-v2.log"));
+
+    auto batches = model::test::make_random_batches(model::offset(0), 10).get();
+    for (auto& b : batches) {
+        b.set_term(term);
+        b.header().header_crc = model::internal_header_only_crc(b.header());
+        (void)seg->append(b.share()).get();
+    }
+    seg->flush().get();
+    seg->reader().set_file_size(seg->appender().file_byte_offset());
+
+    // scan the segment the way the read path does, collecting the headers
+    std::vector<model::record_batch_header> headers;
+    auto handle = seg->reader().data_stream(0).get();
+    auto res = transform_stream(
+                 handle.take_stream(),
+                 utils::make_null_output_stream(),
+                 [&headers](model::record_batch_header& h) {
+                     headers.push_back(h);
+                     return batch_consumer::consume_result::accept_batch;
+                 },
+                 record_version_type::v2,
+                 record_version_type::v2)
+                 .get();
+    handle.close().get();
+    ASSERT_TRUE(res.has_value());
+    EXPECT_EQ(res.value(), seg->appender().file_byte_offset());
+    ASSERT_EQ(headers.size(), batches.size());
+    auto it = batches.begin();
+    for (const auto& h : headers) {
+        EXPECT_EQ(h, it->header());
+        EXPECT_EQ(h.ctx.term, term);
+        ++it;
+    }
+
+    // and recover it the way startup does
+    auto recovered = log_replayer(*seg).recover_in_thread();
+    ASSERT_TRUE(bool(recovered));
+    EXPECT_EQ(recovered.last_offset.value(), batches.back().last_offset());
+}
 
 TEST(LogManagerTest, test_can_load_logs) {
     auto conf = make_config();

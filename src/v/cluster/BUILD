@@ -2509,6 +2509,7 @@ redpanda_cc_library(
         "//src/v/storage:disk",
         "//src/v/storage:record_batch_builder",
         "//src/v/storage:record_batch_utils",
+        "//src/v/storage:version",
         "//src/v/strings:string_switch",
         "//src/v/strings:utf8",
         "//src/v/utils:adjustable_semaphore",

@@ -29,11 +29,13 @@ offset_to_filepos_consumer::offset_to_filepos_consumer(
   model::offset log_start_offset,
   model::offset target,
   size_t initial,
-  model::timestamp initial_timestamp)
+  model::timestamp initial_timestamp,
+  record_version_type version)
   : _target_last_offset(target)
   , _prev_batch_last_offset(model::prev_offset(log_start_offset))
   , _prev_batch_max_timestamp(initial_timestamp)
-  , _prev_end_pos(initial) {}
+  , _prev_end_pos(initial)
+  , _version(version) {}
 
 ss::future<ss::stop_iteration>
 offset_to_filepos_consumer::operator()(::model::record_batch batch) {
@@ -58,7 +60,7 @@ offset_to_filepos_consumer::operator()(::model::record_batch batch) {
     _prev_batch_last_offset = batch.last_offset();
     _prev_batch_max_timestamp = std::max(
       batch.header().first_timestamp, batch.header().max_timestamp);
-    _prev_end_pos += batch.size_bytes();
+    _prev_end_pos += batch_on_disk_size(batch.header(), _version);
     co_return ss::stop_iteration::no;
 }
 
@@ -90,10 +92,15 @@ ss::future<result<offset_to_file_pos_result>> convert_begin_offset_to_file_pos(
     auto handle = co_await segment->reader().data_stream(scan_from);
 
     bool offset_inside_batch = false;
+    const auto version = segment->reader().path().get_version();
     auto res = co_await storage::internal::with_segment_reader_handle(
       std::move(handle),
-      [&begin_inclusive, &sto, &offset_found, &ts, &offset_inside_batch](
-        segment_reader_handle& reader_handle) {
+      [&begin_inclusive,
+       &sto,
+       &offset_found,
+       &ts,
+       &offset_inside_batch,
+       version](segment_reader_handle& reader_handle) {
           auto ostr = utils::make_null_output_stream();
           return transform_stream(
             reader_handle.take_stream(),
@@ -118,7 +125,9 @@ ss::future<result<offset_to_file_pos_result>> convert_begin_offset_to_file_pos(
                 offset_found = true;
                 ts = hdr.first_timestamp;
                 return batch_consumer::consume_result::stop_parser;
-            });
+            },
+            version,
+            version);
       });
 
     if (res.has_error()) {
@@ -192,6 +201,7 @@ ss::future<result<offset_to_file_pos_result>> convert_end_offset_to_file_pos(
     auto reader_handle = co_await segment->reader().data_stream(scan_from);
 
     bool offset_inside_batch = false;
+    const auto version = segment->reader().path().get_version();
     auto res = co_await storage::internal::with_segment_reader_handle(
       std::move(reader_handle),
       [&max_timestamp,
@@ -199,7 +209,8 @@ ss::future<result<offset_to_file_pos_result>> convert_end_offset_to_file_pos(
        &fo,
        &offset_found,
        &ts,
-       &offset_inside_batch](segment_reader_handle& handle) {
+       &offset_inside_batch,
+       version](segment_reader_handle& handle) {
           auto ostr = utils::make_null_output_stream();
           return transform_stream(
             handle.take_stream(),
@@ -234,7 +245,9 @@ ss::future<result<offset_to_file_pos_result>> convert_end_offset_to_file_pos(
                     ts = hdr.max_timestamp;
                 }
                 return batch_consumer::consume_result::stop_parser;
-            });
+            },
+            version,
+            version);
       });
 
     if (res.has_error()) {

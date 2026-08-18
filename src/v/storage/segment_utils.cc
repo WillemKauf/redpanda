@@ -179,7 +179,7 @@ ss::future<segment_appender_ptr> make_segment_appender(
               auto appender_ptr = std::make_unique<segment_appender>(
                 writer,
                 segment_appender::options(
-                  segment_size, resources, shared_stats));
+                  segment_size, resources, shared_stats, path.get_version()));
 
               if (sanitized_writer) {
                   sanitized_writer->set_pointer_to_appender(appender_ptr.get());

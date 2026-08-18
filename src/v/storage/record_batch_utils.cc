@@ -173,4 +173,16 @@ v2_batch_header_from_disk_buf(std::span<const char> data) {
     return parse_v2_header(parser);
 }
 
+size_t batch_on_disk_size(
+  const model::record_batch_header& h, record_version_type version) {
+    const auto records_size = static_cast<size_t>(h.size_bytes)
+                              - model::packed_record_batch_header_size;
+    switch (version) {
+    case record_version_type::v1:
+        return model::packed_record_batch_header_size + records_size;
+    case record_version_type::v2:
+        return v2_record_batch_header_size + records_size;
+    }
+}
+
 } // namespace storage
