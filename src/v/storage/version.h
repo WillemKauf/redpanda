@@ -13,6 +13,7 @@
 
 #include "base/format_to.h"
 #include "base/seastarx.h"
+#include "features/feature_table.h"
 
 #include <seastar/core/sstring.hh>
 
@@ -58,6 +59,13 @@ inline record_version_type from_string(std::string_view version) {
 
 inline ss::sstring to_string(record_version_type version) {
     return ss::sstring(fmt::to_string(version));
+}
+
+inline record_version_type
+default_record_version_type(const features::feature_table& ft) {
+    return ft.is_active(features::feature::record_batch_header_format_v2)
+             ? record_version_type::v2
+             : record_version_type::v1;
 }
 
 } // namespace storage

@@ -211,7 +211,16 @@ public:
       size_t read_buffer_size,
       unsigned read_ahead,
       size_t segment_size_hint,
-      record_version_type = record_version_type::v1);
+      record_version_type);
+
+    /// As above, with the version taken from default_record_version_type().
+    ss::future<ss::lw_shared_ptr<segment>> make_log_segment(
+      const ntp_config&,
+      model::offset,
+      model::term_id,
+      size_t read_buffer_size,
+      unsigned read_ahead,
+      size_t segment_size_hint);
 
     const log_config& config() const { return _config; }
 

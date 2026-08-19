@@ -847,6 +847,23 @@ ss::future<ss::lw_shared_ptr<segment>> log_manager::make_log_segment(
   model::term_id term,
   size_t read_buf_size,
   unsigned read_ahead,
+  size_t segment_size_hint) {
+    co_return co_await make_log_segment(
+      ntp,
+      base_offset,
+      term,
+      read_buf_size,
+      read_ahead,
+      segment_size_hint,
+      default_record_version_type(_feature_table.local()));
+}
+
+ss::future<ss::lw_shared_ptr<segment>> log_manager::make_log_segment(
+  const ntp_config& ntp,
+  model::offset base_offset,
+  model::term_id term,
+  size_t read_buf_size,
+  unsigned read_ahead,
   size_t segment_size_hint,
   record_version_type version) {
     auto gate_holder = _gate.hold();

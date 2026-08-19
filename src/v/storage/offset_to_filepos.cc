@@ -14,6 +14,7 @@
 #include "base/vlog.h"
 #include "storage/logger.h"
 #include "storage/parser.h"
+#include "storage/record_batch_utils.h"
 #include "storage/segment.h"
 #include "storage/segment_utils.h"
 #include "utils/null_output_stream.h"

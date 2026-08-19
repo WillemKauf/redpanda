@@ -110,7 +110,10 @@ public:
         stats_ptr shared_stats;
         // Version of the segment being appended to, which determines the
         // on-disk serialization format of batch headers appended via
-        // append(const model::record_batch&).
+        // append(const model::record_batch&). Segments are created as v2
+        // (headers carrying the term) once the record_batch_header_format_v2
+        // feature activates; v1 appends only happen pre-activation, for
+        // rollback safety.
         record_version_type segment_version;
     };
 

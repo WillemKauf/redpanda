@@ -21,6 +21,7 @@
 #include "ssx/future-util.h"
 #include "storage/parser.h"
 #include "storage/record_batch_builder.h"
+#include "storage/record_batch_utils.h"
 #include "storage/segment.h"
 #include "storage/segment_set.h"
 #include "storage/types.h"
@@ -338,7 +339,7 @@ ss::future<> kvstore::roll() {
                  _ntpc,
                  model::offset(_next_offset),
                  model::term_id(0),
-                 record_version_type::v1,
+                 default_record_version_type(_feature_table.local()),
                  config::shard_local_cfg().storage_read_buffer_size(),
                  config::shard_local_cfg().storage_read_readahead_count(),
                  std::nullopt,
@@ -383,7 +384,7 @@ ss::future<> kvstore::roll() {
                        _ntpc,
                        model::offset(_next_offset),
                        model::term_id(0),
-                       record_version_type::v1,
+                       default_record_version_type(_feature_table.local()),
                        config::shard_local_cfg().storage_read_buffer_size(),
                        config::shard_local_cfg().storage_read_readahead_count(),
                        std::nullopt,

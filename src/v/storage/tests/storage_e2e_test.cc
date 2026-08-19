@@ -34,6 +34,7 @@
 #include "storage/log_reader.h"
 #include "storage/ntp_config.h"
 #include "storage/record_batch_builder.h"
+#include "storage/record_batch_utils.h"
 #include "storage/segment_utils.h"
 #include "storage/tests/batch_generators.h"
 #include "storage/tests/common.h"
@@ -68,6 +69,13 @@
 #include <vector>
 
 static ss::logger e2e_test_log("storage_e2e_test");
+
+// on-disk size of a batch appended in these tests: the fixtures activate all
+// feature flags, so segments are v2 and batch headers carry the term
+size_t on_disk_size(const model::record_batch& b) {
+    return storage::batch_on_disk_size(
+      b.header(), storage::record_version_type::v2);
+}
 
 void validate_offsets(
   model::offset base,
@@ -717,7 +725,7 @@ TEST_F(storage_test_fixture, test_size_based_eviction) {
       all_batches.begin(),
       all_batches.end(),
       size_t(0),
-      [](size_t acc, model::record_batch& b) { return acc + b.size_bytes(); });
+      [](size_t acc, model::record_batch& b) { return acc + on_disk_size(b); });
 
     auto lstats = log->offsets();
     SUCCEED() << fmt::format("Offsets to be evicted {}", lstats);
@@ -727,7 +735,7 @@ TEST_F(storage_test_fixture, test_size_based_eviction) {
       new_batches.begin(),
       new_batches.end(),
       size_t(0),
-      [](size_t acc, model::record_batch& b) { return acc + b.size_bytes(); });
+      [](size_t acc, model::record_batch& b) { return acc + on_disk_size(b); });
 
     // Set the max number of bytes to the total size of the log.
     // This will prevent compaction.
@@ -787,7 +795,7 @@ TEST_F(storage_test_fixture, test_size_based_eviction) {
           batches.end(),
           size_t(0),
           [](size_t acc, model::record_batch& b) {
-              return acc + b.size_bytes();
+              return acc + on_disk_size(b);
           });
         /*
          * the max size is a soft target. in practice we can't reclaim space on
@@ -870,15 +878,17 @@ ss::future<storage::append_result> append_exactly(
   std::optional<bytes> key = std::nullopt,
   model::record_batch_type batch_type = model::record_batch_type::raft_data) {
     vassert(
-      batch_sz > model::packed_record_batch_header_size,
+      batch_sz > storage::v2_record_batch_header_size,
       "Batch size must be greater than {}, requested {}",
-      model::packed_record_batch_header_size,
+      storage::v2_record_batch_header_size,
       batch_sz);
     storage::log_append_config append_cfg{
       storage::log_append_config::fsync::no};
 
     chunked_circular_buffer<model::record_batch> batches;
-    auto val_sz = batch_sz - model::packed_record_batch_header_size;
+    // batch_sz is the batch's on-disk footprint (see on_disk_size above)
+    auto val_sz = static_cast<int64_t>(batch_sz)
+                  - static_cast<int64_t>(storage::v2_record_batch_header_size);
     iobuf key_buf{};
 
     if (key) {
@@ -901,16 +911,71 @@ ss::future<storage::append_result> append_exactly(
 
     real_batch_size += vint::vint_size(val_sz - real_batch_size);
 
-    val_sz -= real_batch_size;
+    val_sz -= static_cast<int64_t>(real_batch_size);
+
+    // the overhead arithmetic above can be off by a byte around vint size
+    // boundaries: measure trial batches and correct the value size until the
+    // measured size converges (a correction can itself shift a vint width).
+    // some sizes are unreachable with a single record -- its size vints can
+    // jump by more than one byte at a boundary -- so fail loudly rather than
+    // ever appending an inexact batch.
+    for (int attempts = 0;; ++attempts) {
+        vassert(
+          val_sz >= 0,
+          "append_exactly cannot build a batch of on-disk size {}",
+          batch_sz);
+        storage::record_batch_builder builder(batch_type, model::offset{});
+        iobuf value = bytes_to_iobuf(
+          tests::random_bytes(static_cast<size_t>(val_sz)));
+        builder.add_raw_kv(key_buf.copy(), std::move(value));
+        const auto measured = on_disk_size(std::move(builder).build());
+        if (measured == batch_sz) {
+            break;
+        }
+        vassert(
+          attempts < 8,
+          "append_exactly cannot build a batch of on-disk size {} (closest "
+          "attempt: {})",
+          batch_sz,
+          measured);
+        val_sz += static_cast<int64_t>(batch_sz)
+                  - static_cast<int64_t>(measured);
+    }
 
     for (size_t i = 0; i < batch_count; ++i) {
         storage::record_batch_builder builder(batch_type, model::offset{});
-        iobuf value = bytes_to_iobuf(tests::random_bytes(val_sz));
+        iobuf value = bytes_to_iobuf(
+          tests::random_bytes(static_cast<size_t>(val_sz)));
         builder.add_raw_kv(key_buf.copy(), std::move(value));
 
-        batches.push_back(std::move(builder).build());
+        auto b = std::move(builder).build();
+        vassert(
+          on_disk_size(b) == batch_sz,
+          "append_exactly built a batch of on-disk size {}, requested {}",
+          on_disk_size(b),
+          batch_sz);
+        batches.push_back(std::move(b));
     }
 
+    auto rdr = model::make_memory_record_batch_reader(std::move(batches));
+    return std::move(rdr).for_each_ref(
+      log->make_appender(append_cfg), model::no_timeout);
+}
+
+// appends a single batch with a value of the given size. unlike
+// append_exactly, makes no promise about the batch's on-disk footprint --
+// use it where the size does not need to be byte-exact (not every on-disk
+// size is reachable: record size vints jump at their width boundaries).
+ss::future<storage::append_result> append_single(
+  ss::shared_ptr<storage::log> log,
+  size_t val_sz,
+  model::record_batch_type batch_type) {
+    storage::log_append_config append_cfg{
+      storage::log_append_config::fsync::no};
+    storage::record_batch_builder builder(batch_type, model::offset{});
+    builder.add_raw_kv(iobuf{}, bytes_to_iobuf(tests::random_bytes(val_sz)));
+    chunked_circular_buffer<model::record_batch> batches;
+    batches.push_back(std::move(builder).build());
     auto rdr = model::make_memory_record_batch_reader(std::move(batches));
     return std::move(rdr).for_each_ref(
       log->make_appender(append_cfg), model::no_timeout);
@@ -1028,11 +1093,9 @@ TEST_F(storage_test_fixture, append_concurrent_with_prefix_truncate) {
     static constexpr size_t stop_after = 200;
 #endif
     auto append = [&] {
-        return append_exactly(
+        return append_single(
                  log,
-                 1,
-                 random_generators::get_int(75, 237),
-                 std::nullopt,
+                 random_generators::get_int<size_t>(1, 160),
                  random_generators::random_choice(types))
           .then([&](storage::append_result result) {
               SUCCEED() << fmt::format("append result: {}", result);
@@ -1690,7 +1753,7 @@ TEST_F(storage_test_fixture, partition_size_while_cleanup) {
       batches.end(),
       0,
       [](size_t sum, const model::record_batch& b) {
-          return sum + b.size_bytes();
+          return sum + on_disk_size(b);
       });
 
     auto& segments = log->segments();
@@ -4035,8 +4098,7 @@ struct batch_summary_accumulator {
         batch_summary summary{
           .base = b.base_offset(),
           .last = b.last_offset(),
-          .batch_size = b.data().size_bytes()
-                        + model::packed_record_batch_header_size,
+          .batch_size = on_disk_size(b),
           .base_ts = b.header().first_timestamp,
           .max_ts = b.header().max_timestamp,
         };
@@ -4054,8 +4116,7 @@ struct batch_summary_accumulator {
 
 struct batch_size_accumulator {
     ss::future<ss::stop_iteration> operator()(model::record_batch b) {
-        auto batch_size = b.data().size_bytes()
-                          + model::packed_record_batch_header_size;
+        auto batch_size = on_disk_size(b);
         *size_bytes += batch_size;
         co_return ss::stop_iteration::no;
     }
