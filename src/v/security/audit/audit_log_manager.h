@@ -30,6 +30,7 @@
 #include "security/audit/types.h"
 #include "security/request_auth.h"
 #include "ssx/semaphore.h"
+#include "ssx/work_queue.h"
 
 #include <seastar/core/abort_source.hh>
 #include <seastar/core/gate.hh>
@@ -315,7 +316,22 @@ private:
      */
     model::partition_id compute_partition_id();
 
-    ss::future<> drain();
+    /// A drain that runs as part of pause() is the last chance to flush what is
+    /// queued, and is expected to complete in a timely fashion.
+    using is_final_flush = ss::bool_class<struct is_final_flush_tag>;
+    static constexpr auto final_flush_timeout = std::chrono::seconds{5};
+
+    ss::future<> drain(is_final_flush = is_final_flush::no);
+
+    /// One link of the drain chain: waits out the drain interval, drains, then
+    /// queues its own successor. Ends the chain instead if _drain_as was
+    /// aborted, which is how pause() and stop() stop it
+    ss::future<> scheduled_drain();
+
+    /// Returns once every task submitted to _drain_queue before the call has
+    /// finished. The queue runs one task at a time in submission order, so a
+    /// task that does nothing is a barrier.
+    ss::future<> quiesce_drain_queue();
 
     audit_sink& sink();
     void set_auth_misconfigured(bool v) { _auth_misconfigured = v; }
@@ -475,11 +491,12 @@ private:
     bool _effectively_enabled{false};
 
     /// Shutdown primitives
-    ss::gate _gate;
     ss::abort_source _as;
 
-    /// Main data structure and associated timer that fires thread to consume
-    /// from it. The data structure chosen is a boost::multi_index_container,
+    std::optional<ss::abort_source> _drain_as;
+
+    /// Main data structure that the drain task consumes from. The data
+    /// structure chosen is a boost::multi_index_container,
     /// configured to be searchable by a hash of the element or by the sequence
     /// of insertion.
     ///
@@ -492,9 +509,11 @@ private:
     /// message topic. Helpful for when audit of produce_request is enabled,
     /// since the quantity of auditable messages will be high and many requests
     /// are identical and can be combined into one.
-    ss::timer<> _drain_timer;
     underlying_t _queue;
-    ssx::semaphore _active_drain{1, "audit-drain"};
+
+    /// Runs the drain chain, one link at a time. Constructed in start() so it
+    /// picks up the audit scheduling group.
+    std::optional<ssx::work_queue> _drain_queue;
 
     // Probe is mutable so it can be modified in const methods when they need to
     // report auditing failures

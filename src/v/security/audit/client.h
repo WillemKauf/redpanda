@@ -17,11 +17,13 @@
 #include "model/record.h"
 #include "security/audit/client_probe.h"
 #include "security/audit/fwd.h"
+#include "security/audit/logger.h"
 #include "security/audit/probe.h"
 #include "security/audit/schemas/application_activity.h"
-#include "ssx/mutex.h"
 #include "ssx/semaphore.h"
+#include "ssx/work_queue.h"
 
+#include <seastar/core/abort_source.hh>
 #include <seastar/core/future.hh>
 #include <seastar/core/gate.hh>
 
@@ -42,7 +44,10 @@ public:
       audit_log_manager* audit_mgr,
       cluster::controller* controller,
       bool active)
-      : _audit_mgr(audit_mgr)
+      : _toggle_queue([](const std::exception_ptr& e) {
+          vlog(adtlog.error, "Failed to apply auditing state change: {}", e);
+      })
+      , _audit_mgr(audit_mgr)
       , _controller(controller)
       , _active(active) {}
 
@@ -61,9 +66,15 @@ public:
     /// Produce to the audit topic within the context of the internal locks,
     /// ensuring toggling of the audit master switch happens in lock step with
     /// calls to produce()
+    /// \param timeout bounds the wait for client buffer space; nullopt waits
+    ///        indefinitely, which is how the periodic drain applies
+    ///        backpressure back into the audit queue
+    /// \param as if set, aborts that wait instead of bounding it. Must belong
+    ///        to the shard the client lives on
     ss::future<> produce(
       chunked_vector<partition_batch> records,
-      std::optional<ss::timer<>::duration> timeout = std::nullopt);
+      std::optional<ss::timer<>::duration> timeout = std::nullopt,
+      ss::abort_source* as = nullptr);
 
     /// Allocates and connects, or deallocates and shuts down the audit client
     void toggle(bool);
@@ -94,15 +105,15 @@ protected:
 
 private:
     ss::future<> do_toggle(bool);
-    /// Primitives for ensuring background work and toggling of switch w/ async
-    /// work occur in lock step
-    ss::gate _gate;
-    ssx::mutex _mutex{"audit_sink::mutex"};
 
-    /// In the case the client did not finish intialization this optional may be
-    /// fufilled by a fiber attempting to shutdown the client. The future will
-    /// then later be waited on by the fiber that was initializing the client.
-    std::optional<ss::future<>> _early_exit_future;
+    /// Aborts a client that is still retrying initialize(), so a queued
+    /// disable can make progress
+    void break_client_initialization();
+
+    /// Runs the audit_enabled() transitions one at a time, in the order they
+    /// were requested. Every transition is enqueued rather than racing for a
+    /// lock, so none is dropped.
+    ssx::work_queue _toggle_queue;
 
     /// Reference to audit manager so synchronization with its fibers may occur.
     /// Supports pausing and resuming these fibers so the client can safely be
@@ -138,12 +149,19 @@ public:
     ss::future<> produce(
       chunked_vector<partition_batch>,
       audit_probe&,
-      std::optional<ss::timer<>::duration> timeout = std::nullopt);
+      std::optional<ss::timer<>::duration> timeout = std::nullopt,
+      ss::abort_source* as = nullptr);
     /// Returns true if the configuration phase has completed which includes:
     /// - Connecting to the broker(s) w/ ephemeral creds
     /// - Creating ACLs
     /// - Creating internal audit topic
     bool is_initialized() const { return _is_initialized; }
+
+    /// Breaks initialize() out of its retry loop. Idempotent, and safe to call
+    /// from outside the toggle queue: a client stuck retrying will not finish
+    /// on its own, so the disable that needs to tear it down cannot get its
+    /// turn on the queue until this has been called.
+    void request_abort() { _as.request_abort(); }
 
     cluster::controller* controller() { return _controller; }
     const ss::abort_source& as() const { return _as; }

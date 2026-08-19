@@ -25,6 +25,8 @@
 #include "security/authorizer.h"
 #include "utils/retry.h"
 
+#include <seastar/coroutine/as_future.hh>
+
 #include <algorithm>
 #include <chrono>
 
@@ -647,7 +649,8 @@ ss::future<> audit_client::shutdown() {
 ss::future<> audit_client::produce(
   chunked_vector<partition_batch> records,
   audit_probe& probe,
-  std::optional<ss::timer<>::duration> timeout) {
+  std::optional<ss::timer<>::duration> timeout,
+  ss::abort_source* as) {
     auto total_size = absl::c_accumulate(
       records, size_t{0}, [](size_t acc, const partition_batch& b) {
           return acc + b.batch.size_bytes();
@@ -661,7 +664,9 @@ ss::future<> audit_client::produce(
 
     auto timepoint = timeout.has_value() ? ss::timer<>::clock::now() + *timeout
                                          : ss::timer<>::time_point::max();
-    auto reserved = co_await ss::get_units(_send_sem, total_size, timepoint);
+    auto reserved = co_await (
+      as != nullptr ? ss::get_units(_send_sem, total_size, *as)
+                    : ss::get_units(_send_sem, total_size, timepoint));
 
     std::ranges::for_each(records, [&reserved](partition_batch& pb) {
         try {
@@ -725,19 +730,42 @@ ss::future<> audit_sink::start() {
 
 ss::future<> audit_sink::stop() {
     vlog(adtlog.info, "stop() invoked on audit_sink");
-    toggle(false);
-    co_await _gate.close();
+    if (_active) {
+        break_client_initialization();
+        ss::promise<> disabled;
+        auto is_disabled = disabled.get_future();
+        _toggle_queue.submit([this, disabled = std::move(disabled)]() mutable {
+            return do_toggle(false).finally(
+              [disabled = std::move(disabled)]() mutable {
+                  disabled.set_value();
+              });
+        });
+        auto f = co_await ss::coroutine::as_future(std::move(is_disabled));
+        f.ignore_ready_future();
+    }
+    co_await _toggle_queue.shutdown();
 }
 
 ss::future<> audit_sink::produce(
   chunked_vector<partition_batch> records,
-  std::optional<ss::timer<>::duration> timeout) {
+  std::optional<ss::timer<>::duration> timeout,
+  ss::abort_source* as) {
     /// No locks/gates since the calls to this method are done in controlled
     /// context of other synchronization primitives
 
-    vassert(client(), "produce() called on a null client");
+    if (client() == nullptr) {
+        /// A drain raced the disable that deallocated the client. The shard
+        /// that drains is not always the shard that owns the client, so no
+        /// single shard's pause() can rule this out.
+        vlog(
+          adtlog.warn,
+          "Dropping {} audit batches, the audit client has been shut down",
+          records.size());
+        _audit_mgr->probe().audit_error();
+        co_return;
+    }
     co_await client()->produce(
-      std::move(records), _audit_mgr->probe(), timeout);
+      std::move(records), _audit_mgr->probe(), timeout, as);
 }
 
 static constexpr std::string_view subsystem_name = "Audit System";
@@ -762,13 +790,10 @@ ss::future<> audit_sink::publish_app_lifecycle_event(
     chunked_vector<partition_batch> rs;
     rs.emplace_back(_audit_mgr->compute_partition_id(), std::move(batch));
 
-    auto timeout = _audit_mgr->_audit_log_reject_policy()
-                       == config::audit_failure_policy::permit
-                     ? std::make_optional(5s)
-                     : std::nullopt;
+    static constexpr auto lifecycle_event_timeout = 5s;
 
     try {
-        co_await produce(std::move(rs), timeout);
+        co_await produce(std::move(rs), lifecycle_event_timeout);
     } catch (ss::semaphore_timed_out& e) {
         vlog(
           adtlog.error,
@@ -782,19 +807,21 @@ void audit_sink::toggle(bool enabled) {
         return;
     }
     vlog(adtlog.info, "Setting auditing enabled state to: {}", enabled);
-    ssx::spawn_with_gate(_gate, [this, enabled]() {
-        return _mutex.with(5s, [this, enabled] { return do_toggle(enabled); })
-          .handle_exception_type(
-            [this, enabled](const ss::semaphore_timed_out&) {
-                /// If within 5s the mutex cannot be aquired AND the client is
-                /// stuck in an initialization loop, then allow it to exit.
-                if (
-                  !enabled && client() && !client()->is_initialized()
-                  && !_early_exit_future.has_value()) {
-                    _early_exit_future = client()->shutdown();
-                }
-            });
-    });
+    if (!enabled) {
+        break_client_initialization();
+    }
+    _toggle_queue.submit([this, enabled] { return do_toggle(enabled); });
+}
+
+void audit_sink::break_client_initialization() {
+    /// initialize() retries until it succeeds or is aborted, so an enable that
+    /// cannot reach the cluster never returns. Abort it here, outside the
+    /// queue, or the disable we are about to enqueue would wait behind it
+    /// forever.
+    if (auto* c = client(); c != nullptr && !c->is_initialized()) {
+        vlog(adtlog.info, "Aborting in-progress audit client initialization");
+        c->request_abort();
+    }
 }
 
 ss::future<> audit_sink::do_toggle(bool enabled) {
@@ -806,23 +833,14 @@ ss::future<> audit_sink::do_toggle(bool enabled) {
               application_lifecycle::activity_id::start);
             co_await resume();
             vlog(adtlog.info, "Auditing fibers started");
-        } else if (_early_exit_future.has_value()) {
-            /// This is for shutting down the client when initialize() hasn't
-            /// completed.
-            ///
-            /// This special future allows the shutdown method to still execute
-            /// under the scope the mutex, even though it was initiated outside
-            /// outside the scope of the mutex.
-            co_await std::move(*_early_exit_future);
-            _early_exit_future = std::nullopt;
-            reset_client();
         } else {
-            /// There is currently no known way this could occur, that is
-            /// because initialize() should loop forever in the case it cannot
-            /// fully succeed.
-            vlog(
-              adtlog.warn,
-              "Client initialization exited in an unexpected manner");
+            /// initialize() only gives up when it is aborted, which means a
+            /// disable or a shutdown overtook us. Drop the half-built client so
+            /// the disable queued behind us is a no-op and a later enable
+            /// starts from scratch.
+            vlog(adtlog.info, "Audit client initialization aborted");
+            co_await client()->shutdown();
+            reset_client();
         }
     } else if (!enabled && client()) {
         co_await publish_app_lifecycle_event(

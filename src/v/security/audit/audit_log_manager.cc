@@ -27,6 +27,8 @@
 #include "security/audit/schemas/utils.h"
 #include "ssx/semaphore.h"
 
+#include <seastar/core/sleep.hh>
+#include <seastar/coroutine/as_future.hh>
 #include <seastar/coroutine/maybe_yield.hh>
 
 #include <algorithm>
@@ -157,31 +159,15 @@ ss::future<> audit_log_manager::start() {
           });
     }
 
-    _drain_timer.set_callback([this] {
-        ssx::spawn_with_gate(_gate, [this]() {
-            return ss::get_units(_active_drain, 1)
-              .then([this](auto units) mutable {
-                  return drain()
-                    .handle_exception([&probe = probe()](std::exception_ptr e) {
-                        vlog(
-                          adtlog.warn,
-                          "Exception in audit_log_manager fiber: {}",
-                          e);
-                        probe.audit_error();
-                    })
-                    .finally([this, units = std::move(units)] {
-                        _drain_timer.arm(_queue_drain_interval_ms());
-                    });
-              });
-        });
-    });
+    _drain_queue.emplace(
+      ss::current_scheduling_group(), [this](const std::exception_ptr& e) {
+          vlog(adtlog.warn, "Exception in audit_log_manager fiber: {}", e);
+          probe().audit_error();
+      });
 
     _audit_enabled.watch([this] {
         try {
             sink().toggle(_audit_enabled());
-        } catch (const ss::gate_closed_exception&) {
-            vlog(
-              adtlog.debug, "Failed to toggle auditing state, shutting down");
         } catch (...) {
             vlog(
               adtlog.error,
@@ -196,15 +182,16 @@ ss::future<> audit_log_manager::start() {
 }
 
 ss::future<> audit_log_manager::stop() {
-    _drain_timer.cancel();
     _as.request_abort();
+    if (_drain_as) {
+        _drain_as->request_abort();
+    }
     vlog(adtlog.info, "Shutting down audit log manager");
     if (_sink) {
         co_await sink().stop();
     }
-    if (!_gate.is_closed()) {
-        /// Gate may already be closed if ::pause() had been called
-        co_await _gate.close();
+    if (_drain_queue) {
+        co_await _drain_queue->shutdown();
     }
     if (_queue.size() > 0) {
         vlog(
@@ -214,28 +201,58 @@ ss::future<> audit_log_manager::stop() {
     }
 }
 
+ss::future<> audit_log_manager::scheduled_drain() {
+    auto slept = co_await ss::coroutine::as_future(
+      ss::sleep_abortable(_queue_drain_interval_ms(), *_drain_as));
+    if (slept.failed()) {
+        /// pause() or stop() ended this chain; resume() starts a fresh one
+        slept.ignore_ready_future();
+        co_return;
+    }
+    auto drained = co_await ss::coroutine::as_future(drain());
+    if (drained.failed()) {
+        auto e = drained.get_exception();
+        vlog(adtlog.warn, "Exception in audit_log_manager fiber: {}", e);
+        probe().audit_error();
+    }
+    if (_drain_as->abort_requested()) {
+        co_return;
+    }
+    // Re-queue the next drain operation.
+    _drain_queue->submit([this] { return scheduled_drain(); });
+}
+
+ss::future<> audit_log_manager::quiesce_drain_queue() {
+    ss::promise<> barrier;
+    auto reached = barrier.get_future();
+    _drain_queue->submit([barrier = std::move(barrier)]() mutable {
+        barrier.set_value();
+        return ss::now();
+    });
+    auto f = co_await ss::coroutine::as_future(std::move(reached));
+    f.ignore_ready_future();
+}
+
 ss::future<> audit_log_manager::pause() {
     _effectively_enabled = false;
-    /// Wait until drain() has completed, with timer cancelled it can be
-    /// ensured no more work will be performed
-    return ss::get_units(_active_drain, 1).then([this](auto) {
-        _drain_timer.cancel();
-        return drain().handle_exception([this](const std::exception_ptr& e) {
-            vlog(adtlog.warn, "Exception in audit_log_manager fiber: {}", e);
-            probe().audit_error();
-        });
-    });
+    if (_drain_as) {
+        _drain_as->request_abort();
+    }
+    co_await quiesce_drain_queue();
+    co_await drain(is_final_flush::yes)
+      .handle_exception([this](const std::exception_ptr& e) {
+          vlog(adtlog.warn, "Exception in audit_log_manager fiber: {}", e);
+          probe().audit_error();
+      });
 }
 
 ss::future<> audit_log_manager::resume() {
     // NOTE(oren): in kafka API mode this function is called on all shards
     // internally to the sink
-    /// If the timer is already armed that is a bug
-    vassert(
-      !_drain_timer.armed(), "Timer is already armed upon call to ::resume");
     _effectively_enabled = true;
-    _drain_timer.arm(_queue_drain_interval_ms());
-    return ss::make_ready_future();
+    _drain_as.emplace();
+    _drain_queue->submit([this] { return scheduled_drain(); });
+    return ss::now();
 }
 
 bool audit_log_manager::report_redpanda_app_event(is_started app_started) {
@@ -291,7 +308,7 @@ model::partition_id audit_log_manager::compute_partition_id() {
     return pid.value_or(_next_pid);
 }
 
-ss::future<> audit_log_manager::drain() {
+ss::future<> audit_log_manager::drain(is_final_flush final_flush) {
     if (_queue.empty()) {
         co_return;
     }
@@ -341,13 +358,27 @@ ss::future<> audit_log_manager::drain() {
     /// produce batch queue. If the semaphore blocks it will apply
     /// backpressure here, and the \ref _queue will begin to fill closer to
     /// capacity. When it hits capacity, enqueue_audit_event() will block.
+    auto timeout = final_flush == is_final_flush::yes
+                     ? std::make_optional(final_flush_timeout)
+                     : std::nullopt;
+    /// Only the periodic drain is abortable, and only ever by the abort_source
+    /// belonging to the shard whose client is being produced to
+    const auto abortable = final_flush == is_final_flush::no;
     if (sink().active()) {
-        co_await sink().produce(std::move(p_batches));
+        co_await sink().produce(
+          std::move(p_batches),
+          timeout,
+          abortable && _drain_as.has_value() ? &*_drain_as : nullptr);
     } else {
         co_await container().invoke_on(
           client_shard_id,
-          [data = std::move(p_batches)](audit_log_manager& mgr) mutable {
-              return mgr.sink().produce(std::move(data));
+          [data = std::move(p_batches), timeout, abortable](
+            audit_log_manager& mgr) mutable {
+              return mgr.sink().produce(
+                std::move(data),
+                timeout,
+                abortable && mgr._drain_as.has_value() ? &*mgr._drain_as
+                                                       : nullptr);
           });
     }
 }
